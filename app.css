@@ -15,6 +15,11 @@
   --z5: #A3243B;
   --stop: #354044;
 
+  /* delta tones — deliberately distinct from the zone ramp, so a green arrow
+     is never mistaken for a Z2 block */
+  --good: #4FBF87;
+  --bad:  #E06C5A;
+
   --f-display: "Familjen Grotesk", system-ui, sans-serif;
   --f-body: "Karla", system-ui, sans-serif;
   --f-data: "DM Mono", ui-monospace, monospace;
@@ -260,3 +265,45 @@ label > span {
 .filebtn { position: relative; }
 
 .back { font-family: var(--f-data); font-size: 11px; color: var(--mute); margin-bottom: 13px; cursor: pointer; }
+
+/* ---------- charts ---------- */
+
+.chart { margin-top: 12px; }
+.cwrap { position: relative; }
+.chart svg { display: block; width: 100%; }
+.yax {
+  position: absolute; left: 0; top: 0; width: 100%; pointer-events: none;
+  font-family: var(--f-data); font-size: 9px; color: var(--dim);
+}
+.yax span {
+  position: absolute; right: 0; transform: translateY(-50%);
+  background: var(--bg); padding-left: 5px;
+}
+.xax {
+  display: flex; justify-content: space-between; margin-top: 5px;
+  font-family: var(--f-data); font-size: 9px; color: var(--dim);
+}
+.legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px;
+  font-family: var(--f-data); font-size: 9.5px; color: var(--mute);
+}
+.legend i { display: inline-block; width: 14px; height: 2px; margin-right: 5px; vertical-align: 4px; }
+
+/* ---------- deltas ---------- */
+
+.delta { font-family: var(--f-data); font-size: 12px; margin-left: 5px; white-space: nowrap; }
+.delta.good { color: var(--good); }
+.delta.bad { color: var(--bad); }
+.delta.neutral { color: var(--mute); }
+.cmp .delta { font-size: 11px; }
+
+/* ---------- records ---------- */
+
+.recs { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 11px; }
+.rec .l { font-family: var(--f-data); font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.rec .v {
+  font-family: var(--f-display); font-size: 20px; font-weight: 600;
+  letter-spacing: -.025em; font-variant-numeric: tabular-nums; margin-top: 2px;
+}
+.rec .v s { text-decoration: none; font-size: 10px; color: var(--mute); font-weight: 500; margin-left: 2px; }
+.rec .w { font-family: var(--f-data); font-size: 9px; color: var(--mute); margin-top: 2px; }

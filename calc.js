@@ -510,6 +510,111 @@
     }));
   }
 
+  /* ---------- aerobic pace: cost expressed in min/km ---------- */
+
+  /* Aerobic cost is HR x pace. Divide by a fixed heart rate and it becomes the
+     pace you would hold at that heart rate — same measurement, readable units.
+     The reference is the top of Z2, so it follows the anchors; re-anchoring
+     rescales every value by the same factor and never changes the shape. */
+  function refHr(cfg) { return zoneBounds(cfg).z3; }
+
+  function aerobicPace(act, cfg) {
+    const c = aerobicCost(act);
+    if (!c) return null;
+    return c.value / refHr(cfg) * 60;      // seconds per km
+  }
+
+  /* Date-ordered pace series, split wherever training stopped. */
+  function paceSeries(acts, cfg) {
+    const runs = acts
+      .filter(a => a.type === 'run' && a.avg_hr != null)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    return splitOnGaps(runs, cfg).map(seg =>
+      seg.map(a => ({ id: a.id, date: a.date, name: a.name, value: aerobicPace(a, cfg) }))
+         .filter(p => p.value != null)
+    ).filter(seg => seg.length);
+  }
+
+  /* Cumulative ascent through a calendar year, as {frac, total} points. */
+  function cumulativeAscent(acts, year) {
+    const inYear = acts
+      .filter(a => a.type === 'hike' && a.date.slice(0, 4) === String(year) && a.ascent_m != null)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const start = new Date(year + '-01-01T12:00:00');
+    const days = ((+year % 4 === 0 && +year % 100 !== 0) || +year % 400 === 0) ? 366 : 365;
+    let total = 0;
+    const pts = [{ frac: 0, total: 0, date: year + '-01-01' }];
+    inYear.forEach(a => {
+      total += a.ascent_m;
+      const doy = Math.round((new Date(a.date + 'T12:00:00') - start) / 86400000);
+      pts.push({ frac: doy / days, total: total, date: a.date });
+    });
+    return pts;
+  }
+
+  function ascentRateSeries(acts) {
+    return acts
+      .filter(a => a.type === 'hike' && a.source === 'tracked')
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(a => { const r = ascentRate(a); return r ? { date: a.date, value: r.value } : null; })
+      .filter(Boolean);
+  }
+
+  /* ---------- records ---------- */
+
+  function records(acts, cfg, type) {
+    const mine = acts.filter(a => a.type === type);
+    if (!mine.length) return [];
+    const out = [];
+    const by = (arr, f, dir) => arr.filter(a => f(a) != null)
+      .sort((a, b) => dir === 'min' ? f(a) - f(b) : f(b) - f(a))[0];
+
+    if (type === 'run') {
+      const best = by(mine, a => aerobicPace(a, cfg), 'min');
+      if (best) out.push({ label: 'Best aerobic pace', value: fmtPace(aerobicPace(best, cfg)), unit: '/km', when: best.date, id: best.id });
+      const far = by(mine, a => a.distance_km, 'max');
+      if (far) out.push({ label: 'Longest run', value: far.distance_km.toFixed(2), unit: 'km', when: far.date, id: far.id });
+      const weeks = {};
+      mine.forEach(a => { const k = weekStart(a.date); weeks[k] = (weeks[k] || 0) + (a.distance_km || 0); });
+      const bw = Object.keys(weeks).sort((a, b) => weeks[b] - weeks[a])[0];
+      if (bw) out.push({ label: 'Biggest week', value: weeks[bw].toFixed(1), unit: 'km', when: bw });
+      const drifts = mine.map(a => ({ a: a, d: drift(a.laps) })).filter(x => x.d != null);
+      if (drifts.length) {
+        const low = drifts.sort((x, y) => x.d - y.d)[0];
+        out.push({ label: 'Lowest drift', value: (low.d >= 0 ? '+' : '') + low.d, unit: 'bpm',
+          when: drifts.length > 1 ? low.a.date : 'only one measured', id: low.a.id });
+      }
+    } else {
+      const high = by(mine, a => a.ascent_m, 'max');
+      if (high) out.push({ label: 'Biggest day', value: high.ascent_m, unit: 'm', when: high.date, id: high.id });
+      const rate = by(mine, a => { const r = ascentRate(a); return r && r.value; }, 'max');
+      if (rate) out.push({ label: 'Fastest climb', value: ascentRate(rate).value, unit: 'm/h', when: rate.date, id: rate.id });
+      const months = {};
+      mine.forEach(a => { if (a.ascent_m == null) return;
+        const k = a.date.slice(0, 7); months[k] = (months[k] || 0) + a.ascent_m; });
+      const bm = Object.keys(months).sort((a, b) => months[b] - months[a])[0];
+      if (bm) out.push({ label: 'Biggest month', value: months[bm], unit: 'm', when: bm });
+      const tf = by(mine, a => terrainFactor(a, cfg), 'min');
+      if (tf) out.push({ label: 'Best terrain factor', value: terrainFactor(tf, cfg).toFixed(2), unit: '', when: tf.date, id: tf.id });
+    }
+    return out;
+  }
+
+  /* ---------- deltas ---------- */
+
+  /* betterWhen: 'down' | 'up' | null. Null means direction is shown without a
+     verdict — a shorter week may be a recovery week, and the app doesn't know. */
+  function delta(value, baseline, betterWhen) {
+    if (value == null || baseline == null || !baseline) return null;
+    const diff = value - baseline;
+    const pct = diff / baseline * 100;
+    const dir = Math.abs(pct) < 0.5 ? 'flat' : (diff > 0 ? 'up' : 'down');
+    let tone = 'flat';
+    if (dir !== 'flat' && betterWhen) tone = (dir === betterWhen) ? 'good' : 'bad';
+    else if (dir !== 'flat') tone = 'neutral';
+    return { diff: diff, pct: pct, dir: dir, tone: tone };
+  }
+
   const api = {
     DEFAULT_CONFIG, NEEDS,
     zoneBounds, zoneOf,
@@ -522,7 +627,9 @@
     isoWeek, weekStart, dayIndex, daysBetween, splitOnGaps,
     weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
-    summarize, ribbon, previousWithData, emptyRunBefore, medianCost
+    summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
+    refHr, aerobicPace, paceSeries, cumulativeAscent, ascentRateSeries,
+    records, delta
   };
 
   if (typeof module !== 'undefined' && module.exports) {

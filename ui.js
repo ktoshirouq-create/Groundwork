@@ -116,6 +116,109 @@
     return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' + gapLine;
   }
 
+
+  /* ------------------------------------------------------------- charts */
+
+  /* Line chart from one or more segments of {value} points.
+     invert: true plots smaller values higher (used for pace, where faster is
+     better) so a rising line always means improvement. */
+  function lineChart(segments, opt) {
+    opt = opt || {};
+    const all = [].concat.apply([], segments).map(p => p.value).filter(v => v != null);
+    if (all.length < 2) return null;
+    let lo = opt.min != null ? opt.min : Math.min.apply(null, all);
+    let hi = opt.max != null ? opt.max : Math.max.apply(null, all);
+    if (hi === lo) { hi = lo + 1; }
+    const pad = (hi - lo) * 0.12;
+    lo -= pad; hi += pad;
+    const yOf = v => {
+      const t = (v - lo) / (hi - lo);
+      return opt.invert ? (t * 100) : (100 - t * 100);
+    };
+
+    /* segments get width in proportion to their point count, with a fixed
+       visual break between them so a training gap reads as a gap */
+    const counts = segments.map(s => s.length);
+    const totalPts = counts.reduce((a, b) => a + b, 0);
+    const breaks = segments.length - 1;
+    const breakW = breaks ? 9 : 0;
+    const usable = 100 - breakW * breaks;
+    let x = 0;
+    const paths = [];
+    const marks = [];
+    segments.forEach((seg, si) => {
+      const w = counts[si] / totalPts * usable;
+      const step = seg.length > 1 ? w / (seg.length - 1) : 0;
+      const pts = seg.map((p, i) => (x + i * step).toFixed(2) + ',' + yOf(p.value).toFixed(2));
+      const last = si === segments.length - 1;
+      paths.push({ points: pts.join(' '), last: last, single: seg.length === 1,
+                   cx: x + (seg.length - 1) * step, cy: yOf(seg[seg.length - 1].value) });
+      x += w;
+      if (si < segments.length - 1) { marks.push([x, x + breakW]); x += breakW; }
+    });
+
+    let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
+      (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
+
+    if (opt.band) {
+      const y1 = yOf(opt.band[0]), y2 = yOf(opt.band[1]);
+      svg += '<rect x="0" y="' + Math.min(y1, y2).toFixed(2) + '" width="100" height="' +
+        Math.abs(y2 - y1).toFixed(2) + '" fill="#35A28F" fill-opacity=".10"/>';
+    }
+    svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
+      '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
+      '<line x1="0" y1="98" x2="100" y2="98"/></g>';
+    marks.forEach(m => {
+      svg += '<rect x="' + m[0].toFixed(2) + '" y="0" width="' + (m[1] - m[0]).toFixed(2) +
+        '" height="100" fill="#151D20"/>' +
+        '<g stroke="#55686D" stroke-width=".4" stroke-dasharray="2 2" vector-effect="non-scaling-stroke">' +
+        '<line x1="' + m[0].toFixed(2) + '" y1="0" x2="' + m[0].toFixed(2) + '" y2="100"/>' +
+        '<line x1="' + m[1].toFixed(2) + '" y1="0" x2="' + m[1].toFixed(2) + '" y2="100"/></g>';
+    });
+    paths.forEach(p => {
+      const col = p.last ? 'var(--z2)' : 'var(--mute)';
+      const wgt = p.last ? 2.2 : 1.6;
+      if (!p.single) svg += '<polyline fill="none" stroke="' + col + '" stroke-width="' + wgt +
+        '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      if (p.last) svg += '<circle cx="' + p.cx.toFixed(2) + '" cy="' + p.cy.toFixed(2) +
+        '" r="2.4" fill="var(--z2)"/>';
+    });
+    svg += '</svg>';
+
+    const fmt = opt.format || (v => Math.round(v));
+    const axis = [0.02, 0.5, 0.98].map(t => {
+      const v = opt.invert ? lo + t * (hi - lo) : hi - t * (hi - lo);
+      return '<span style="top:' + (t * 100) + '%">' + fmt(v) + '</span>';
+    }).join('');
+
+    return '<div class="chart"><div class="cwrap">' + svg +
+      '<div class="yax" style="height:' + (opt.height || 150) + 'px">' + axis + '</div></div>' +
+      (opt.xax ? '<div class="xax">' + opt.xax.map(s => '<span>' + esc(s) + '</span>').join('') + '</div>' : '') +
+      (opt.legend ? '<div class="legend">' + opt.legend + '</div>' : '') + '</div>';
+  }
+
+  function deltaHTML(d, fmt) {
+    if (!d || d.dir === 'flat') return '';
+    const arrow = d.dir === 'up' ? '\u25b2' : '\u25bc';
+    const cls = d.tone === 'good' ? 'good' : d.tone === 'bad' ? 'bad' : 'neutral';
+    const text = fmt ? fmt(d) : (Math.abs(d.pct).toFixed(0) + '%');
+    return '<span class="delta ' + cls + '">' + arrow + ' ' + text + '</span>';
+  }
+
+  function recordsHTML(type) {
+    const cfg = Store.config();
+    const recs = Calc.records(Store.all(), cfg, type);
+    if (!recs.length) return '';
+    return '<div class="sec"><span>Records</span><span>all time</span></div>' +
+      '<div class="recs">' + recs.map(r =>
+        '<div class="rec"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '>' +
+        '<div class="l">' + esc(r.label) + '</div>' +
+        '<div class="v">' + esc(r.value) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '') + '</div>' +
+        '<div class="w">' + esc(/^\d{4}-\d{2}-\d{2}$/.test(r.when) ? fmtDate(r.when) :
+          /^\d{4}-\d{2}$/.test(r.when) ? MON[+r.when.slice(5) - 1] + ' ' + r.when.slice(0, 4) : r.when) +
+        '</div></div>').join('') + '</div>';
+  }
+
   /* ------------------------------------------------------------------ home */
 
   function renderHome() {
@@ -172,23 +275,50 @@
   /* ---------- run world ---------- */
 
   function runHero(inP, mine, bounds) {
+    const cfg = Store.config();
     const withHr = mine.filter(a => a.avg_hr != null).sort((a, b) => b.date.localeCompare(a.date));
     const last = withHr[0];
-    const c = last ? Calc.aerobicCost(last) : null;
+    const pace = last ? Calc.aerobicPace(last, cfg) : null;
+    const prevPace = withHr[1] ? Calc.aerobicPace(withHr[1], cfg) : null;
     const s = Calc.summarize(inP);
 
-    let h = '<div class="eyebrow">Aerobic cost \u00b7 last run</div>';
-    if (c) {
-      h += '<div class="hero"><div class="hnum">' + c.value + '</div><div class="hunit">beats / km</div></div>';
-      const others = withHr.slice(1, 6).map(a => { const x = Calc.aerobicCost(a); return x && x.value; }).filter(Boolean);
-      const med = Calc.median(others);
-      h += '<div class="hsub">' + (med
-        ? 'Median of the five before: <b>' + Math.round(med) + '</b>'
-        : '<em>' + Calc.confidence(withHr.length, 'baseline').need + ' more runs with heart rate before this compares to anything.</em>') +
-        '</div>';
+    let h = '<div class="eyebrow">Aerobic pace \u00b7 at ' + Calc.refHr(cfg) + ' bpm</div>';
+    if (pace != null) {
+      const d = Calc.delta(pace, prevPace, 'down');
+      h += '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
+        '<div class="hunit">/km</div>' +
+        deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') + '</div>';
+      h += '<div class="hsub">' + (prevPace != null
+        ? 'What you would hold at ' + Calc.refHr(cfg) + ' bpm. Last run: ' + Calc.fmtPace(prevPace) + '.'
+        : 'What you would hold at ' + Calc.refHr(cfg) + ' bpm \u2014 nothing to compare it to yet.') + '</div>';
     } else {
-      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">beats / km</div></div>' +
+      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
         '<div class="hsub">Needs a run with average heart rate.</div>';
+    }
+
+    /* the trend — always all-time, whatever period is selected */
+    const segs = Calc.paceSeries(mine, cfg);
+    const flat = [].concat.apply([], segs);
+    if (flat.length >= 2) {
+      const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
+      const band = prevSeg && prevSeg.length >= 3
+        ? [Math.min.apply(null, prevSeg.slice(-6).map(p => p.value)),
+           Math.max.apply(null, prevSeg.slice(-6).map(p => p.value))]
+        : null;
+      const first = flat[0].date, lastD = flat[flat.length - 1].date;
+      h += lineChart(segs, {
+        invert: true, band: band, height: 150,
+        format: v => Calc.fmtPace(v),
+        label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
+        xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
+        legend: (band ? '<span><i style="background:var(--z2); opacity:.35"></i>previous block</span>' : '') +
+                '<span><i style="background:var(--z2)"></i>now</span>'
+      });
+      h += '<div class="est">Faster is higher, so the line rising is always progress. ' +
+        (segs.length > 1 ? 'The break is time off, drawn rather than smoothed over. ' : '') +
+        'Rescales if you change your anchors \u2014 the shape never moves.</div>';
+    } else {
+      h += '<div class="est">The trend line opens once you have two runs with heart rate.</div>';
     }
 
     /* zone split across the period */
@@ -199,20 +329,23 @@
     if (zTotal) {
       h += '<div class="sec"><span>Time in zone</span><span>' + Math.round(zTotal / 60) + ' min</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
-      const base = Math.round(tz[2] / zTotal * 100);
-      h += '<div class="est">' + base + '% in Z2. Each kilometre counts whole to the zone of its average.</div>';
+      h += '<div class="est">' + Math.round(tz[2] / zTotal * 100) +
+        '% in Z2. Each kilometre counts whole to the zone of its average.</div>';
     }
 
     const prevKey = Calc.previousWithData(real(), scope, key());
     const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
     const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
+    const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
 
     h += '<div style="margin-top:15px">';
-    h += cmp('Distance', s.distance_km.toFixed(2) + ' km',
+    h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' + (prev ? dd(s.distance_km, prev.distance_km, null) : ''),
       prev ? vs + ' ' + prev.distance_km.toFixed(2) : 'nothing before this');
-    h += cmp('Time', Calc.fmtDuration(s.elapsed_s), prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
+    h += cmp('Time', Calc.fmtDuration(s.elapsed_s) + ' ' + (prev ? dd(s.elapsed_s, prev.elapsed_s, null) : ''),
+      prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
     h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
     h += '</div>';
+    h += recordsHTML('run');
     return h;
   }
 
@@ -240,15 +373,40 @@
     const cfg = Store.config();
     const s = Calc.summarize(inP);
     const label = scope === 'all' ? 'ever' : scope === 'year' ? 'this year' : 'this month';
+    const yr = scope === 'year' ? key() : today().slice(0, 4);
 
     let h = '<div class="eyebrow">Climbed ' + label + '</div>';
     if (s.ascent_m != null) {
+      /* against the same point last year */
+      const thisYr = Calc.cumulativeAscent(mine, yr);
+      const lastYr = Calc.cumulativeAscent(mine, String(+yr - 1));
+      const nowFrac = scope === 'year' && yr === today().slice(0, 4)
+        ? thisYr[thisYr.length - 1].frac : 1;
+      let atSamePoint = null;
+      if (lastYr.length > 1) {
+        atSamePoint = 0;
+        lastYr.forEach(p => { if (p.frac <= nowFrac) atSamePoint = p.total; });
+      }
+      const d = scope === 'year' && atSamePoint ? Calc.delta(s.ascent_m, atSamePoint, 'up') : null;
+
       h += '<div class="hero"><div class="hnum">' +
         s.ascent_m.toLocaleString('en-GB').replace(/,/g, '\u2009') +
-        '</div><div class="hunit">metres up</div></div>';
+        '</div><div class="hunit">metres up</div>' + deltaHTML(d) + '</div>';
       h += '<div class="hsub">Across <b>' + s.days + ' day' + (s.days === 1 ? '' : 's') + ' out</b>' +
+        (atSamePoint ? '. At this point in ' + (+yr - 1) + ' you were on ' +
+          atSamePoint.toLocaleString('en-GB').replace(/,/g, '\u2009') + ' m' : '') +
         (s.ascent_of < s.count ? ', from ' + s.ascent_of + ' of ' + s.count + ' with ascent recorded' : '') +
         '.</div>';
+
+      /* the racing curve */
+      if (scope === 'year' && thisYr.length > 1) {
+        const segs = [];
+        if (lastYr.length > 1) segs.push(lastYr.map(p => ({ value: p.total, frac: p.frac })));
+        segs.push(thisYr.map(p => ({ value: p.total, frac: p.frac })));
+        h += cumulativeChart(segs, yr);
+        h += '<div class="est">Cumulative, so it only ever climbs. The dashed line is today \u2014 ' +
+          'everything to its right is what ' + (+yr - 1) + ' still had left.</div>';
+      }
     } else {
       h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">metres up</div></div>' +
         '<div class="hsub">No ascent recorded for this period.</div>';
@@ -261,9 +419,11 @@
     const factors = inP.map(a => Calc.terrainFactor(a, cfg)).filter(x => x != null);
     const rates = inP.map(a => { const r = Calc.ascentRate(a); return r && r.value; }).filter(Boolean);
     const biggest = inP.filter(a => a.ascent_m != null).sort((a, b) => b.ascent_m - a.ascent_m)[0];
+    const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
 
     h += '<div style="margin-top:15px">';
-    h += cmp('Days out', String(s.days), prev ? vs + ' ' + prev.days : '');
+    h += cmp('Days out', String(s.days) + ' ' + (prev ? dd(s.days, prev.days, null) : ''),
+      prev ? vs + ' ' + prev.days : '');
     h += cmp('Time on feet', Calc.fmtDuration(s.moving_s), prev ? vs + ' ' + Calc.fmtDuration(prev.moving_s) : '');
     h += cmp('Distance', s.distance_km.toFixed(1) + ' km', prev ? vs + ' ' + prev.distance_km.toFixed(1) : '');
     if (biggest) h += cmp('Biggest day', biggest.ascent_m + ' m', esc(biggest.name));
@@ -274,8 +434,61 @@
         Calc.confidence(factors.length, 'terrain_trend').need + ' more tracked hikes');
     h += '</div>';
 
+    /* ascent rate — the fitness line under the accumulation */
+    const rs = Calc.ascentRateSeries(mine);
+    if (rs.length >= 3) {
+      h += '<div class="sec"><span>Ascent rate</span><span>' + rs.length + ' tracked</span></div>';
+      h += lineChart([rs], { height: 76, format: v => Math.round(v) + ' m/h',
+        label: 'Ascent rate in metres per hour across tracked hikes.' });
+      h += '<div class="est">Metres per hour, hike by hike. Slower to move than aerobic pace \u2014 ' +
+        'it needs a season, not a month.</div>';
+    }
+
     if (inP.length >= 3) h += scatterHTML(inP);
+    h += recordsHTML('hike');
     return h;
+  }
+
+  /* Cumulative ascent, this year against last, plotted on day-of-year. */
+  function cumulativeChart(segs, yr) {
+    const all = [].concat.apply([], segs).map(p => p.value);
+    const hi = Math.max.apply(null, all) * 1.12 || 1;
+    const yOf = v => 100 - v / hi * 100;
+    const todayFrac = (new Date() - new Date(yr + '-01-01T12:00:00')) / 86400000 /
+      (((+yr % 4 === 0 && +yr % 100 !== 0) || +yr % 400 === 0) ? 366 : 365);
+
+    let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="150" role="img" ' +
+      'aria-label="Cumulative ascent through the year, ' + yr + ' against ' + (+yr - 1) + '.">';
+    svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
+      '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
+      '<line x1="0" y1="98" x2="100" y2="98"/></g>';
+    if (todayFrac > 0 && todayFrac < 1) {
+      const x = (todayFrac * 100).toFixed(1);
+      svg += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="100" stroke="#55686D" ' +
+        'stroke-width=".4" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>';
+    }
+    segs.forEach((seg, i) => {
+      const last = i === segs.length - 1;
+      const pts = seg.map(p => (p.frac * 100).toFixed(2) + ',' + yOf(p.value).toFixed(2)).join(' ');
+      svg += '<polyline fill="none" stroke="' + (last ? 'var(--z2)' : 'var(--mute)') +
+        '" stroke-width="' + (last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke" points="' + pts + '"/>';
+      if (last) {
+        const e = seg[seg.length - 1];
+        svg += '<circle cx="' + (e.frac * 100).toFixed(2) + '" cy="' + yOf(e.value).toFixed(2) +
+          '" r="2.4" fill="var(--z2)"/>';
+      }
+    });
+    svg += '</svg>';
+
+    const axis = [0.02, 0.5].map(t =>
+      '<span style="top:' + (t * 100) + '%">' + Math.round(hi * (1 - t)).toLocaleString('en-GB').replace(/,/g, '\u2009') + ' m</span>'
+    ).join('');
+
+    return '<div class="chart"><div class="cwrap">' + svg +
+      '<div class="yax" style="height:150px">' + axis + '</div></div>' +
+      '<div class="xax"><span>JAN</span><span>TODAY</span><span>DEC</span></div>' +
+      '<div class="legend"><span><i style="background:var(--mute)"></i>' + (+yr - 1) + '</span>' +
+      '<span><i style="background:var(--z2)"></i>' + yr + '</span></div></div>';
   }
 
   function scatterHTML(list) {
@@ -608,6 +821,9 @@
     });
     document.querySelectorAll('#view-home [data-id]').forEach(r => {
       r.onclick = () => go('detail', r.dataset.id);
+    });
+    document.querySelectorAll('#view-home .rec[data-id]').forEach(r => {
+      r.style.cursor = 'pointer';
     });
     const setup = $('#view-home [data-go="settings"]');
     if (setup) setup.onclick = () => go('settings');

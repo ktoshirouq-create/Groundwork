@@ -34,7 +34,8 @@ Code.gs       Apps Script backend, for when you move to Sheets
 ```
 node tests/harness.js       82 assertions — maths and parsing, on real data
 npm install jsdom
-node tests/integration.js   31 assertions — boots the UI, pastes, saves, clicks
+node tests/integration.js   53 assertions — boots the UI, pastes, saves, navigates
+node tests/charts.js        24 assertions — charts, records and deltas on the backfill
 ```
 
 ## Moving to Sheets
@@ -80,8 +81,38 @@ purpose:
 There is no Week for hiking (you don't hike on a weekly rhythm) and no All time
 for running (the training block is the unit).
 
+## Aerobic pace
+
+Aerobic cost is heart rate x pace, which is a real measurement in an unreadable
+unit. Divide it by a fixed heart rate — the top of Z2 — and it becomes **the
+pace you would hold at that heart rate**. Same measurement, min/km.
+
+```
+8:14  8 Oct 2025      6:51  17 Nov 2025      7:10  13 Aug 2026
+```
+
+The reference follows your anchors, so re-anchoring rescales every value by the
+same factor: absolute paces shift, the shape of the curve never does. There's a
+test for exactly that.
+
+On the chart, **faster is plotted higher**, so a rising line always means
+progress and needs no key.
+
+## Deltas
+
+Arrows carry colour only where a direction is defensibly better — aerobic pace,
+drift, ascent rate, cumulative ascent. Weekly volume gets a grey arrow: a short
+week might be a recovery week, and the app doesn't know which.
+
+`--good` and `--bad` are deliberately outside the zone ramp so a green arrow is
+never mistaken for a Z2 block.
+
+## Backfill
+
+`backfill.json` holds the 16 runs from Oct 2025 – Aug 2026 plus both field
+tests. Setup > Import a backup. The tests use it as their fixture.
+
 ## Still to come
 
-Trend charts — aerobic cost over time, drift over time, weekly zone split,
-pace × HR scatter. Held back deliberately: lines need eight to ten points
-before they stop looking like noise.
+Drift over time (needs five runs with lap HR), weekly zone split as a trend,
+and the block-overlay chart.
