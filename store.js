@@ -6,10 +6,10 @@
   'use strict';
 
   const KEY = {
-    acts: 'fit:activities',
-    config: 'fit:config',
-    schema: 'fit:schema',
-    queue: 'fit:queue'
+    acts: 'groundwork:activities',
+    config: 'groundwork:config',
+    schema: 'groundwork:schema',
+    queue: 'groundwork:queue'
   };
 
   function LocalAdapter() {

@@ -1,8 +1,8 @@
 /* Bump CACHE on every JS or CSS change. */
-const CACHE = 'fit-v1';
+const CACHE = 'groundwork-v1';
 const ASSETS = [
   './', './index.html', './app.css',
-  './js/calc.js', './js/model.js', './js/store.js', './js/parse.js', './js/ui.js',
+  './calc.js', './store.js', './parse.js', './ui.js',
   './manifest.json'
 ];
 
