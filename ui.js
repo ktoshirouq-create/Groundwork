@@ -1,152 +1,81 @@
-/* ui.js — rendering and interaction. All maths lives in calc.js. */
+/* ui.js — rendering and interaction. All maths lives in calc.js.
+   Two worlds (run, hike) share this shell but differ in scope, hero and density. */
 
 (function () {
   'use strict';
 
-  let mode = 'run';          // which type the Week screen is showing
-  let draft = null;          // parsed activity awaiting save
+  const WORLD = {
+    run:  { scopes: ['week', 'month', 'year'], scope: 'week', ribbon: 12, metric: 'distance' },
+    hike: { scopes: ['month', 'year', 'all'],  scope: 'year', ribbon: 12, metric: 'ascent' }
+  };
 
-  const $ = sel => document.querySelector(sel);
+  let world = 'run';
+  let scope = WORLD.run.scope;
+  let periodKey = null;      // null = current period
+  let draft = null;
+
   const el = id => document.getElementById(id);
+  const $ = sel => document.querySelector(sel);
   const esc = s => String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   const ZCOL = { 1: 'var(--z1)', 2: 'var(--z2)', 3: 'var(--z3)', 4: 'var(--z4)', 5: 'var(--z5)' };
   const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
   const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+  const today = () => new Date().toISOString().slice(0, 10);
+
   function fmtDate(d) {
     const [y, m, day] = d.split('-');
-    const thisYear = new Date().getFullYear();
     const base = (+day) + ' ' + MON[+m - 1];
-    return (+y === thisYear) ? base : base + ' ' + y;   // show year only when it isn't this one
+    return (+y === new Date().getFullYear()) ? base : base + ' ' + y;
   }
 
-  function todayStr() { return new Date().toISOString().slice(0, 10); }
+  function acts() { return Store.all().filter(a => a.type === world || a.type === 'test'); }
+  function real() { return Store.all().filter(a => a.type === world); }
+  function key() { return periodKey || Calc.periodKey(today(), scope); }
 
-  /* ---------- shared fragments ---------- */
+  /* ---------------------------------------------------------------- pieces */
 
-  function stripHTML(act, bounds, tall) {
-    const laps = Calc.fullLaps(act.laps);
+  function stripHTML(a, bounds, tall) {
+    const laps = Calc.fullLaps(a.laps);
     if (!laps.length) return '';
-    const blocks = laps.map(l => {
+    return '<div class="strip' + (tall ? ' tall' : '') + '">' + laps.map(l => {
       const z = Calc.zoneOf(l.avg_hr, bounds);
-      const bg = z ? ZCOL[z] : 'var(--stop)';
-      return '<div class="blk' + (z ? '' : ' unknown') + '" style="background:' + bg + '"></div>';
-    }).join('');
-    return '<div class="strip' + (tall ? ' tall' : '') + '">' + blocks + '</div>';
+      return '<div class="blk' + (z ? '' : ' unknown') + '" style="background:' +
+        (z ? ZCOL[z] : 'var(--stop)') + '"></div>';
+    }).join('') + '</div>';
   }
 
-  function zoneBarHTML(tz, totalS) {
-    if (!totalS) return '';
-    const parts = [1, 2, 3, 4, 5].filter(z => tz[z] > 0).map(z =>
+  function vbarsHTML(a, bounds, mini) {
+    const laps = Calc.fullLaps(a.laps);
+    if (!laps.length) return '';
+    const max = Math.max.apply(null, laps.map(l => l.time_s));
+    return '<div class="vbars' + (mini ? ' mini' : '') + '">' + laps.map(l => {
+      const z = Calc.zoneOf(l.avg_hr, bounds);
+      return '<div class="vcol">' +
+        (mini ? '' : '<div class="vlbl">' + Math.round(l.time_s / 60) + '</div>') +
+        '<div class="vbar" style="background:' + (z ? ZCOL[z] : 'var(--stop)') +
+        '; height:' + Math.max(6, Math.round(l.time_s / max * 100)) + '%"></div></div>';
+    }).join('') + '</div>';
+  }
+
+  function zoneBarHTML(tz) {
+    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
+    if (!total) return '';
+    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z =>
       '<div class="zseg" style="background:' + ZCOL[z] + '; flex:' + tz[z] + '">' +
-      Math.round(tz[z] / 60) + '\u2032</div>'
-    );
+      Math.round(tz[z] / 60) + '\u2032</div>');
     if (tz.unknown > 0) parts.push('<div class="zseg" style="background:var(--stop); flex:' + tz.unknown + '"></div>');
     return '<div class="zbar">' + parts.join('') + '</div>';
   }
 
-  function zoneKeyHTML(bounds) {
+  function zoneKeyHTML(b) {
     return '<div class="zkey">' +
-      '<span><i style="background:var(--z1)"></i>Z1 &lt;' + bounds.z2 + '</span>' +
-      '<span><i style="background:var(--z2)"></i>Z2 ' + bounds.z2 + '\u2013' + (bounds.z3 - 1) + '</span>' +
-      '<span><i style="background:var(--z3)"></i>Z3 ' + bounds.z3 + '\u2013' + (bounds.z4 - 1) + '</span>' +
-      '<span><i style="background:var(--z4)"></i>Z4 ' + bounds.z4 + '+</span>' +
-      '</div>';
-  }
-
-  function costOf(act) { return Calc.aerobicCost(act); }
-
-  /* ---------- week ---------- */
-
-  function renderWeek() {
-    const cfg = Store.config();
-    const bounds = Calc.zoneBounds(cfg);
-    const all = Store.all().filter(a => a.type === mode);
-    const today = todayStr();
-    const ws = Calc.weekStart(today);
-    const cut = Calc.dayIndex(today);
-    const wk = Calc.weekRollup(all, ws, 6);
-
-    const withCost = all
-      .filter(a => a.avg_hr != null)
-      .sort((a, b) => b.date.localeCompare(a.date));
-    const last = withCost[0];
-    const lastCost = last ? costOf(last) : null;
-
-    let h = '';
-    h += '<div class="hd"><div class="hd-t">Week ' + Calc.isoWeek(today).split('-W')[1] + '</div>' +
-         '<div class="hd-x">' + fmtDate(ws).toUpperCase() + '</div></div>';
-
-    h += '<div class="modes">' +
-         '<button class="mode" data-mode="run" aria-pressed="' + (mode === 'run') + '">Run</button>' +
-         '<button class="mode" data-mode="hike" aria-pressed="' + (mode === 'hike') + '">Hike</button>' +
-         '</div>';
-
-    if (!all.length) {
-      h += '<div class="empty-state">Nothing logged yet.<br>Paste your first ' + mode + ' from the Add tab.</div>';
-      el('view-week').innerHTML = h;
-      bindModes();
-      return;
-    }
-
-    /* hero — aerobic cost of the most recent activity with HR */
-    h += '<div class="eyebrow">Aerobic cost \u00b7 last ' + mode + '</div>';
-    if (lastCost) {
-      h += '<div class="hero-fig"><div class="hero-num">' + lastCost.value + '</div>' +
-           '<div class="hero-unit">beats / km</div></div>';
-      const others = withCost.slice(1, 6).map(a => { const c = costOf(a); return c && c.value; }).filter(Boolean);
-      const med = Calc.median(others);
-      h += '<div class="hero-sub">' + (med
-        ? 'Median of your last ' + others.length + ': <b>' + Math.round(med) + '</b>'
-        : Calc.confidence(withCost.length, 'baseline').need + ' more with heart rate before this compares to anything.')
-        + '</div>';
-      const basis = [];
-      if (lastCost.basis === 'gap') basis.push('gradient-adjusted');
-      if (lastCost.scope === 'main') basis.push('main laps only');
-      if (lastCost.hr_approx) basis.push('whole-run HR');
-      if (basis.length) h += '<div class="est">Computed from ' + basis.join(', ') + '.</div>';
-    } else {
-      h += '<div class="hero-fig"><div class="hero-num pending">\u2014</div>' +
-           '<div class="hero-unit">beats / km</div></div>' +
-           '<div class="hero-sub">Needs an activity with average heart rate.</div>';
-    }
-
-    /* time in zone this week */
-    const weekLaps = [];
-    wk.activities.forEach(a => (a.laps || []).forEach(l => weekLaps.push(l)));
-    const tz = Calc.timeInZone(weekLaps, bounds);
-    const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
-    if (zTotal > 0) {
-      h += '<div class="rule"></div>';
-      h += '<div class="eyebrow">Time in zone \u00b7 ' + Math.round(zTotal / 60) + ' min</div>';
-      h += zoneBarHTML(tz, zTotal);
-      h += zoneKeyHTML(bounds);
-      h += '<div class="est">Each kilometre is assigned whole to the zone of its average heart rate.</div>';
-    }
-
-    /* volume */
-    h += '<div class="rule"></div><div class="grid2">';
-    h += metric('Distance', wk.distance_km.toFixed(2), 'km');
-    h += metric('Time', Calc.fmtDuration(wk.elapsed_s), '');
-    h += metric('Ascent',
-      wk.ascent_m == null ? '\u2014' : wk.ascent_m, 'm',
-      wk.ascent_of < wk.ascent_total_acts ? wk.ascent_of + ' of ' + wk.ascent_total_acts : '');
-    h += metric(mode === 'run' ? 'Runs' : 'Hikes', String(wk.count), '');
-    h += '</div>';
-
-    /* this week's activities */
-    h += '<div class="sec">This week</div>';
-    if (!wk.activities.length) h += '<div class="empty-state">Nothing this week yet.</div>';
-    else h += wk.activities
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map(a => rowHTML(a, bounds)).join('');
-
-    el('view-week').innerHTML = h;
-    bindModes();
-    bindRows();
+      '<span><i style="background:var(--z1)"></i>Z1 &lt;' + b.z2 + '</span>' +
+      '<span><i style="background:var(--z2)"></i>Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) + '</span>' +
+      '<span><i style="background:var(--z3)"></i>Z3 ' + b.z3 + '\u2013' + (b.z4 - 1) + '</span>' +
+      '<span><i style="background:var(--z4)"></i>Z4 ' + b.z4 + '+</span></div>';
   }
 
   function metric(label, value, unit, caption, pending) {
@@ -156,65 +85,248 @@
       (caption ? '<div class="g-c">' + esc(caption) + '</div>' : '') + '</div>';
   }
 
-  function rowHTML(a, bounds) {
-    const c = costOf(a);
+  function cmp(k, v, aside) {
+    return '<div class="cmp"><span class="k">' + esc(k) + '</span><span class="v">' + v +
+      (aside ? '<s>' + esc(aside) + '</s>' : '') + '</span></div>';
+  }
+
+  function ribbonHTML() {
+    const cfg = WORLD[world];
+    if (scope === 'all') return '';
+    const bars = Calc.ribbon(real(), scope, key(), cfg.ribbon, cfg.metric);
+    const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
+    const label = b => {
+      if (scope === 'week') return Calc.isoWeek(b.key).split('-W')[1].replace(/^0/, '');
+      if (scope === 'month') return MON[+b.key.slice(5) - 1][0];
+      return b.key.slice(2);
+    };
+    const cells = bars.map((b, i) =>
+      '<div class="rp' + (b.selected ? ' on' : '') + (b.value ? '' : ' none') +
+      '" data-period="' + b.key + '"><div class="b" style="height:' +
+      (b.value ? Math.max(6, Math.round(b.value / max * 100)) : 0) + '%"></div></div>').join('');
+    const labels = bars.map((b, i) =>
+      '<div>' + (scope === 'week' ? (i % 2 === 0 || b.selected ? label(b) : '') : label(b)) + '</div>'
+    ).join('');
+
+    const gap = Calc.emptyRunBefore(real(), scope, key());
+    const unit = scope === 'week' ? 'weeks' : scope === 'month' ? 'months' : 'years';
+    const gapLine = gap >= 2
+      ? '<div class="gapmark">\u2191 nothing for ' + gap + ' ' + unit + ' before this</div>' : '';
+
+    return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' + gapLine;
+  }
+
+  /* ------------------------------------------------------------------ home */
+
+  function renderHome() {
+    const cfg = Store.config();
+    const bounds = Calc.zoneBounds(cfg);
+    const wc = WORLD[world];
+    const k = key();
+    const mine = real();
+    const inP = mine.filter(a => Calc.inPeriod(a, scope, k));
+
+    let h = '<div class="top"><div>' +
+      '<div class="ttl">' + esc(Calc.periodLabel(k, scope, today())) + '</div>' +
+      '<div class="sub">' + esc(Calc.periodSpan(k, scope, today())) + '</div>' +
+      '</div><button class="corner" data-go="settings">SETUP</button></div>';
+
+    h += '<div class="bar">' + wc.scopes.map(s =>
+      '<button class="chip" data-scope="' + s + '" aria-pressed="' + (s === scope) + '">' +
+      (s === 'all' ? 'All time' : s[0].toUpperCase() + s.slice(1)) + '</button>').join('') + '</div>';
+
+    if (!mine.length) {
+      h += '<div class="empty-state">No ' + (world === 'run' ? 'runs' : 'hikes') + ' logged yet.<br>' +
+        'Tap + to paste your first one.</div>';
+      el('view-home').innerHTML = h;
+      bind();
+      return;
+    }
+
+    h += ribbonHTML();
+    h += '<div class="rule"></div>';
+    h += (world === 'run' ? runHero(inP, mine, bounds) : hikeHero(inP, mine, k));
+
+    /* the list */
+    const sorted = inP.slice().sort((a, b) => b.date.localeCompare(a.date));
+    h += '<div class="sec"><span>' + esc(Calc.periodLabel(k, scope, today())) + '</span><span>' +
+      (sorted.length ? sorted.length + (world === 'run' ? ' runs' : ' days out') : '') + '</span></div>';
+
+    if (!sorted.length) {
+      const noun = world === 'run' ? 'run' : 'hike';
+      const prev = Calc.previousWithData(mine, scope, k);
+      const next = prev ? null : Calc.nextWithData(mine, scope, k);
+      let line = '';
+      if (prev) line = '<br>Last ' + noun + ' before this: ' + esc(Calc.periodLabel(prev, scope, today())) + '.';
+      else if (next) line = '<br>Nothing this early \u2014 your first ' + noun +
+        ' lands in ' + esc(Calc.periodLabel(next, scope, today())) + '.';
+      h += '<div class="empty-state">Nothing here.' + line + '</div>';
+    } else {
+      h += sorted.map(a => world === 'run' ? runRow(a, bounds) : hikeCard(a, bounds)).join('');
+    }
+
+    el('view-home').innerHTML = h;
+    bind();
+  }
+
+  /* ---------- run world ---------- */
+
+  function runHero(inP, mine, bounds) {
+    const withHr = mine.filter(a => a.avg_hr != null).sort((a, b) => b.date.localeCompare(a.date));
+    const last = withHr[0];
+    const c = last ? Calc.aerobicCost(last) : null;
+    const s = Calc.summarize(inP);
+
+    let h = '<div class="eyebrow">Aerobic cost \u00b7 last run</div>';
+    if (c) {
+      h += '<div class="hero"><div class="hnum">' + c.value + '</div><div class="hunit">beats / km</div></div>';
+      const others = withHr.slice(1, 6).map(a => { const x = Calc.aerobicCost(a); return x && x.value; }).filter(Boolean);
+      const med = Calc.median(others);
+      h += '<div class="hsub">' + (med
+        ? 'Median of the five before: <b>' + Math.round(med) + '</b>'
+        : '<em>' + Calc.confidence(withHr.length, 'baseline').need + ' more runs with heart rate before this compares to anything.</em>') +
+        '</div>';
+    } else {
+      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">beats / km</div></div>' +
+        '<div class="hsub">Needs a run with average heart rate.</div>';
+    }
+
+    /* zone split across the period */
+    const laps = [];
+    inP.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
+    const tz = Calc.timeInZone(laps, bounds);
+    const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
+    if (zTotal) {
+      h += '<div class="sec"><span>Time in zone</span><span>' + Math.round(zTotal / 60) + ' min</span></div>';
+      h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
+      const base = Math.round(tz[2] / zTotal * 100);
+      h += '<div class="est">' + base + '% in Z2. Each kilometre counts whole to the zone of its average.</div>';
+    }
+
+    const prevKey = Calc.previousWithData(real(), scope, key());
+    const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
+    const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
+
+    h += '<div style="margin-top:15px">';
+    h += cmp('Distance', s.distance_km.toFixed(2) + ' km',
+      prev ? vs + ' ' + prev.distance_km.toFixed(2) : 'nothing before this');
+    h += cmp('Time', Calc.fmtDuration(s.elapsed_s), prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
+    h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
+    h += '</div>';
+    return h;
+  }
+
+  function runRow(a, bounds) {
+    const c = Calc.aerobicCost(a);
     const d = Calc.drift(a.laps);
     const meta = [];
-    if (a.type === 'run') {
-      const pace = a.gap_pace_s != null ? a.gap_pace_s : Calc.paceSecPerKm(a.distance_km, a.elapsed_s);
-      meta.push(Calc.fmtPace(pace) + (a.gap_pace_s != null ? ' GAP' : ''));
-    } else if (a.ascent_m != null) {
-      meta.push('+' + a.ascent_m + ' m');
-    }
+    const pace = a.gap_pace_s != null ? a.gap_pace_s : Calc.paceSecPerKm(a.distance_km, a.elapsed_s);
+    meta.push(Calc.fmtPace(pace) + (a.gap_pace_s != null ? ' GAP' : ''));
     if (a.avg_hr != null) meta.push(a.avg_hr + ' bpm');
     if (d != null) meta.push('<b>drift ' + (d >= 0 ? '+' : '') + d + '</b>');
     if (a.temp_c != null) meta.push(a.temp_c + '\u00b0');
 
-    return '<div class="row-a" data-id="' + esc(a.id) + '">' +
-      '<div class="row-top">' +
-        '<div class="row-day">' + DAYS[Calc.dayIndex(a.date)] + '</div>' +
-        '<div class="row-nm">' + esc(a.name) + ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
-        '<div class="row-fig">' + (c ? c.value : '\u2014') + '</div>' +
-      '</div>' +
-      '<div class="row-indent">' + stripHTML(a, bounds) + '</div>' +
-      (meta.length ? '<div class="row-meta row-indent">' + meta.join(' \u00b7 ') + '</div>' : '') +
-      '</div>';
+    return '<div class="rrow" data-id="' + esc(a.id) + '">' +
+      '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) + '</div>' +
+      '<div class="rnm">' + esc(a.name) + ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
+      '<div class="rfig">' + (c ? c.value : '\u2014') + '</div></div>' +
+      stripHTML(a, bounds) +
+      '<div class="rmeta">' + meta.join(' \u00b7 ') + '</div></div>';
   }
 
-  /* ---------- list ---------- */
+  /* ---------- hike world ---------- */
 
-  function renderList() {
-    const bounds = Calc.zoneBounds(Store.config());
-    const all = Store.all().slice().sort((a, b) => b.date.localeCompare(a.date));
-    let h = '<div class="hd"><div class="hd-t">Log</div><div class="hd-x">' + all.length + ' LOGGED</div></div>';
-    if (!all.length) {
-      h += '<div class="empty-state">Nothing yet.</div>';
+  function hikeHero(inP, mine, k) {
+    const cfg = Store.config();
+    const s = Calc.summarize(inP);
+    const label = scope === 'all' ? 'ever' : scope === 'year' ? 'this year' : 'this month';
+
+    let h = '<div class="eyebrow">Climbed ' + label + '</div>';
+    if (s.ascent_m != null) {
+      h += '<div class="hero"><div class="hnum">' +
+        s.ascent_m.toLocaleString('en-GB').replace(/,/g, '\u2009') +
+        '</div><div class="hunit">metres up</div></div>';
+      h += '<div class="hsub">Across <b>' + s.days + ' day' + (s.days === 1 ? '' : 's') + ' out</b>' +
+        (s.ascent_of < s.count ? ', from ' + s.ascent_of + ' of ' + s.count + ' with ascent recorded' : '') +
+        '.</div>';
     } else {
-      let lastMonth = '';
-      all.forEach(a => {
-        const ym = a.date.slice(0, 7);
-        if (ym !== lastMonth) {
-          lastMonth = ym;
-          const m = Calc.monthRollup(all, ym);
-          h += '<div class="sec">' + MON[+ym.slice(5) - 1] + ' ' + ym.slice(0, 4) +
-               ' \u00b7 ' + m.distance_km.toFixed(1) + ' km' +
-               (m.ascent_m != null ? ' \u00b7 +' + m.ascent_m + ' m' : '') + '</div>';
-        }
-        h += rowHTML(a, bounds);
-      });
+      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">metres up</div></div>' +
+        '<div class="hsub">No ascent recorded for this period.</div>';
     }
-    el('view-list').innerHTML = h;
-    bindRows();
+
+    const prevKey = Calc.previousWithData(real(), scope, k);
+    const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
+    const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
+
+    const factors = inP.map(a => Calc.terrainFactor(a, cfg)).filter(x => x != null);
+    const rates = inP.map(a => { const r = Calc.ascentRate(a); return r && r.value; }).filter(Boolean);
+    const biggest = inP.filter(a => a.ascent_m != null).sort((a, b) => b.ascent_m - a.ascent_m)[0];
+
+    h += '<div style="margin-top:15px">';
+    h += cmp('Days out', String(s.days), prev ? vs + ' ' + prev.days : '');
+    h += cmp('Time on feet', Calc.fmtDuration(s.moving_s), prev ? vs + ' ' + Calc.fmtDuration(prev.moving_s) : '');
+    h += cmp('Distance', s.distance_km.toFixed(1) + ' km', prev ? vs + ' ' + prev.distance_km.toFixed(1) : '');
+    if (biggest) h += cmp('Biggest day', biggest.ascent_m + ' m', esc(biggest.name));
+    if (rates.length) h += cmp('Ascent rate', Math.round(Calc.median(rates)) + ' m/h', 'median of ' + rates.length);
+    h += cmp('Terrain factor',
+      factors.length ? Calc.median(factors).toFixed(2) : '\u2014',
+      factors.length ? 'median of ' + factors.length :
+        Calc.confidence(factors.length, 'terrain_trend').need + ' more tracked hikes');
+    h += '</div>';
+
+    if (inP.length >= 3) h += scatterHTML(inP);
+    return h;
   }
 
-  /* ---------- detail ---------- */
+  function scatterHTML(list) {
+    const pts = list.filter(a => a.ascent_m != null && a.distance_km != null);
+    if (pts.length < 3) return '';
+    const maxD = Math.max.apply(null, pts.map(a => a.distance_km)) * 1.15;
+    const maxA = Math.max.apply(null, pts.map(a => a.ascent_m)) * 1.15;
+    const newest = pts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+    let h = '<div class="sec"><span>Shape of your hiking</span><span>' + pts.length + ' hikes</span></div>';
+    h += '<div class="scat">' + pts.map(a => {
+      const x = (a.distance_km / maxD * 100).toFixed(1);
+      const y = (100 - a.ascent_m / maxA * 100).toFixed(1);
+      const on = a.id === newest.id;
+      return '<div class="pt' + (on ? ' on' : '') + '" style="left:' + x + '%; top:' + y + '%"></div>' +
+        (on ? '<div class="plbl" style="left:' + x + '%; top:' + y + '%">' + esc(a.name) + '</div>' : '');
+    }).join('') + '</div>';
+    h += '<div class="ax"><span>0 km</span><span>distance \u2192</span><span>' +
+      Math.round(maxD) + ' km</span></div>';
+    h += '<div class="est">Up the side is ascent. Top-left is short and steep; far right is long and rolling.</div>';
+    return h;
+  }
+
+  function hikeCard(a, bounds) {
+    const cfg = Store.config();
+    const r = Calc.ascentRate(a);
+    const tf = Calc.terrainFactor(a, cfg);
+    const st = [];
+    if (a.ascent_m != null) st.push(['Ascent', a.ascent_m, 'm']);
+    st.push(['Distance', a.distance_km.toFixed(1), 'km']);
+    st.push(['On feet', Calc.fmtDuration(a.moving_s != null ? a.moving_s : a.elapsed_s), '']);
+    if (r) st.push(['Rate', r.value, 'm/h']);
+    if (tf != null) st.push(['Factor', tf.toFixed(2), '']);
+
+    return '<div class="hcard" data-id="' + esc(a.id) + '">' +
+      '<div class="hdate">' + DAYS[Calc.dayIndex(a.date)] + ' ' + fmtDate(a.date).toUpperCase() +
+      ' \u00b7 ' + a.source.toUpperCase() + '</div>' +
+      '<div class="hname">' + esc(a.name) + '</div>' +
+      '<div class="hstats">' + st.map(x =>
+        '<div class="hstat"><div class="l">' + x[0] + '</div><div class="v">' + x[1] +
+        (x[2] ? '<s>' + x[2] + '</s>' : '') + '</div></div>').join('') + '</div>' +
+      vbarsHTML(a, bounds, true) + '</div>';
+  }
+
+  /* ---------------------------------------------------------------- detail */
 
   function renderDetail(id) {
     const a = Store.byId(id);
-    if (!a) { go('list'); return; }
+    if (!a) { go('home'); return; }
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const c = costOf(a);
+    const c = Calc.aerobicCost(a);
     const d = Calc.drift(a.laps);
     const tz = Calc.timeInZone(a.laps, bounds);
     const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
@@ -222,49 +334,39 @@
     const hrOk = Calc.hrIsReliable(a, cfg);
 
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
-    h += '<div class="hd-t">' + esc(a.name) + '</div>';
-    const sub = [fmtDate(a.date).toUpperCase(), a.type.toUpperCase(), a.source.toUpperCase()];
+    h += '<div class="ttl">' + esc(a.name) + '</div>';
+    const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase(), a.source.toUpperCase()];
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     if (a.conditions) sub.push(String(a.conditions).toUpperCase());
-    h += '<div class="hd-x" style="margin-top:6px">' + esc(sub.join(' \u00b7 ')) + '</div>';
+    h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
 
-    /* per-km view */
-    const laps = Calc.fullLaps(a.laps);
-    if (laps.length) {
-      h += '<div class="sec">Per kilometre</div>';
+    if (Calc.fullLaps(a.laps).length) {
+      h += '<div class="sec"><span>Per kilometre</span></div>';
       if (a.type === 'hike') {
-        const maxT = Math.max.apply(null, laps.map(l => l.time_s));
-        h += '<div class="vbars">' + laps.map(l => {
-          const z = Calc.zoneOf(l.avg_hr, bounds);
-          const bg = z ? ZCOL[z] : 'var(--stop)';
-          return '<div class="vcol"><div class="vlbl">' + Math.round(l.time_s / 60) + '</div>' +
-            '<div class="vbar" style="background:' + bg + '; height:' +
-            Math.max(6, Math.round(l.time_s / maxT * 100)) + '%"></div></div>';
-        }).join('') + '</div>' +
-        '<div class="est">Bar height is minutes for that kilometre; colour is heart-rate zone. Tall and amber is the climb.</div>';
+        h += vbarsHTML(a, bounds, false);
+        h += '<div class="est">Height is minutes for that kilometre; colour is heart-rate zone. Tall and amber is the climb.</div>';
       } else {
         h += stripHTML(a, bounds, true);
-        h += '<div class="row-meta" style="margin-top:8px">' +
-          laps.map(l => l.avg_hr == null ? '\u2014' : l.avg_hr).join(' \u00b7 ') + '</div>';
+        h += '<div class="rmeta" style="margin-left:0">' +
+          Calc.fullLaps(a.laps).map(l => l.avg_hr == null ? '\u2014' : l.avg_hr).join(' \u00b7 ') + '</div>';
       }
     }
 
-    if (d != null) {
-      h += '<div class="callout' + (d > 8 ? ' warn' : '') + '">' +
-        'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> from the first third to the last' +
-        (d > 8 ? '. A base run should hold closer to flat.' : '.') + '</div>';
-    }
+    if (d != null) h += '<div class="callout' + (d > 8 ? ' warn' : '') + '">' +
+      'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> from the first third to the last' +
+      (d > 8 ? '. A base effort should hold closer to flat.' : '.') + '</div>';
 
-    /* metrics */
     h += '<div class="rule"></div><div class="grid2">';
-    h += metric('Aerobic cost', c ? c.value : '\u2014', c ? 'b/km' : '',
-      c ? (c.basis === 'gap' ? 'gradient-adjusted' : 'raw pace') : 'needs heart rate', !c);
     if (a.type === 'run') {
+      h += metric('Aerobic cost', c ? c.value : '\u2014', c ? 'b/km' : '',
+        c ? (c.basis === 'gap' ? 'gradient-adjusted' : 'raw pace') : 'needs heart rate', !c);
       h += metric('Pace', Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)), '/km',
         a.gap_pace_s != null ? 'GAP ' + Calc.fmtPace(a.gap_pace_s) : '');
     } else {
       const ar = Calc.ascentRate(a);
+      h += metric('Ascent', a.ascent_m == null ? '\u2014' : a.ascent_m, a.ascent_m == null ? '' : 'm',
+        a.descent_m != null ? 'descent ' + a.descent_m + ' m' : '', a.ascent_m == null);
       h += metric('Ascent rate', ar ? ar.value : '\u2014', ar ? 'm/h' : '',
         ar ? 'on ' + ar.basis + ' time' : 'needs ascent', !ar);
     }
@@ -272,64 +374,59 @@
       a.type === 'hike' && Calc.flatEquivKm(a) != null ? 'flat-equiv ' + Calc.flatEquivKm(a) + ' km' : '');
     h += metric('Time', Calc.fmtDuration(a.elapsed_s), '',
       a.moving_s != null ? 'moving ' + Calc.fmtDuration(a.moving_s) : '');
-    if (a.ascent_m != null) h += metric('Ascent', a.ascent_m, 'm', a.descent_m != null ? 'descent ' + a.descent_m + ' m' : '');
     h += metric('Avg HR', a.avg_hr == null ? '\u2014' : a.avg_hr, a.avg_hr == null ? '' : 'bpm',
       ss != null && !hrOk ? Math.round(ss * 100) + '% stopped' : '', a.avg_hr == null);
     if (a.type === 'hike') {
       const tf = Calc.terrainFactor(a, cfg);
       h += metric('Terrain factor', tf == null ? '\u2014' : tf.toFixed(2), '',
-        tf == null ? 'needs moving time' : 'Naismith ' +
-          Calc.fmtDuration(Calc.naismithHours(a.distance_km, a.ascent_m, cfg) * 3600), tf == null);
+        tf == null ? 'needs moving time' :
+          'Naismith ' + Calc.fmtDuration(Calc.naismithHours(a.distance_km, a.ascent_m, cfg) * 3600), tf == null);
     }
     if (a.cadence_spm != null) h += metric('Cadence', a.cadence_spm, 'spm', '');
     h += '</div>';
 
-    if (ss != null && !hrOk) {
-      h += '<div class="callout warn">Average heart rate is dragged down by <b>' +
-        Calc.fmtDuration(a.elapsed_s - a.moving_s) + ' stopped</b>. Shown here, kept out of trends.</div>';
+    if (ss != null && !hrOk) h += '<div class="callout warn">Average heart rate is dragged down by <b>' +
+      Calc.fmtDuration(a.elapsed_s - a.moving_s) + ' stopped</b>. Shown here, kept out of trends.</div>';
+
+    if (zTotal) {
+      h += '<div class="sec"><span>Time in zone</span><span>' + Math.round(zTotal / 60) + ' min</span></div>';
+      h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
     }
 
-    if (zTotal > 0) {
-      h += '<div class="sec">Time in zone \u00b7 ' + Math.round(zTotal / 60) + ' min</div>';
-      h += zoneBarHTML(tz, zTotal);
-      h += zoneKeyHTML(bounds);
-    }
-
-    if (a.feel) h += '<div class="sec">Felt</div><div class="small muted">' + esc(a.feel) + '</div>';
-    if (a.note) h += '<div class="sec">Note</div><div class="small muted">' + esc(a.note) + '</div>';
+    if (a.feel) h += '<div class="sec"><span>Felt</span></div><div class="small muted">' + esc(a.feel) + '</div>';
+    if (a.note) h += '<div class="sec"><span>Note</span></div><div class="small muted">' + esc(a.note) + '</div>';
 
     h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete this ' + a.type + '</button>';
 
     el('view-detail').innerHTML = h;
-    $('#view-detail [data-back]').onclick = () => go('list');
-    const del = $('#view-detail [data-delete]');
-    del.onclick = () => {
+    $('#view-detail [data-back]').onclick = () => go('home');
+    $('#view-detail [data-delete]').onclick = () => {
       if (!confirm('Delete "' + a.name + '"? This cannot be undone.')) return;
-      Store.remove(a.id).then(() => go('list'));
+      Store.remove(a.id).then(() => go('home'));
     };
   }
 
-  /* ---------- import ---------- */
+  /* ---------------------------------------------------------------- import */
 
   function renderImport() {
     draft = null;
-    let h = '<div class="hd"><div class="hd-t">Add</div></div>';
-    h += '<div class="modes">' +
-      '<button class="mode" data-imp="run" aria-pressed="true">Run</button>' +
-      '<button class="mode" data-imp="hike" aria-pressed="false">Hike</button>' +
-      '<button class="mode" data-imp="auto" aria-pressed="false">Decide for me</button>' +
-      '</div>';
-    h += '<div class="eyebrow">Paste the table</div>';
-    h += '<textarea id="paste" placeholder="Paste straight from Gemini. Pipes, headers and flag lines are all fine."></textarea>';
+    let type = world;
+    let h = '<div class="back" data-back="1">\u2190 Back</div>';
+    h += '<div class="ttl">Add a ' + (type === 'run' ? 'run' : 'hike') + '</div>';
+    h += '<div class="bar">' +
+      '<button class="chip" data-imp="run" aria-pressed="' + (type === 'run') + '">Run</button>' +
+      '<button class="chip" data-imp="hike" aria-pressed="' + (type === 'hike') + '">Hike</button>' +
+      '<button class="chip" data-imp="auto" aria-pressed="false">Decide for me</button></div>';
+    h += '<label><span>Paste the table</span><textarea id="paste" placeholder="Paste straight from Gemini. Pipes, headers and flag lines are all fine."></textarea></label>';
     h += '<button class="btn" id="read">Read it</button>';
-    h += '<div class="small muted" style="margin-top:12px">Nothing is saved until you have seen the preview.</div>';
+    h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
     h += '<div id="preview"></div>';
     el('view-import').innerHTML = h;
 
-    let impType = 'run';
+    $('#view-import [data-back]').onclick = () => go('home');
     document.querySelectorAll('#view-import [data-imp]').forEach(b => {
       b.onclick = () => {
-        impType = b.dataset.imp;
+        type = b.dataset.imp;
         document.querySelectorAll('#view-import [data-imp]').forEach(x =>
           x.setAttribute('aria-pressed', String(x === b)));
       };
@@ -338,43 +435,37 @@
     el('read').onclick = () => {
       const text = el('paste').value;
       if (!text.trim()) return;
-      const p = Parse.parse(text, { today: todayStr() });
-      const type = impType === 'auto' ? (Parse.inferType(p) || 'run') : impType;
-      const flags = Parse.validate(p, { today: todayStr() });
-      draft = Parse.toActivity(p, { type: type });
-      renderPreview(p, flags);
+      const p = Parse.parse(text, { today: today() });
+      const t = type === 'auto' ? (Parse.inferType(p) || 'run') : type;
+      draft = Parse.toActivity(p, { type: t });
+      renderPreview(p, Parse.validate(p, { today: today() }));
     };
   }
 
   function renderPreview(p, flags) {
-    const cfg = Store.config();
-    const bounds = Calc.zoneBounds(cfg);
+    const bounds = Calc.zoneBounds(Store.config());
     const a = draft;
-    const c = costOf(a);
+    const c = Calc.aerobicCost(a);
     const d = Calc.drift(a.laps);
     const dup = a.date && a.distance_km ? Model.findDuplicate(a, Store.all()) : null;
 
     let h = '<div class="rule"></div><div class="eyebrow">Check it</div>';
-    h += '<label><span>Name</span><input id="p-name" value="' + esc(a.name || '') + '" placeholder="Where was it?"></label>';
-
+    h += '<label><span>Name</span><input type="text" id="p-name" value="' + esc(a.name || '') + '" placeholder="Where was it?"></label>';
     if (a.type === 'hike') {
       h += '<div class="field-row">' +
-        '<label><span>Conditions</span><input id="p-cond" placeholder="dry, warm"></label>' +
-        '<label><span>Pack</span><select id="p-pack">' +
-          '<option value="">\u2014</option><option value="day">Day</option>' +
-          '<option value="overnight">Overnight</option><option value="multi">Multi-day</option>' +
-        '</select></label></div>';
+        '<label><span>Conditions</span><input type="text" id="p-cond" placeholder="dry, warm"></label>' +
+        '<label><span>Pack</span><select id="p-pack"><option value="">\u2014</option>' +
+        '<option value="day">Day</option><option value="overnight">Overnight</option>' +
+        '<option value="multi">Multi-day</option></select></label></div>';
     }
-
     h += '<label><span>Source</span><select id="p-source">' +
       '<option value="tracked">Tracked on the watch</option>' +
-      '<option value="typed">Not recorded \u2014 typed from memory</option>' +
-      '</select></label>';
+      '<option value="typed">Not recorded \u2014 typed from memory</option></select></label>';
 
     if (Calc.fullLaps(a.laps).length) {
-      h += '<div style="margin-top:16px">' + stripHTML(a, bounds, true) + '</div>';
-      h += '<div class="row-meta" style="margin-top:7px">' +
-        Calc.fullLaps(a.laps).length + ' laps' +
+      h += '<div style="margin-top:16px">' +
+        (a.type === 'hike' ? vbarsHTML(a, bounds, false) : stripHTML(a, bounds, true)) + '</div>';
+      h += '<div class="rmeta" style="margin-left:0">' + Calc.fullLaps(a.laps).length + ' laps' +
         ((a.laps || []).length > Calc.fullLaps(a.laps).length ? ' + partial' : '') +
         (d != null ? ' \u00b7 <b>drift ' + (d >= 0 ? '+' : '') + d + ' bpm</b>' : '') + '</div>';
     }
@@ -386,7 +477,8 @@
     h += metric('Avg HR', a.avg_hr == null ? '\u2014' : a.avg_hr, a.avg_hr == null ? '' : 'bpm', '', a.avg_hr == null);
     h += metric('Ascent', a.ascent_m == null ? 'not given' : a.ascent_m, a.ascent_m == null ? '' : 'm',
       a.ascent_m == null ? 'left out of totals' : '', a.ascent_m == null);
-    h += metric('Aerobic cost', c ? c.value : '\u2014', c ? 'b/km' : '', c ? c.basis + ' pace' : '', !c);
+    if (a.type === 'run') h += metric('Aerobic cost', c ? c.value : '\u2014', c ? 'b/km' : '',
+      c ? c.basis + ' pace' : '', !c);
     h += '</div>';
 
     const errors = flags.filter(f => f.level === 'error');
@@ -410,73 +502,85 @@
       draft.name = el('p-name').value.trim();
       draft.source = el('p-source').value;
       if (a.type === 'hike') {
-        const cond = el('p-cond'), pack = el('p-pack');
-        draft.conditions = cond && cond.value.trim() ? cond.value.trim() : null;
-        draft.pack = pack && pack.value ? pack.value : null;
+        const cd = el('p-cond'), pk = el('p-pack');
+        draft.conditions = cd && cd.value.trim() ? cd.value.trim() : null;
+        draft.pack = pk && pk.value ? pk.value : null;
       }
       if (dup) draft.id = dup.id;
       const act = Model.make(draft);
-      Store.put(act).then(() => { mode = act.type; go('detail', act.id); });
+      Store.put(act).then(() => {
+        setWorld(act.type);
+        periodKey = Calc.periodKey(act.date, scope);
+        go('detail', act.id);
+      });
     };
   }
 
-  /* ---------- settings ---------- */
+  /* -------------------------------------------------------------- settings */
 
   function renderSettings() {
     const cfg = Store.config();
     const b = Calc.zoneBounds(cfg);
-    const age = d => d ? Math.round((Date.now() - new Date(d + 'T12:00:00')) / 86400000) : null;
-    const stale = d => { const a = age(d); return a != null && a > 365; };
+    const ageDays = d => d ? Math.round((Date.now() - new Date(d + 'T12:00:00')) / 86400000) : null;
 
-    let h = '<div class="hd"><div class="hd-t">Setup</div></div>';
-    h += '<div class="eyebrow">Zone anchors \u00b7 Karvonen</div>';
-    h += '<div class="field-row" style="margin-top:4px">' +
-      '<label><span>Max HR</span><input id="c-max" type="number" value="' + cfg.max_hr + '"></label>' +
-      '<label><span>Resting HR</span><input id="c-rest" type="number" value="' + cfg.resting_hr + '"></label>' +
-      '</div>';
-    h += '<div class="small muted" style="margin-top:10px">Reserve ' + b.hrr + ' beats. ' +
-      'Z1 below ' + b.z2 + ' \u00b7 Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) +
-      ' \u00b7 Z3 ' + b.z3 + '\u2013' + (b.z4 - 1) + ' \u00b7 Z4 ' + b.z4 + '\u2013' + (b.z5 - 1) +
-      ' \u00b7 Z5 ' + b.z5 + '+</div>';
-    if (stale(cfg.max_hr_dated)) h += '<div class="flag"><i>!</i><div>Max HR was set ' +
-      Math.round(age(cfg.max_hr_dated) / 30) + ' months ago.</div></div>';
-    h += '<div class="small muted" style="margin-top:10px">Resting heart rate should be a 90-day median, ' +
-      'updated by hand every few weeks. The zones follow it.</div>';
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Setup</div>';
 
-    h += '<div class="rule"></div><div class="eyebrow">Hiking constants</div>';
-    h += '<div class="field-row" style="margin-top:4px">' +
-      '<label><span>Flat km/h</span><input id="c-flat" type="number" step="0.1" value="' + cfg.FLAT_KMH + '"></label>' +
-      '<label><span>Ascent m/h</span><input id="c-asc" type="number" value="' + cfg.ASCENT_MH + '"></label>' +
-      '</div>';
-    h += '<div class="small muted" style="margin-top:10px">Naismith. 5 km/h is the classic value; ' +
-      '4 is the conservative rough-terrain variant. Changing it moves every terrain factor.</div>';
+    h += '<div class="sec"><span>Zone anchors \u00b7 Karvonen</span></div>';
+    h += '<div class="field-row">' +
+      '<label><span>Max HR</span><input type="number" id="c-max" value="' + cfg.max_hr + '"></label>' +
+      '<label><span>Resting HR</span><input type="number" id="c-rest" value="' + cfg.resting_hr + '"></label></div>';
+
+    const seg = (from, to, col, label) =>
+      '<div class="zseg" style="background:' + col + '; flex:' + (to - from) + '">' + label + '</div>';
+    h += '<div class="zbar" style="margin-top:14px">' +
+      seg(cfg.resting_hr, b.z2, 'var(--z1)', 'Z1') +
+      seg(b.z2, b.z3, 'var(--z2)', 'Z2') +
+      seg(b.z3, b.z4, 'var(--z3)', 'Z3') +
+      seg(b.z4, b.z5, 'var(--z4)', 'Z4') +
+      seg(b.z5, cfg.max_hr, 'var(--z5)', 'Z5') + '</div>';
+    h += '<div class="zkey">' +
+      '<span>' + cfg.resting_hr + '</span><span>' + b.z2 + '</span><span>' + b.z3 +
+      '</span><span>' + b.z4 + '</span><span>' + b.z5 + '</span><span>' + cfg.max_hr + '</span></div>';
+    h += '<div class="est">Reserve ' + b.hrr + ' beats. Base work lives in Z2, ' + b.z2 + '\u2013' + (b.z3 - 1) + '.</div>';
+
+    if (ageDays(cfg.max_hr_dated) > 365) h += '<div class="flag"><i>!</i><div>Max HR was set ' +
+      Math.round(ageDays(cfg.max_hr_dated) / 30) + ' months ago.</div></div>';
+    h += '<div class="small muted" style="margin-top:10px">Resting heart rate wants to be a 90-day median, ' +
+      'nudged every few weeks. The zones follow it.</div>';
+
+    h += '<div class="sec"><span>Hiking constants</span></div>';
+    h += '<div class="field-row">' +
+      '<label><span>Flat km/h</span><input type="number" step="0.1" id="c-flat" value="' + cfg.FLAT_KMH + '"></label>' +
+      '<label><span>Ascent m/h</span><input type="number" id="c-asc" value="' + cfg.ASCENT_MH + '"></label></div>';
+    h += '<div class="est">Naismith. 5 km/h is the classic value; 4 is the conservative rough-terrain ' +
+      'variant. Changing it moves every terrain factor you have.</div>';
     h += '<button class="btn" id="c-save">Save settings</button>';
 
-    h += '<div class="rule"></div><div class="eyebrow">Your data</div>';
-    h += '<div class="small muted" style="margin-top:8px">' + Store.all().length +
-      ' activities, held on this device only. Export regularly.</div>';
+    const n = Store.all().length;
+    h += '<div class="sec"><span>Your data</span></div>';
+    h += '<div class="small muted">' + n + ' activit' + (n === 1 ? 'y' : 'ies') +
+      ', on this device only. Export now and then.</div>';
     h += '<button class="btn ghost" id="c-export">Export everything</button>';
-    h += '<label><span>Import a backup</span><input id="c-import" type="file" accept="application/json"></label>';
+    h += '<label class="filebtn btn ghost" for="c-import" style="margin-top:8px">Import a backup' +
+      '<input id="c-import" type="file" accept="application/json"></label>';
 
     el('view-settings').innerHTML = h;
+    $('#view-settings [data-back]').onclick = () => go('home');
 
-    el('c-save').onclick = () => {
-      Store.setConfig({
-        max_hr: +el('c-max').value,
-        resting_hr: +el('c-rest').value,
-        resting_hr_dated: todayStr(),
-        FLAT_KMH: +el('c-flat').value,
-        ASCENT_MH: +el('c-asc').value
-      }).then(renderSettings);
-    };
+    el('c-save').onclick = () => Store.setConfig({
+      max_hr: +el('c-max').value,
+      resting_hr: +el('c-rest').value,
+      resting_hr_dated: today(),
+      FLAT_KMH: +el('c-flat').value,
+      ASCENT_MH: +el('c-asc').value
+    }).then(renderSettings);
 
     el('c-export').onclick = () => {
       const blob = new Blob([Store.exportJSON()], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'fit-backup-' + todayStr() + '.json';
-      a.click();
+      const link = document.createElement('a');
+      link.href = url; link.download = 'groundwork-' + today() + '.json';
+      link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
 
@@ -486,47 +590,57 @@
       const r = new FileReader();
       r.onload = () => {
         try {
-          Store.importJSON(r.result).then(n => { alert(n + ' activities restored.'); go('list'); });
+          Store.importJSON(r.result).then(count => { alert(count + ' activities restored.'); go('home'); });
         } catch (err) { alert('Could not read that file: ' + err.message); }
       };
       r.readAsText(f);
     };
   }
 
-  /* ---------- wiring ---------- */
+  /* --------------------------------------------------------------- wiring */
 
-  function bindModes() {
-    document.querySelectorAll('#view-week [data-mode]').forEach(b => {
-      b.onclick = () => { mode = b.dataset.mode; renderWeek(); };
+  function bind() {
+    document.querySelectorAll('#view-home [data-scope]').forEach(b => {
+      b.onclick = () => { scope = b.dataset.scope; periodKey = null; renderHome(); };
     });
-  }
-
-  function bindRows() {
-    document.querySelectorAll('.row-a[data-id]').forEach(r => {
+    document.querySelectorAll('#view-home [data-period]').forEach(b => {
+      b.onclick = () => { periodKey = b.dataset.period; renderHome(); };
+    });
+    document.querySelectorAll('#view-home [data-id]').forEach(r => {
       r.onclick = () => go('detail', r.dataset.id);
     });
+    const setup = $('#view-home [data-go="settings"]');
+    if (setup) setup.onclick = () => go('settings');
   }
 
-  const VIEWS = ['week', 'list', 'detail', 'import', 'settings'];
+  function setWorld(w) {
+    world = w;
+    scope = WORLD[w].scope;
+    periodKey = null;
+    document.querySelectorAll('#worlds button').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.world === w)));
+  }
+
+  const VIEWS = ['home', 'detail', 'import', 'settings'];
 
   function go(view, param) {
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
-    document.querySelectorAll('#nav button').forEach(b =>
-      b.setAttribute('aria-pressed', String(b.dataset.go === view)));
+    el('worlds').hidden = (view !== 'home');
+    el('fab').hidden = (view === 'import');
     window.scrollTo(0, 0);
-    if (view === 'week') renderWeek();
-    if (view === 'list') renderList();
+    if (view === 'home') renderHome();
     if (view === 'detail') renderDetail(param);
     if (view === 'import') renderImport();
     if (view === 'settings') renderSettings();
   }
 
-  document.querySelectorAll('#nav button').forEach(b => {
-    b.onclick = () => go(b.dataset.go);
+  document.querySelectorAll('#worlds button').forEach(b => {
+    b.onclick = () => { setWorld(b.dataset.world); go('home'); };
   });
+  el('fab').onclick = () => go('import');
 
-  Store.init().then(() => go('week'));
+  Store.init().then(() => { setWorld('run'); go('home'); });
 
-  window.Fit = { go: go };
+  window.Groundwork = { go: go, setWorld: setWorld };
 
 })();

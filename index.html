@@ -13,20 +13,19 @@
 </head>
 <body>
 
+<header id="worlds">
+  <button data-world="run"  aria-pressed="true">Running</button>
+  <button data-world="hike" aria-pressed="false">Hiking</button>
+</header>
+
 <main id="main">
-  <section id="view-week" class="view"></section>
-  <section id="view-list" class="view" hidden></section>
-  <section id="view-detail" class="view" hidden></section>
-  <section id="view-import" class="view" hidden></section>
+  <section id="view-home"     class="view"></section>
+  <section id="view-detail"   class="view" hidden></section>
+  <section id="view-import"   class="view" hidden></section>
   <section id="view-settings" class="view" hidden></section>
 </main>
 
-<nav id="nav">
-  <button data-go="week"     aria-pressed="true">Week</button>
-  <button data-go="list"     aria-pressed="false">Log</button>
-  <button data-go="import"   aria-pressed="false" class="add">Add</button>
-  <button data-go="settings" aria-pressed="false">Setup</button>
-</nav>
+<button id="fab" aria-label="Add an activity">+</button>
 
 <script src="calc.js"></script>
 <script src="store.js"></script>

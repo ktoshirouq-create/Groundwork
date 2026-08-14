@@ -384,6 +384,132 @@
 
   const Model = { SCHEMA, BLANK, make, newId, findDuplicate, migrate };
 
+  /* ---------- periods: week / month / year / all ---------- */
+
+  function periodKey(dateStr, scope) {
+    if (scope === 'week') return weekStart(dateStr);
+    if (scope === 'month') return dateStr.slice(0, 7);
+    if (scope === 'year') return dateStr.slice(0, 4);
+    return 'all';
+  }
+
+  function shiftKey(key, scope, delta) {
+    if (scope === 'all') return 'all';
+    if (scope === 'week') {
+      const d = new Date(key + 'T12:00:00');
+      d.setDate(d.getDate() + delta * 7);
+      return d.toISOString().slice(0, 10);
+    }
+    if (scope === 'month') {
+      let y = +key.slice(0, 4), m = +key.slice(5) + delta;
+      y += Math.floor((m - 1) / 12);
+      m = ((m - 1) % 12 + 12) % 12 + 1;
+      return y + '-' + String(m).padStart(2, '0');
+    }
+    return String(+key + delta);
+  }
+
+  function inPeriod(act, scope, key) {
+    if (scope === 'all') return true;
+    return periodKey(act.date, scope) === key;
+  }
+
+  /** Human label for a period key. */
+  function periodLabel(key, scope, todayStr) {
+    const today = todayStr || new Date().toISOString().slice(0, 10);
+    if (scope === 'all') return 'All time';
+    if (scope === 'year') return key;
+    if (scope === 'month') {
+      const M = ['January','February','March','April','May','June',
+                 'July','August','September','October','November','December'];
+      return M[+key.slice(5) - 1] + ' ' + key.slice(0, 4);
+    }
+    return 'Week ' + isoWeek(key).split('-W')[1];
+  }
+
+  /** Sub-line under the title: the span, plus whether it is still running. */
+  function periodSpan(key, scope, todayStr) {
+    const today = todayStr || new Date().toISOString().slice(0, 10);
+    const M = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    const cur = periodKey(today, scope) === key;
+    if (scope === 'all') return 'EVERYTHING LOGGED';
+    if (scope === 'year') return cur ? 'YEAR TO DATE' : 'FULL YEAR';
+    if (scope === 'month') {
+      const last = cur ? +today.slice(8) : new Date(+key.slice(0,4), +key.slice(5), 0).getDate();
+      return '1\u2013' + last + ' ' + M[+key.slice(5) - 1] + (cur ? ' \u00b7 MONTH TO DATE' : '');
+    }
+    const a = new Date(key + 'T12:00:00');
+    const b = new Date(key + 'T12:00:00'); b.setDate(b.getDate() + 6);
+    const span = a.getDate() + '\u2013' + b.getDate() + ' ' + M[b.getMonth()] + ' ' + b.getFullYear();
+    return span + (cur ? ' \u00b7 THIS WEEK' : '');
+  }
+
+  function summarize(acts) {
+    const real = acts.filter(a => a.type !== 'test');
+    const ascentKnown = real.filter(a => a.ascent_m != null && a.source === 'tracked');
+    const days = {};
+    real.forEach(a => { days[a.date] = 1; });
+    return {
+      count: real.length,
+      days: Object.keys(days).length,
+      distance_km: Math.round(real.reduce((t, a) => t + (a.distance_km || 0), 0) * 100) / 100,
+      elapsed_s: real.reduce((t, a) => t + (a.elapsed_s || 0), 0),
+      moving_s: real.reduce((t, a) => t + (a.moving_s != null ? a.moving_s : a.elapsed_s || 0), 0),
+      ascent_m: ascentKnown.length ? ascentKnown.reduce((t, a) => t + a.ascent_m, 0) : null,
+      ascent_of: ascentKnown.length,
+      activities: real
+    };
+  }
+
+  /** Bars for the period ribbon. metric: 'distance' | 'ascent'. */
+  function ribbon(acts, scope, selectedKey, n, metric) {
+    const out = [];
+    let key = selectedKey;
+    for (let i = 0; i < n; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
+    return out.map(k => {
+      const inK = acts.filter(a => a.type !== 'test' && inPeriod(a, scope, k));
+      const s = summarize(inK);
+      const v = metric === 'ascent' ? (s.ascent_m || 0) : s.distance_km;
+      return { key: k, value: v, count: s.count, selected: k === selectedKey };
+    });
+  }
+
+  /** Most recent period before `key` that actually has something in it. */
+  function previousWithData(acts, scope, key) {
+    let k = shiftKey(key, scope, -1);
+    for (let i = 0; i < 60; i++) {
+      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return k;
+      k = shiftKey(k, scope, -1);
+    }
+    return null;
+  }
+
+  /** Nearest period after `key` that has something in it. */
+  function nextWithData(acts, scope, key) {
+    let k = shiftKey(key, scope, 1);
+    for (let i = 0; i < 60; i++) {
+      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return k;
+      k = shiftKey(k, scope, 1);
+    }
+    return null;
+  }
+
+  /** How many periods of empty sit immediately before `key`. */
+  function emptyRunBefore(acts, scope, key) {
+    let k = shiftKey(key, scope, -1), n = 0;
+    for (let i = 0; i < 400; i++) {
+      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return n;
+      n++; k = shiftKey(k, scope, -1);
+    }
+    return n;
+  }
+
+  function medianCost(acts, costFn) {
+    return median(acts.filter(a => a.type !== 'test').map(a => {
+      const c = costFn(a); return c ? c.value : null;
+    }));
+  }
+
   const api = {
     DEFAULT_CONFIG, NEEDS,
     zoneBounds, zoneOf,
@@ -394,7 +520,9 @@
     naismithHours, terrainFactor, flatEquivKm,
     comparable, median,
     isoWeek, weekStart, dayIndex, daysBetween, splitOnGaps,
-    weekRollup, monthRollup, confidence
+    weekRollup, monthRollup, confidence,
+    periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
+    summarize, ribbon, previousWithData, emptyRunBefore, medianCost
   };
 
   if (typeof module !== 'undefined' && module.exports) {

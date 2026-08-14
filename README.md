@@ -19,7 +19,7 @@ not, Pages ignores them either way.
 ## Files
 
 ```
-index.html    shell — every screen is a <section>
+index.html    shell — world switch, four <section> views, the add button
 app.css       design tokens; colour means heart-rate zone and nothing else
 calc.js       all maths, plus the activity model. Pure functions, no DOM.
 store.js      storage behind an adapter — local now, Sheets later
@@ -63,8 +63,25 @@ secrets.
 - **Export** — do it regularly. Until Sheets is wired, this device is the only
   copy.
 
+## Two worlds
+
+Running and Hiking are separate worlds sharing one shell. They differ on
+purpose:
+
+|            | Running                   | Hiking                          |
+|------------|---------------------------|---------------------------------|
+| Scopes     | Week / Month / Year       | Month / Year / All time         |
+| Default    | Week                      | Year                            |
+| Hero       | Aerobic cost, beats/km    | Cumulative ascent, metres up    |
+| Ribbon     | Distance per week         | Ascent per month                |
+| List       | Dense rows, drift strips  | Spacious cards, one per day out |
+| Compares   | Zone time, drift          | Days out, time on feet, factor  |
+
+There is no Week for hiking (you don't hike on a weekly rhythm) and no All time
+for running (the training block is the unit).
+
 ## Still to come
 
-Trend charts (aerobic cost, drift, weekly zone split, pace × HR scatter,
-terrain factor). Held back deliberately — lines need eight to ten points before
-they stop looking like noise.
+Trend charts — aerobic cost over time, drift over time, weekly zone split,
+pace × HR scatter. Held back deliberately: lines need eight to ten points
+before they stop looking like noise.
