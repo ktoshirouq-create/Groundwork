@@ -857,6 +857,16 @@
              now: cw.now, prev: cw.prev, need: cw.need, betterWhen: 'up',
              range: rangeOf(days), band: null, bestLabel: 'most' });
 
+      const loads = loadSeries(mine, c, 12, asOf ? weekStart(asOf) : null)
+        .filter(x => blockStart == null || x.key >= blockStart)
+        .map(x => x.value).filter(v => v > 0);
+      const lw = windowStats(loads);
+      push({ n: loads.length, key: 'load', label: 'Weekly load', unit: '', kind: 'int',
+             now: lw.now, prev: lw.prev, need: lw.need, betterWhen: null,
+             range: rangeOf(loads), band: loads.length >= 3 ? rangeOf(loads.slice(-3)) : null,
+             worstLabel: 'least', bestLabel: 'most',
+             note: 'Minutes weighted by how hard your heart was working. A bigger week is not automatically a better one.' });
+
       const vols = weeklySeries(mine, 12, asOf ? weekStart(asOf) : null, 'distance')
         .filter(x => blockStart == null || x.key >= blockStart)
         .map(x => x.value).filter(v => v > 0);
@@ -985,6 +995,70 @@
     };
   }
 
+  /* ---------- load ----------
+     Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
+     short hard effort can cost the same as a long easy one. Needs only average
+     heart rate and the two anchors, so it works on every run already logged. */
+
+  function load(act, cfg) {
+    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
+    if (!act || act.avg_hr == null || !act.elapsed_s) return null;
+    const reserve = c.max_hr - c.resting_hr;
+    if (reserve <= 0) return null;
+    const r = Math.max(0, Math.min(1, (act.avg_hr - c.resting_hr) / reserve));
+    const minutes = (act.moving_s != null ? act.moving_s : act.elapsed_s) / 60;
+    return Math.round(minutes * r * 0.64 * Math.exp(1.92 * r));
+  }
+
+  /* Foster session-RPE — minutes x perceived effort. Independent of the watch,
+     so where both exist they cross-check each other. */
+  function sessionRpe(act) {
+    if (!act || act.rpe == null || !act.elapsed_s) return null;
+    return Math.round(act.elapsed_s / 60 * act.rpe);
+  }
+
+  function loadSeries(acts, cfg, n, endKey) {
+    return weekKeys(acts, n, endKey).map(k => {
+      const inWeek = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && weekStart(a.date) === k);
+      const total = inWeek.reduce((t, a) => t + (load(a, cfg) || 0), 0);
+      return { key: k, value: total, count: inWeek.length };
+    });
+  }
+
+  /* A week more than half again the one before it. Flagged, never judged — a
+     jump can be exactly what you meant to do. */
+  const RAMP_LIMIT = 0.5;
+
+  function rampFlag(series) {
+    if (!series || series.length < 2) return null;
+    const now = series[series.length - 1], prev = series[series.length - 2];
+    if (!prev.value || !now.value) return null;
+    const change = (now.value - prev.value) / prev.value;
+    return change >= RAMP_LIMIT
+      ? { from: prev.value, to: now.value, change: change }
+      : null;
+  }
+
+  /* Load by day of the week, for the strip under the header. */
+  function weekDays(acts, cfg, weekKey) {
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekKey + 'T12:00:00');
+      d.setDate(d.getDate() + i);
+      const date = d.toISOString().slice(0, 10);
+      const onDay = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && a.date === date);
+      const total = onDay.reduce((t, a) => t + (load(a, cfg) || 0), 0);
+      const laps = [];
+      onDay.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
+      const tz = timeInZone(laps, zoneBounds(cfg));
+      let top = null, best = 0;
+      [1, 2, 3, 4, 5].forEach(z => { if (tz[z] > best) { best = tz[z]; top = z; } });
+      out.push({ date: date, dow: i, count: onDay.length, load: total, zone: top,
+                 activities: onDay });
+    }
+    return out;
+  }
+
   const api = {
     DEFAULT_CONFIG, NEEDS,
     zoneBounds, zoneOf,
@@ -1000,6 +1074,7 @@
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, aerobicPace, paceSeries, PACE_WINDOW, cumulativeAscent, ascentRateSeries,
     records, delta, driftNeeds,
+    load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT,
     restingSeries, restingBaseline, suggestedRestingAnchor,
     DAY_FIELDS, dayRecords, restingByDate, restingConflicts,
     sleepSeries, hrvSeries, dayFor, trainedDates, splitCompare,

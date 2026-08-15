@@ -284,6 +284,67 @@
   }
 
 
+
+  /* ------------------------------------------------------------ week strip */
+
+  /* Seven days, height is load, colour is the zone that day mostly sat in.
+     Answers "am I being consistent" and "how hard was it" in one row. */
+  function weekStripHTML() {
+    const cfg = Store.config();
+    const wk = scope === 'week' ? key() : Calc.weekStart(today());
+    const days = Calc.weekDays(real(), cfg, wk);
+    if (!days.some(d => d.count)) return '';
+
+    const max = Math.max.apply(null, days.map(d => d.load).concat([1]));
+    const L = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const now = today();
+
+    let h = '<div class="wsb">' + days.map(d => {
+      if (!d.count) return '<div class="col rest"><div class="v"></div></div>';
+      const col = d.zone ? ZCOL[d.zone] : 'var(--mute)';
+      const ht = d.load ? Math.max(14, Math.round(d.load / max * 100)) : 22;
+      return '<div class="col" title="' + d.date + (d.load ? ' \u00b7 load ' + d.load : '') +
+        '"><div class="v" style="height:' + ht + '%; background:' + col + '"></div></div>';
+    }).join('') + '</div>';
+
+    h += '<div class="wslbl">' + days.map(d =>
+      '<div' + (d.date === now ? ' class="today"' : '') + '>' + L[d.dow] + '</div>').join('') + '</div>';
+
+    const total = days.reduce((t, d) => t + d.load, 0);
+    const out = days.filter(d => d.count).length;
+    h += '<div class="est">' + out + ' of 7 days' + (total ? ', load ' + total : '') +
+      '. Height is load \u2014 minutes weighted by how hard your heart was working.</div>';
+    return h;
+  }
+
+  /* Weekly load, with a flag when a week jumps by half again. */
+  function loadHTML() {
+    const cfg = Store.config();
+    const series = Calc.loadSeries(real(), cfg, 12, scope === 'week' ? key() : null);
+    const withData = series.filter(s => s.value > 0);
+    if (withData.length < 3) return '';
+
+    const max = Math.max.apply(null, series.map(s => s.value).concat([1]));
+    let h = '<div class="sec"><span>Load</span><span>12 weeks</span></div>';
+    h += '<div class="loadbars">' + series.map((s, i) => {
+      if (!s.value) return '<div class="lb none"><div class="v"></div></div>';
+      const prev = i > 0 ? series[i - 1].value : 0;
+      const spike = prev && (s.value - prev) / prev >= Calc.RAMP_LIMIT;
+      return '<div class="lb' + (spike ? ' spike' : '') + '" title="' + s.key + ' \u00b7 ' +
+        s.value + '"><div class="v" style="height:' +
+        Math.max(4, Math.round(s.value / max * 100)) + '%"></div></div>';
+    }).join('') + '</div>';
+    h += '<div class="wslbl" style="font-size:8px">' + series.map((s, i) =>
+      '<div>' + (i % 2 === 0 ? Calc.isoWeek(s.key).split('-W')[1].replace(/^0/, '') : '') +
+      '</div>').join('') + '</div>';
+
+    const ramp = Calc.rampFlag(series.filter(s => s.value > 0));
+    if (ramp) h += '<div class="callout warn">Load went <b>' + ramp.from + ' \u2192 ' + ramp.to +
+      '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>';
+    return h;
+  }
+
+
   /* ---------------------------------------------------------- the read */
 
   function fmtRead(v, kind) {
@@ -314,7 +375,7 @@
     const live = rows.filter(r => r.range && r.now != null);
     const waiting = rows.filter(r => !(r.range && r.now != null));
 
-    let h = '<div class="sec"><span>The read</span><span>' +
+    let h = '<div class="sec"><span>Form</span><span>' +
       (live.length ? 'last 3 vs 3 before' : '') + '</span></div>';
 
     live.forEach(r => {
@@ -446,6 +507,7 @@
     }
 
     h += ribbonHTML();
+    if (world === 'run') h += weekStripHTML();
     h += '<div class="rule"></div>';
     h += (world === 'run' ? runHero(inP, mine, bounds) : hikeHero(inP, mine, k));
 
@@ -562,6 +624,7 @@
     h += '</div>';
 
     h += readHTML('run');
+    h += loadHTML();
     h += zoneShareHTML();
     return h;
   }
@@ -967,6 +1030,11 @@
           : Math.abs(a.resting_hr - bl).toFixed(0) + ' ' + (a.resting_hr > bl ? 'above' : 'below') + ' baseline')
         : '');
     }
+    const ld = Calc.load(a, cfg);
+    if (ld != null) {
+      const sr = Calc.sessionRpe(a);
+      h += metric('Load', ld, '', sr != null ? 'session RPE ' + sr : 'from heart rate');
+    }
     if (a.cadence_spm != null) h += metric('Cadence', a.cadence_spm, 'spm', '');
     h += '</div>';
 
@@ -1000,16 +1068,26 @@
 
   function renderImport() {
     draft = null;
-    let type = world;
+    /* Inference is right nearly always, so it leads. The explicit chips are the
+       override, not the norm. */
+    let type = 'auto';
+    const LABEL = { run: 'Add a run', hike: 'Add a hike', body: 'Add nights', auto: 'Add' };
+    const PLACEHOLDER = {
+      run: 'Paste the run table from Gemini.',
+      hike: 'Paste the hike table from Gemini.',
+      body: 'Paste a week of nights — one row per day.',
+      auto: 'Paste straight from Gemini. Runs, hikes and nights are all recognised.'
+    };
+
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
-    h += '<div class="ttl">Add a ' + (type === 'run' ? 'run' : 'hike') + '</div>';
+    h += '<div class="ttl" id="imp-title">' + LABEL[type] + '</div>';
     h += '<div class="bar">' +
-      '<button class="chip" data-imp="run" aria-pressed="' + (type === 'run') + '">Run</button>' +
-      '<button class="chip" data-imp="hike" aria-pressed="' + (type === 'hike') + '">Hike</button>' +
-      '<button class="chip" data-imp="auto" aria-pressed="false">Decide for me</button></div>';
-    h += '<div class="small muted" style="margin-top:10px">A table of day rows is read as a ' +
-      'week of nights, whichever of these is selected.</div>';
-    h += '<label><span>Paste the table</span><textarea id="paste" placeholder="Paste straight from Gemini. Pipes, headers and flag lines are all fine."></textarea></label>';
+      ['auto', 'run', 'hike', 'body'].map(t =>
+        '<button class="chip" data-imp="' + t + '" aria-pressed="' + (t === type) + '">' +
+        (t === 'auto' ? 'Decide for me' : t === 'body' ? 'Body' : t[0].toUpperCase() + t.slice(1)) +
+        '</button>').join('') + '</div>';
+    h += '<label><span>Paste the table</span><textarea id="paste" placeholder="' +
+      esc(PLACEHOLDER[type]) + '"></textarea></label>';
     h += '<button class="btn" id="read">Read it</button>';
     h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
     h += '<div id="preview"></div>';
@@ -1021,6 +1099,9 @@
         type = b.dataset.imp;
         document.querySelectorAll('#view-import [data-imp]').forEach(x =>
           x.setAttribute('aria-pressed', String(x === b)));
+        el('imp-title').textContent = LABEL[type];
+        el('paste').placeholder = PLACEHOLDER[type];
+        el('preview').innerHTML = '';
       };
     });
 
@@ -1028,11 +1109,25 @@
       const text = el('paste').value;
       if (!text.trim()) return;
       const p = Parse.parse(text, { today: today() });
-      /* a paste of day rows is a week of nights, whatever tab you came from */
+
+      /* day rows are unambiguous — they can only be nights */
       if (p.days.length) { renderDayPreview(p); return; }
-      const t = type === 'auto' ? (Parse.inferType(p) || 'run') : type;
+      if (type === 'body') {
+        el('preview').innerHTML = '<div class="flag error"><i>\u2715</i><div>' +
+          'No day rows in that paste. A week of nights needs one row per date.</div></div>';
+        return;
+      }
+
+      const guess = Parse.inferType(p);
+      const t = type === 'auto' ? (guess || 'run') : type;
       draft = Parse.toActivity(p, { type: t });
-      renderPreview(p, Parse.validate(p, { today: today() }));
+      const flags = Parse.validate(p, { today: today() });
+      /* an explicit choice always wins, but the app says when it disagrees */
+      if (type !== 'auto' && guess && guess !== type) {
+        flags.unshift({ level: 'warn', msg: 'You chose ' + type + ', but this reads as a ' +
+          guess + '. Saving it as ' + type + '.' });
+      }
+      renderPreview(p, flags);
     };
   }
 
@@ -1135,6 +1230,8 @@
 
     let h = '<div class="rule"></div><div class="sec"><span>Check it</span><span>' +
       recs.length + ' night' + (recs.length === 1 ? '' : 's') + '</span></div>';
+    h += '<div class="small muted" style="margin-bottom:10px">Day rows are read as nights ' +
+      'whichever type is selected.</div>';
 
     recs.slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(d => {
       const hi = base != null && d.resting_hr != null && d.resting_hr - base >= 4;

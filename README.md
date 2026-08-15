@@ -103,15 +103,60 @@ four-kilometre run. Shorter runs say how many more they need.
 Laps tagged with explicit warm-up / main / cool-down roles are trusted as
 tagged, and nothing extra is dropped.
 
-## The read
+## Form
 
-Six dimensions, each on a track running from your worst to your best over the
+Each dimension sits on a track running from your worst to your best over the
 last 12 months, with a band for recent typical and a dot for now. Direction
 tells you whether you're improving; position tells you how good it is in your
-own terms.
+own terms. Windows are the last 3 against the 3 before.
 
-Windows are the last 3 against the 3 before. Anything short of that shows the
-track greyed and says what it needs.
+A dimension with fewer than two observations has no range and gets no track —
+it collapses into one line with the others still waiting.
+
+## Load
+
+Banister TRIMP: minutes weighted by heart-rate reserve, exponentially.
+
+```
+HRr   = (avg HR − resting) / (max − resting)
+TRIMP = minutes × HRr × 0.64 × e^(1.92 × HRr)
+```
+
+It needs only average heart rate and the two anchors, so every run already
+logged has one. The exponential is the point:
+
+| | | |
+|---|---|---|
+| 13 Aug | 22 min @ 143 | **36** |
+| 8 Oct  | 35 min @ 124 | **34** |
+| 29 Nov | 93 min @ 142 | **146** |
+
+A 22-minute run and a 35-minute one cost the same because the shorter was 19
+beats harder — the thing distance can never tell you.
+
+**Session RPE** (minutes × your 1–10 rating) is stored alongside where you've
+recorded an effort. It comes from you rather than the watch, so where both
+exist they cross-check each other.
+
+Weekly load is flagged when it rises by half again or more. Flagged, never
+judged — a jump can be exactly what you meant. There is deliberately **no
+acute-to-chronic ratio and no fitness/freshness curve**: both need consistent
+daily training and a load model that is genuinely contested.
+
+## The week strip
+
+Seven days under the header. Height is load, colour is the zone that day mostly
+sat in, rest days are a faint rule rather than a gap. Answers "am I being
+consistent" and "how hard was it" in one row.
+
+## Importing
+
+Four options: **Decide for me** (the default), Run, Hike, Body.
+
+Inference reads field shape — ascent with moving time is a hike, cadence or GAP
+is a run, day rows are nights. An explicit choice always wins, but the preview
+says when it disagrees rather than silently obeying. Day rows are recognised
+whichever chip is selected, because they can't be anything else.
 
 ## The noticing card
 
@@ -158,10 +203,11 @@ adds to `41:41` — never `7′ · 23′ · 11′` making 42 minutes.
 ## Tests
 
 ```
-node tests/harness.js       98 assertions — maths and parsing, on real data
+node tests/harness.js       99 assertions — maths and parsing, on real data
 npm install jsdom
 node tests/integration.js   77 assertions — boots the UI and drives it
-node tests/charts.js        47 assertions — charts, the read, deltas
+node tests/charts.js        54 assertions — charts, Form, deltas
+node tests/load.js          39 assertions — load, the week strip, the importer
 node tests/body.js          42 assertions — day records, the weekly paste, the anchor
 ```
 

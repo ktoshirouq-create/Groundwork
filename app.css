@@ -487,3 +487,21 @@ label > span {
 /* the y-axis labels must stay inside the plot at both ends */
 .yax span:first-child { transform: none; }
 .yax span:last-child { transform: translateY(-100%); }
+
+/* ---------- week strip: height is load, colour is zone ---------- */
+
+.wsb { display: flex; gap: 5px; align-items: flex-end; height: 54px; margin-top: 14px; }
+.wsb .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.wsb .v { border-radius: 4px 4px 0 0; background: var(--line); min-height: 4px; }
+.wsb .rest .v { opacity: .45; height: 4px; }
+.wslbl { display: flex; gap: 5px; margin-top: 6px; }
+.wslbl div { flex: 1; text-align: center; font-family: var(--f-data); font-size: 8.5px; color: var(--dim); }
+.wslbl div.today { color: var(--ink); font-weight: 500; }
+
+/* ---------- load ---------- */
+
+.loadbars { display: flex; align-items: flex-end; gap: 4px; height: 76px; margin-top: 12px; }
+.lb { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 4px; }
+.lb .v { border-radius: 3px 3px 0 0; background: var(--z2); }
+.lb.spike .v { background: var(--z3); }
+.lb.none .v { background: var(--line); height: 3px; }
