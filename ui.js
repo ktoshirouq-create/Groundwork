@@ -64,11 +64,14 @@
     const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
     if (!total) return '';
     /* exact m:ss per zone — the parts add up to the whole */
+    /* a seven-second sliver can't hold "0:07" — it clipped to "0:" */
+    const MIN_SHARE = 0.09;
+    const label = v => (v / total >= MIN_SHARE) ? Calc.fmtDuration(v) : '';
     const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z =>
-      '<div class="zseg" style="background:' + ZCOL[z] + '; flex:' + tz[z] + '">' +
-      Calc.fmtDuration(tz[z]) + '</div>');
+      '<div class="zseg" style="background:' + ZCOL[z] + '; flex:' + tz[z] + '" title="' +
+      Calc.fmtDuration(tz[z]) + '">' + label(tz[z]) + '</div>');
     if (tz.unknown > 0) parts.push('<div class="zseg" style="background:var(--stop); flex:' +
-      tz.unknown + '">' + Calc.fmtDuration(tz.unknown) + '</div>');
+      tz.unknown + '" title="' + Calc.fmtDuration(tz.unknown) + '">' + label(tz.unknown) + '</div>');
     return '<div class="zbar">' + parts.join('') + '</div>';
   }
 
@@ -170,10 +173,20 @@
     const breaks = segments.length - 1;
     const breakW = 7;
     const usable = 100 - breakW * breaks;
+    /* A two-run block would otherwise get a twelfth of the width and read as a
+       sliver. Give every segment a floor, then take it back proportionally. */
+    const MINW = segments.length > 1 ? 22 : 0;
+    let raw = counts.map(n => n / totalPts * usable);
+    if (MINW) {
+      const short = raw.map(w => Math.max(0, MINW - w));
+      const owed = short.reduce((a, b) => a + b, 0);
+      const spare = raw.reduce((a, w, i) => a + Math.max(0, w - MINW), 0);
+      raw = raw.map((w, i) => w < MINW ? MINW : w - (spare ? (w - MINW) / spare * owed : 0));
+    }
     let x = 0;
     const paths = [], gutters = [];
     segments.forEach((seg, si) => {
-      const w = counts[si] / totalPts * usable;
+      const w = raw[si];
       const step = seg.length > 1 ? w / (seg.length - 1) : 0;
       const pts = seg.map((p, i) => (x + i * step).toFixed(2) + ',' + yOf(p.value).toFixed(2));
       paths.push({ points: pts.join(' '), last: si === segments.length - 1,
@@ -193,12 +206,12 @@
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
+    /* the gutter is marked, never filled — an opaque block here cut the band in
+       two and made one chart look like two panels */
     gutters.forEach(g => {
-      svg += '<rect x="' + g[0].toFixed(2) + '" y="0" width="' + (g[1] - g[0]).toFixed(2) +
-        '" height="100" fill="#151D20"/>' +
-        '<line x1="' + ((g[0] + g[1]) / 2).toFixed(2) + '" y1="0" x2="' +
-        ((g[0] + g[1]) / 2).toFixed(2) + '" y2="100" stroke="#55686D" stroke-width=".4" ' +
-        'stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>';
+      const mid = ((g[0] + g[1]) / 2).toFixed(2);
+      svg += '<line x1="' + mid + '" y1="0" x2="' + mid + '" y2="100" stroke="#55686D" ' +
+        'stroke-width=".5" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>';
     });
     paths.forEach(p => {
       const col = p.last ? 'var(--z2)' : 'var(--mute)';
@@ -306,8 +319,11 @@
     /* Everything that can't say anything yet gets one line between them all,
        rather than a track apiece pretending a single reading is a range. */
     if (waiting.length) {
+      const unitOf = { '%': '%', 'bpm': ' bpm', 'km': ' km', '/km': '/km',
+                       'days / week': ' a week', 'm/h': ' m/h', 'm': ' m' };
       const named = waiting.map(r => {
-        const v = r.now != null ? fmtRead(r.now, r.kind) + (r.unit ? ' ' + r.unit : '') : null;
+        const u = unitOf[r.unit] != null ? unitOf[r.unit] : (r.unit ? ' ' + r.unit : '');
+        const v = r.now != null ? fmtRead(r.now, r.kind) + u : null;
         return esc(r.label.toLowerCase()) + (v ? ' <b>' + v + '</b>' : '');
       });
       const last = named.pop();
@@ -344,8 +360,13 @@
 
   function zoneShareHTML() {
     const cfg = Store.config();
-    const weeks = Calc.zoneShareSeries(real(), cfg, 12, scope === 'week' ? key() : null);
-    if (!weeks.some(w => w.total > 0)) return '';
+    const all = Calc.zoneShareSeries(real(), cfg, 12, scope === 'week' ? key() : null);
+    const withData = all.filter(w => w.total > 0);
+    /* one bar among eleven empty slots is a chart of nothing */
+    if (withData.length < 3) return '';
+    /* show from the first week that has data, not a fixed twelve */
+    const firstIdx = all.findIndex(w => w.total > 0);
+    const weeks = all.slice(Math.max(0, firstIdx - 1));
 
     let h = '<div class="sec"><span>Zone share</span><span>12 weeks</span></div>';
     h += '<div class="zchart">' + weeks.map(w => {
@@ -476,9 +497,16 @@
     const tz = Calc.timeInZone(laps, bounds);
     const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
     if (zTotal) {
-      h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(zTotal) + '</span></div>';
+      /* Lap durations and elapsed time can differ by a few seconds. Show the
+         activity total, and note the shortfall rather than printing two
+         different figures for the same week. */
+      const covered = zTotal, whole = s.elapsed_s;
+      h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
-      h += '<div class="est">' + Math.round(tz[2] / zTotal * 100) + '% in Z2.</div>';
+      const missing = whole - covered;
+      h += '<div class="est">' + Math.round(tz[2] / covered * 100) + '% in Z2' +
+        (missing > 30 ? ', from ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
+        '.</div>';
     }
 
     const prevKey = Calc.previousWithData(real(), scope, key());
