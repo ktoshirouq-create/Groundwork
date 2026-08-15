@@ -439,7 +439,11 @@
                  'July','August','September','October','November','December'];
       return M[+key.slice(5) - 1] + ' ' + key.slice(0, 4);
     }
-    return 'Week ' + isoWeek(key).split('-W')[1];
+    /* a week label without its year is a trap: "Week 50" read as recent when it
+       was December of last year */
+    const parts = isoWeek(key).split('-W');
+    const sameYear = parts[0] === today.slice(0, 4);
+    return 'Week ' + parts[1] + (sameYear ? '' : ' ' + parts[0]);
   }
 
   /** Sub-line under the title: the span, plus whether it is still running. */
@@ -741,9 +745,13 @@
     return { now: median(values.slice(-w)), prev: median(values.slice(-w * 2, -w)), need: 0 };
   }
 
+  /* A single observation has no range. Returning min == max produced tracks
+     reading "+0 ... +0 lowest", which look like data and are not. */
   function rangeOf(values) {
-    if (!values.length) return null;
-    return { min: Math.min.apply(null, values), max: Math.max.apply(null, values) };
+    if (!values || values.length < 2) return null;
+    const min = Math.min.apply(null, values), max = Math.max.apply(null, values);
+    if (min === max) return null;
+    return { min: min, max: max, n: values.length };
   }
 
   /* Values from the last 12 months, used for every track's endpoints. */
@@ -756,6 +764,7 @@
   }
 
   function readRows(acts, cfg, type, asOf) {
+    const count = arr => (arr || []).length;
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
     const year = lastYear(acts.filter(a => a.type === type || a.type === 'test'), asOf);
     const mine = year.filter(a => a.type === type).sort((a, b) => a.date.localeCompare(b.date));
@@ -766,14 +775,14 @@
     if (type === 'run') {
       const paces = mine.filter(a => a.avg_hr != null).map(a => aerobicPace(a, c)).filter(v => v != null);
       const w = windowStats(paces);
-      push({ key: 'pace', label: 'Aerobic pace', unit: '/km', kind: 'pace',
+      push({ n: count(paces), key: 'pace', label: 'Aerobic pace', unit: '/km', kind: 'pace',
              now: w.now, prev: w.prev, need: w.need, betterWhen: 'down',
              range: rangeOf(paces), band: paces.length >= 3 ? rangeOf(paces.slice(-3)) : null,
              bestLabel: 'best', worstLabel: '' });
 
       const drifts = mine.map(a => drift(a.laps)).filter(v => v != null);
       const dw = windowStats(drifts);
-      push({ key: 'drift', label: 'Drift', unit: 'bpm', kind: 'bpm',
+      push({ n: count(drifts), key: 'drift', label: 'Drift', unit: 'bpm', kind: 'bpm',
              now: dw.now, prev: dw.prev, need: dw.need, betterWhen: 'down',
              range: rangeOf(drifts), band: drifts.length >= 3 ? rangeOf(drifts.slice(-3)) : null,
              bestLabel: 'lowest', missingNote: 'needs runs of 4 km or more with lap HR' });
@@ -781,22 +790,29 @@
       const zs = zoneShareSeries(mine, c, 12, asOf ? weekStart(asOf) : null)
         .filter(x => x.total > 0).map(x => x.zones[2] / x.total * 100);
       const zw = windowStats(zs);
-      push({ key: 'z2', label: 'Time in Z2', unit: '%', kind: 'pct',
+      push({ n: count(zs), key: 'z2', label: 'Time in Z2', unit: '%', kind: 'pct',
              now: zw.now, prev: zw.prev, need: zw.need, betterWhen: 'up',
              range: rangeOf(zs), band: zs.length >= 3 ? rangeOf(zs.slice(-3)) : null,
              bestLabel: 'most' });
 
+      /* Only weeks inside the current training block. Averaging across the
+         eight months you weren't running is how you get "0 days/week" in a
+         week you ran twice. */
+      const blocks = splitOnGaps(mine, c);
+      const blockStart = blocks.length ? weekStart(blocks[blocks.length - 1][0].date) : null;
       const days = weeklySeries(mine, 12, asOf ? weekStart(asOf) : null, 'days')
+        .filter(x => blockStart == null || x.key >= blockStart)
         .map(x => x.value);
       const cw = windowStats(days);
-      push({ key: 'days', label: 'Consistency', unit: 'days / week', kind: 'int',
+      push({ n: count(days), key: 'days', label: 'Consistency', unit: 'days / week', kind: 'int',
              now: cw.now, prev: cw.prev, need: cw.need, betterWhen: 'up',
              range: rangeOf(days), band: null, bestLabel: 'most' });
 
       const vols = weeklySeries(mine, 12, asOf ? weekStart(asOf) : null, 'distance')
+        .filter(x => blockStart == null || x.key >= blockStart)
         .map(x => x.value).filter(v => v > 0);
       const vw = windowStats(vols);
-      push({ key: 'volume', label: 'Weekly volume', unit: 'km', kind: 'km',
+      push({ n: count(vols), key: 'volume', label: 'Weekly volume', unit: 'km', kind: 'km',
              now: vw.now, prev: vw.prev, need: vw.need, betterWhen: null,
              range: rangeOf(vols), band: vols.length >= 3 ? rangeOf(vols.slice(-3)) : null,
              worstLabel: 'least', bestLabel: 'most',
@@ -804,14 +820,14 @@
     } else {
       const rates = mine.map(a => { const r = ascentRate(a); return r && r.value; }).filter(Boolean);
       const rw = windowStats(rates);
-      push({ key: 'rate', label: 'Ascent rate', unit: 'm/h', kind: 'int',
+      push({ n: count(rates), key: 'rate', label: 'Ascent rate', unit: 'm/h', kind: 'int',
              now: rw.now, prev: rw.prev, need: rw.need, betterWhen: 'up',
              range: rangeOf(rates), band: rates.length >= 3 ? rangeOf(rates.slice(-3)) : null,
              bestLabel: 'fastest' });
 
       const tfs = mine.map(a => terrainFactor(a, c)).filter(v => v != null);
       const tw = windowStats(tfs);
-      push({ key: 'tf', label: 'Terrain factor', unit: '', kind: 'factor',
+      push({ n: count(tfs), key: 'tf', label: 'Terrain factor', unit: '', kind: 'factor',
              now: tw.now, prev: tw.prev, need: tw.need, betterWhen: 'down',
              range: rangeOf(tfs), band: tfs.length >= 3 ? rangeOf(tfs.slice(-3)) : null,
              bestLabel: 'best' });
@@ -821,7 +837,7 @@
         const k = a.date.slice(0, 7); months[k] = (months[k] || 0) + a.ascent_m; });
       const ms = Object.keys(months).sort().map(k => months[k]);
       const mw = windowStats(ms, 2);
-      push({ key: 'ascent', label: 'Monthly ascent', unit: 'm', kind: 'int',
+      push({ n: count(ms), key: 'ascent', label: 'Monthly ascent', unit: 'm', kind: 'int',
              now: mw.now, prev: mw.prev, need: mw.need, betterWhen: null,
              range: rangeOf(ms), band: null, bestLabel: 'most' });
     }
@@ -829,7 +845,7 @@
     /* resting HR applies to both worlds */
     const rest = restingSeries(year).map(p => p.value);
     const restW = windowStats(rest);
-    push({ key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
+    push({ n: count(rest), key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
            now: restW.now, prev: restW.prev, need: restW.need, betterWhen: 'down',
            range: rangeOf(rest), band: rest.length >= 3 ? rangeOf(rest.slice(-3)) : null,
            bestLabel: 'lowest', missingNote: 'add Resting HR to the paste' });

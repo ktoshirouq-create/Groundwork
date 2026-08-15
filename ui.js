@@ -149,44 +149,42 @@
   /* Line chart from one or more segments of {value} points.
      invert: true plots smaller values higher (used for pace, where faster is
      better) so a rising line always means improvement. */
+  /* Line chart over one or more segments. A training gap is drawn as a gutter
+     inside a single plot — never a second panel with its own axis. */
   function lineChart(segments, opt) {
     opt = opt || {};
     const all = [].concat.apply([], segments).map(p => p.value).filter(v => v != null);
     if (all.length < 2) return null;
     let lo = opt.min != null ? opt.min : Math.min.apply(null, all);
     let hi = opt.max != null ? opt.max : Math.max.apply(null, all);
-    if (hi === lo) { hi = lo + 1; }
+    if (hi === lo) hi = lo + 1;
     const pad = (hi - lo) * 0.12;
     lo -= pad; hi += pad;
     const yOf = v => {
       const t = (v - lo) / (hi - lo);
-      return opt.invert ? (t * 100) : (100 - t * 100);
+      return opt.invert ? t * 100 : 100 - t * 100;
     };
 
-    /* segments get width in proportion to their point count, with a fixed
-       visual break between them so a training gap reads as a gap */
     const counts = segments.map(s => s.length);
     const totalPts = counts.reduce((a, b) => a + b, 0);
     const breaks = segments.length - 1;
-    const breakW = breaks ? 9 : 0;
+    const breakW = 7;
     const usable = 100 - breakW * breaks;
     let x = 0;
-    const paths = [];
-    const marks = [];
+    const paths = [], gutters = [];
     segments.forEach((seg, si) => {
       const w = counts[si] / totalPts * usable;
       const step = seg.length > 1 ? w / (seg.length - 1) : 0;
       const pts = seg.map((p, i) => (x + i * step).toFixed(2) + ',' + yOf(p.value).toFixed(2));
-      const last = si === segments.length - 1;
-      paths.push({ points: pts.join(' '), last: last, single: seg.length === 1,
+      paths.push({ points: pts.join(' '), last: si === segments.length - 1,
+                   single: seg.length === 1,
                    cx: x + (seg.length - 1) * step, cy: yOf(seg[seg.length - 1].value) });
       x += w;
-      if (si < segments.length - 1) { marks.push([x, x + breakW]); x += breakW; }
+      if (si < segments.length - 1) { gutters.push([x, x + breakW]); x += breakW; }
     });
 
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
-
     if (opt.band) {
       const y1 = yOf(opt.band[0]), y2 = yOf(opt.band[1]);
       svg += '<rect x="0" y="' + Math.min(y1, y2).toFixed(2) + '" width="100" height="' +
@@ -195,30 +193,31 @@
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
-    marks.forEach(m => {
-      svg += '<rect x="' + m[0].toFixed(2) + '" y="0" width="' + (m[1] - m[0]).toFixed(2) +
+    gutters.forEach(g => {
+      svg += '<rect x="' + g[0].toFixed(2) + '" y="0" width="' + (g[1] - g[0]).toFixed(2) +
         '" height="100" fill="#151D20"/>' +
-        '<g stroke="#55686D" stroke-width=".4" stroke-dasharray="2 2" vector-effect="non-scaling-stroke">' +
-        '<line x1="' + m[0].toFixed(2) + '" y1="0" x2="' + m[0].toFixed(2) + '" y2="100"/>' +
-        '<line x1="' + m[1].toFixed(2) + '" y1="0" x2="' + m[1].toFixed(2) + '" y2="100"/></g>';
+        '<line x1="' + ((g[0] + g[1]) / 2).toFixed(2) + '" y1="0" x2="' +
+        ((g[0] + g[1]) / 2).toFixed(2) + '" y2="100" stroke="#55686D" stroke-width=".4" ' +
+        'stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>';
     });
     paths.forEach(p => {
       const col = p.last ? 'var(--z2)' : 'var(--mute)';
-      const wgt = p.last ? 2.2 : 1.6;
-      if (!p.single) svg += '<polyline fill="none" stroke="' + col + '" stroke-width="' + wgt +
-        '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      if (!p.single) svg += '<polyline fill="none" stroke="' + col + '" stroke-width="' +
+        (p.last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
       if (p.last) svg += '<circle cx="' + p.cx.toFixed(2) + '" cy="' + p.cy.toFixed(2) +
         '" r="2.4" fill="var(--z2)"/>';
     });
     svg += '</svg>';
 
+    /* axis labels sit outside the plot, in their own column */
     const fmt = opt.format || (v => Math.round(v));
     const axis = [0.02, 0.5, 0.98].map(t => {
       const v = opt.invert ? lo + t * (hi - lo) : hi - t * (hi - lo);
       return '<span style="top:' + (t * 100) + '%">' + fmt(v) + '</span>';
     }).join('');
 
-    return '<div class="chart"><div class="cwrap">' + svg +
+    return '<div class="chart"><div class="cwrap">' +
+      '<div class="cplot">' + svg + '</div>' +
       '<div class="yax" style="height:' + (opt.height || 150) + 'px">' + axis + '</div></div>' +
       (opt.xax ? '<div class="xax">' + opt.xax.map(s => '<span>' + esc(s) + '</span>').join('') + '</div>' : '') +
       (opt.legend ? '<div class="legend">' + opt.legend + '</div>' : '') + '</div>';
@@ -272,48 +271,50 @@
     const rows = Calc.readRows(Store.all(), cfg, type, today());
     if (!rows.length) return '';
 
-    let h = '<div class="sec"><span>The read</span><span>last 3 vs 3 before</span></div>';
+    const live = rows.filter(r => r.range && r.now != null);
+    const waiting = rows.filter(r => !(r.range && r.now != null));
 
-    rows.forEach(r => {
-      const has = r.now != null;
-      const d = (r.need === 0 && has) ? Calc.delta(r.now, r.prev, r.betterWhen) : null;
+    let h = '<div class="sec"><span>The read</span><span>' +
+      (live.length ? 'last 3 vs 3 before' : '') + '</span></div>';
+
+    live.forEach(r => {
+      const d = r.need === 0 ? Calc.delta(r.now, r.prev, r.betterWhen) : null;
       const pos = trackPos(r.now, r.range, r.betterWhen);
       const bandFrom = r.band ? trackPos(r.betterWhen === 'down' ? r.band.max : r.band.min, r.range, r.betterWhen) : null;
       const bandTo = r.band ? trackPos(r.betterWhen === 'down' ? r.band.min : r.band.max, r.range, r.betterWhen) : null;
+      const worst = r.betterWhen === 'down' ? r.range.max : r.range.min;
+      const best = r.betterWhen === 'down' ? r.range.min : r.range.max;
 
       h += '<div class="rd">';
-      h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val' +
-        (has ? '' : ' pending') + '">' +
-        (has ? fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '')
-             : (r.range ? 'not enough yet' : 'nothing logged')) +
+      h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val">' +
+        fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '') +
         (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's') : null) : '') +
         '</div></div>';
-
       h += '<div class="track' + (r.need ? ' off' : '') + '"><div class="line"></div>' +
         (bandFrom != null && bandTo != null && Math.abs(bandTo - bandFrom) > 0.5
           ? '<div class="band" style="left:' + Math.min(bandFrom, bandTo).toFixed(1) +
             '%; width:' + Math.abs(bandTo - bandFrom).toFixed(1) + '%"></div>' : '') +
-        (pos != null ? '<div class="dot' + (r.need ? ' off' : '') +
-          '" style="left:' + pos.toFixed(1) + '%"></div>' : '') +
-        '</div>';
-
-      if (r.range) {
-        const worst = r.betterWhen === 'down' ? r.range.max : r.range.min;
-        const best = r.betterWhen === 'down' ? r.range.min : r.range.max;
-        h += '<div class="rd-ends"><span>' + fmtRead(worst, r.kind) +
-          (r.worstLabel ? ' ' + esc(r.worstLabel) : '') + '</span><span>' +
-          fmtRead(best, r.kind) + (r.bestLabel ? ' ' + esc(r.bestLabel) : '') + '</span></div>';
-      } else if (r.missingNote) {
-        h += '<div class="rd-ends"><span>\u2014</span><span>' + esc(r.missingNote) + '</span></div>';
-      }
-
-      if (r.need > 0 && r.range) h += '<div class="rd-note">' + r.need +
-        ' more before the trend arrow opens.</div>';
-      else if (r.need > 0 && r.missingNote) h += '<div class="rd-note">' + esc(r.missingNote) + '</div>';
+        '<div class="dot' + (r.need ? ' off' : '') + '" style="left:' + pos.toFixed(1) + '%"></div></div>';
+      h += '<div class="rd-ends"><span>' + fmtRead(worst, r.kind) +
+        (r.worstLabel ? ' ' + esc(r.worstLabel) : '') + '</span><span>' +
+        fmtRead(best, r.kind) + (r.bestLabel ? ' ' + esc(r.bestLabel) : '') + '</span></div>';
+      if (r.need > 0) h += '<div class="rd-note">' + r.need + ' more before the arrow opens.</div>';
       if (r.note) h += '<div class="rd-note">' + esc(r.note) + '</div>';
-
       h += '</div>';
     });
+
+    /* Everything that can't say anything yet gets one line between them all,
+       rather than a track apiece pretending a single reading is a range. */
+    if (waiting.length) {
+      const named = waiting.map(r => {
+        const v = r.now != null ? fmtRead(r.now, r.kind) + (r.unit ? ' ' + r.unit : '') : null;
+        return esc(r.label.toLowerCase()) + (v ? ' <b>' + v + '</b>' : '');
+      });
+      const last = named.pop();
+      h += '<div class="waiting">' +
+        (named.length ? named.join(', ') + ' and ' + last : last) +
+        ' \u2014 ' + (waiting.length > 1 ? 'these open' : 'this opens') + ' as more runs land.</div>';
+    }
     return h;
   }
 
@@ -360,8 +361,7 @@
     h += '<div class="zclbl">' + weeks.map((w, i) =>
       '<div>' + (i % 2 === 0 ? Calc.isoWeek(w.key).split('-W')[1].replace(/^0/, '') : '') + '</div>'
     ).join('') + '</div>';
-    h += '<div class="est">One bar per week, scaled to 100%. Amber shrinking and teal ' +
-      'growing week on week is the base work landing.</div>';
+    h += '<div class="est">One bar per week, scaled to 100%.</div>';
     return h;
   }
 
@@ -464,9 +464,8 @@
         legend: (band ? '<span><i style="background:var(--z2); opacity:.35"></i>previous block</span>' : '') +
                 '<span><i style="background:var(--z2)"></i>now</span>'
       });
-      h += '<div class="est">Faster is higher, so the line rising is always progress. ' +
-        (segs.length > 1 ? 'The break is time off, drawn rather than smoothed over. ' : '') +
-        'Rescales if you change your anchors \u2014 the shape never moves.</div>';
+      h += '<div class="est">Faster is higher' +
+        (segs.length > 1 ? '. The gutter is time off.' : '.') + '</div>';
     } else {
       h += '<div class="est">The trend line opens once you have two runs with heart rate.</div>';
     }
@@ -477,10 +476,9 @@
     const tz = Calc.timeInZone(laps, bounds);
     const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
     if (zTotal) {
-      h += '<div class="sec"><span>Time in zone</span><span>' + Math.round(zTotal / 60) + ' min</span></div>';
+      h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(zTotal) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
-      h += '<div class="est">' + Math.round(tz[2] / zTotal * 100) +
-        '% in Z2. Each kilometre counts whole to the zone of its average.</div>';
+      h += '<div class="est">' + Math.round(tz[2] / zTotal * 100) + '% in Z2.</div>';
     }
 
     const prevKey = Calc.previousWithData(real(), scope, key());
@@ -773,7 +771,7 @@
       Calc.fmtDuration(a.elapsed_s - a.moving_s) + ' stopped</b>. Shown here, kept out of trends.</div>';
 
     if (zTotal) {
-      h += '<div class="sec"><span>Time in zone</span><span>' + Math.round(zTotal / 60) + ' min</span></div>';
+      h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(zTotal) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
     }
 
