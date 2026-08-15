@@ -554,15 +554,26 @@
     return c.value / refHr(cfg) * 60;      // seconds per km
   }
 
-  /* Date-ordered pace series, split wherever training stopped. */
-  function paceSeries(acts, cfg) {
-    const runs = acts
+  const PACE_WINDOW = 20;
+
+  /* Date-ordered pace series, split wherever training stopped.
+     `limit` keeps the most recent n runs: an early block sets a floor the scale
+     never escapes otherwise, and six months from now three ancient points would
+     flatten everything worth seeing. Pass 0 for the whole history. */
+  function paceSeries(acts, cfg, limit) {
+    const n = limit === undefined ? PACE_WINDOW : limit;
+    let runs = acts
       .filter(a => a.type === 'run' && a.avg_hr != null)
       .sort((a, b) => a.date.localeCompare(b.date));
-    return splitOnGaps(runs, cfg).map(seg =>
+    const total = runs.length;
+    if (n && total > n) runs = runs.slice(total - n);
+    const segs = splitOnGaps(runs, cfg).map(seg =>
       seg.map(a => ({ id: a.id, date: a.date, name: a.name, value: aerobicPace(a, cfg) }))
          .filter(p => p.value != null)
     ).filter(seg => seg.length);
+    segs.total = total;
+    segs.shown = runs.length;
+    return segs;
   }
 
   /* Cumulative ascent through a calendar year, as {frac, total} points. */
@@ -987,7 +998,7 @@
     ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
-    refHr, aerobicPace, paceSeries, cumulativeAscent, ascentRateSeries,
+    refHr, aerobicPace, paceSeries, PACE_WINDOW, cumulativeAscent, ascentRateSeries,
     records, delta, driftNeeds,
     restingSeries, restingBaseline, suggestedRestingAnchor,
     DAY_FIELDS, dayRecords, restingByDate, restingConflicts,

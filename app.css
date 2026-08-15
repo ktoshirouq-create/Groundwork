@@ -65,12 +65,19 @@ body {
 /* ---------- add button ---------- */
 
 #fab {
-  position: fixed; right: 18px;
-  bottom: calc(18px + env(safe-area-inset-bottom));
-  width: 54px; height: 54px; border-radius: 50%;
+  position: fixed; right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 50px; height: 50px; border-radius: 50%;
   background: var(--z2); color: #0B1113; border: none;
-  font-size: 28px; font-weight: 600; line-height: 1; cursor: pointer;
+  font-size: 26px; font-weight: 600; line-height: 1; cursor: pointer;
   box-shadow: 0 6px 18px rgba(0,0,0,.45); z-index: 15;
+  transition: transform .22s cubic-bezier(.22,1,.36,1), opacity .22s;
+}
+/* out of the way while you read, back the instant you stop */
+#fab.tucked { transform: translateY(96px); opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  #fab { transition: opacity .12s; }
+  #fab.tucked { transform: none; opacity: .25; }
 }
 #fab[hidden] { display: none; }
 

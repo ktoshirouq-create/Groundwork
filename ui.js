@@ -500,8 +500,10 @@
     const newest = mine.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
     if (newest) h += noticedHTML(newest);
 
-    /* the trend — always all-time, whatever period is selected */
-    const segs = Calc.paceSeries(mine, cfg);
+    /* Year scope shows the whole history; otherwise the recent window, so the
+       scale tracks where you actually are. */
+    const showAll = scope === 'year';
+    const segs = Calc.paceSeries(mine, cfg, showAll ? 0 : Calc.PACE_WINDOW);
     const flat = [].concat.apply([], segs);
     if (flat.length >= 2) {
       const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
@@ -516,11 +518,13 @@
         label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
         xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
         legend: '<span><i class="sw now"></i>this block</span>' +
-                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '') +
-                (mark != null ? '<span><i class="sw mark"></i>previous best ' +
-                  Calc.fmtPace(mark) + '</span>' : '')
+                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '')
       });
-      h += '<div class="est">Faster is higher.</div>';
+      const hidden = segs.total - segs.shown;
+      h += '<div class="est">Faster is higher' +
+        (mark != null ? '. Dashed rule is your previous best, ' + Calc.fmtPace(mark) : '') +
+        (hidden > 0 ? '. Last ' + segs.shown + ' runs \u2014 switch to Year for all ' +
+          segs.total : '') + '.</div>';
     } else {
       h += '<div class="est">The trend line opens once you have two runs with heart rate.</div>';
     }
@@ -1508,6 +1512,24 @@
     b.onclick = () => { setWorld(b.dataset.world); go('home'); };
   });
   el('fab').onclick = () => go('import');
+
+  /* The add button floats over whatever row happens to be beneath it. Tuck it
+     away while you're scrolling down through content, bring it back the moment
+     you stop or scroll up. */
+  (function () {
+    const fab = el('fab');
+    let last = 0, idle = null;
+    window.addEventListener('scroll', function () {
+      const y = window.scrollY || 0;
+      const down = y > last + 4;
+      const up = y < last - 4;
+      if (down) fab.classList.add('tucked');
+      else if (up) fab.classList.remove('tucked');
+      last = y;
+      clearTimeout(idle);
+      idle = setTimeout(() => fab.classList.remove('tucked'), 550);
+    }, { passive: true });
+  })();
 
   Store.init().then(() => { setWorld('run'); go('home'); });
 
