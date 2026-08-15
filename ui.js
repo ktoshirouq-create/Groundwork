@@ -198,6 +198,9 @@
 
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
+
+    /* One band across the whole plot, drawn first. Previously this was painted
+       per segment, which is what made a single chart read as two panels. */
     if (opt.band) {
       const y1 = yOf(opt.band[0]), y2 = yOf(opt.band[1]);
       svg += '<rect x="0" y="' + Math.min(y1, y2).toFixed(2) + '" width="100" height="' +
@@ -206,28 +209,32 @@
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
-    /* the gutter is marked, never filled — an opaque block here cut the band in
-       two and made one chart look like two panels */
+
+    /* the gutter is marked, never filled */
     gutters.forEach(g => {
       const mid = ((g[0] + g[1]) / 2).toFixed(2);
       svg += '<line x1="' + mid + '" y1="0" x2="' + mid + '" y2="100" stroke="#55686D" ' +
         'stroke-width=".5" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>';
     });
-    paths.forEach(p => {
+
+    paths.forEach((p, i) => {
       const col = p.last ? 'var(--z2)' : 'var(--mute)';
-      if (!p.single) svg += '<polyline fill="none" stroke="' + col + '" stroke-width="' +
-        (p.last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
-      if (p.last) svg += '<circle cx="' + p.cx.toFixed(2) + '" cy="' + p.cy.toFixed(2) +
-        '" r="2.4" fill="var(--z2)"/>';
+      if (!p.single) svg += '<polyline class="draw" fill="none" stroke="' + col +
+        '" stroke-width="' + (p.last ? 2.2 : 1.6) +
+        '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      if (p.last) svg += '<circle class="tip" cx="' + p.cx.toFixed(2) + '" cy="' +
+        p.cy.toFixed(2) + '" r="2.4" fill="var(--z2)"/>';
     });
     svg += '</svg>';
 
     /* axis labels sit outside the plot, in their own column */
+    /* label the values you actually ran, not the padded frame */
     const fmt = opt.format || (v => Math.round(v));
-    const axis = [0.02, 0.5, 0.98].map(t => {
-      const v = opt.invert ? lo + t * (hi - lo) : hi - t * (hi - lo);
-      return '<span style="top:' + (t * 100) + '%">' + fmt(v) + '</span>';
-    }).join('');
+    const best = Math.min.apply(null, all), worst = Math.max.apply(null, all);
+    const anchors = opt.invert ? [best, worst] : [worst, best];
+    const axis = anchors.map((v, i) =>
+      '<span style="top:' + yOf(v).toFixed(1) + '%">' + fmt(v) +
+      (opt.anchorLabels ? '<em>' + opt.anchorLabels[i] + '</em>' : '') + '</span>').join('');
 
     return '<div class="chart"><div class="cwrap">' +
       '<div class="cplot">' + svg + '</div>' +
@@ -480,10 +487,12 @@
       h += lineChart(segs, {
         invert: true, band: band, height: 150,
         format: v => Calc.fmtPace(v),
+        anchorLabels: ['best', 'slowest'],
         label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
         xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
-        legend: (band ? '<span><i style="background:var(--z2); opacity:.35"></i>previous block</span>' : '') +
-                '<span><i style="background:var(--z2)"></i>now</span>'
+        legend: (band ? '<span><i class="sw band"></i>where the last block finished</span>' : '') +
+                '<span><i class="sw now"></i>this block</span>' +
+                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '')
       });
       h += '<div class="est">Faster is higher' +
         (segs.length > 1 ? '. The gutter is time off.' : '.') + '</div>';
@@ -509,21 +518,22 @@
         '.</div>';
     }
 
+    /* facts before analysis: you should never scroll past a trend to reach a total */
     const prevKey = Calc.previousWithData(real(), scope, key());
     const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
     const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
     const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
 
-    h += readHTML('run');
-    h += zoneShareHTML();
-
-    h += '<div style="margin-top:15px">';
+    h += '<div class="totals">';
     h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' + (prev ? dd(s.distance_km, prev.distance_km, null) : ''),
       prev ? vs + ' ' + prev.distance_km.toFixed(2) : 'nothing before this');
     h += cmp('Time', Calc.fmtDuration(s.elapsed_s) + ' ' + (prev ? dd(s.elapsed_s, prev.elapsed_s, null) : ''),
       prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
     h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
     h += '</div>';
+
+    h += readHTML('run');
+    h += zoneShareHTML();
     return h;
   }
 
@@ -537,9 +547,16 @@
     if (d != null) meta.push('<b>drift ' + (d >= 0 ? '+' : '') + d + '</b>');
     if (a.temp_c != null) meta.push(a.temp_c + '\u00b0');
 
+    /* magnitude shows in the type: a long run reads as a long run */
+    const all = Store.all().filter(x => x.type === a.type).map(x => x.distance_km);
+    const top = all.length ? Math.max.apply(null, all) : a.distance_km;
+    const scale = top ? Math.min(1, a.distance_km / top) : 0;
+    const size = (12 + scale * 3.4).toFixed(1);
+
     return '<div class="rrow" data-id="' + esc(a.id) + '">' +
       '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) + '</div>' +
-      '<div class="rnm">' + esc(a.name) + ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
+      '<div class="rnm" style="font-size:' + size + 'px">' + esc(a.name) +
+      ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
       '<div class="rfig">' + (c ? c.value : '\u2014') + '</div></div>' +
       stripHTML(a, bounds) +
       '<div class="rmeta">' + meta.join(' \u00b7 ') + '</div></div>';
@@ -689,6 +706,13 @@
     return h;
   }
 
+  function hikeNameSize(a) {
+    const all = Store.all().filter(x => x.type === 'hike' && x.ascent_m != null).map(x => x.ascent_m);
+    const top = all.length ? Math.max.apply(null, all) : null;
+    const scale = (top && a.ascent_m != null) ? Math.min(1, a.ascent_m / top) : 0.5;
+    return (15.5 + scale * 3.5).toFixed(1);
+  }
+
   function hikeCard(a, bounds) {
     const cfg = Store.config();
     const r = Calc.ascentRate(a);
@@ -703,7 +727,7 @@
     return '<div class="hcard" data-id="' + esc(a.id) + '">' +
       '<div class="hdate">' + DAYS[Calc.dayIndex(a.date)] + ' ' + fmtDate(a.date).toUpperCase() +
       ' \u00b7 ' + a.source.toUpperCase() + '</div>' +
-      '<div class="hname">' + esc(a.name) + '</div>' +
+      '<div class="hname" style="font-size:' + hikeNameSize(a) + 'px">' + esc(a.name) + '</div>' +
       '<div class="hstats">' + st.map(x =>
         '<div class="hstat"><div class="l">' + x[0] + '</div><div class="v">' + x[1] +
         (x[2] ? '<s>' + x[2] + '</s>' : '') + '</div></div>').join('') + '</div>' +

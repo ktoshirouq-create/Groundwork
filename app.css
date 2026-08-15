@@ -110,17 +110,35 @@ body {
 .rlbl div { flex: 1; text-align: center; min-width: 6px; overflow: hidden; }
 .gapmark { font-family: var(--f-data); font-size: 9.5px; color: var(--z3); margin-top: 8px; }
 
-/* ---------- type ---------- */
+/* ---------- type scale ----------
+   Four levels, and each does one job. Section heads must outrank row labels;
+   before this they were identical and the page had no skeleton.
+   Spacing runs on an 8px grid: 32 between sections, 12 between rows. */
 
-.rule { height: 1px; background: var(--line); margin: 15px 0 13px; }
+.rule { height: 1px; background: var(--line); margin: 24px 0 16px; }
+
+/* level 1 — section head */
+.sec {
+  font-family: var(--f-display); font-size: 12.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--ink);
+  margin: 32px 0 12px; display: flex; justify-content: space-between;
+  align-items: baseline; gap: 10px;
+}
+.sec span:last-child {
+  font-family: var(--f-data); font-size: 9.5px; font-weight: 400;
+  letter-spacing: .12em; color: var(--dim); text-transform: uppercase;
+}
+
+/* level 2 — the label above a hero figure */
 .eyebrow {
   font-family: var(--f-data); font-size: 9.5px; letter-spacing: .18em;
   text-transform: uppercase; color: var(--mute);
 }
-.sec {
-  font-family: var(--f-data); font-size: 9.5px; letter-spacing: .18em;
-  text-transform: uppercase; color: var(--mute); margin: 19px 0 6px;
-  display: flex; justify-content: space-between; gap: 10px;
+
+/* level 3 — row label, deliberately quieter than a section head */
+.rd-name, .g-l, .hstat .l {
+  font-family: var(--f-data); letter-spacing: .12em;
+  text-transform: uppercase; color: var(--mute);
 }
 .small { font-size: 11.5px; line-height: 1.55; }
 .muted { color: var(--mute); }
@@ -322,10 +340,10 @@ label > span {
 
 /* ---------- the read ---------- */
 
-.rd { padding: 12px 0 11px; border-top: 1px solid var(--line); }
+.rd { padding: 12px 0; border-top: 1px solid var(--line); }
 .rd:last-of-type { border-bottom: 1px solid var(--line); }
 .rd-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.rd-name { font-family: var(--f-data); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--mute); }
+.rd-name { font-size: 9.5px; }
 .rd-val {
   font-family: var(--f-display); font-size: 17px; font-weight: 600;
   letter-spacing: -.02em; font-variant-numeric: tabular-nums; text-align: right;
@@ -402,3 +420,39 @@ label > span {
 
 /* AA contrast: --dim was ~3:1 on the background, below the floor for small text */
 :root { --dim: #6E838A; }
+
+
+/* ---------- totals, directly under the hero ---------- */
+
+.totals { margin-top: 20px; }
+
+/* ---------- chart legend and axis anchors ---------- */
+
+.legend .sw {
+  display: inline-block; width: 14px; height: 10px; margin-right: 6px;
+  vertical-align: -1px; border-radius: 2px;
+}
+.legend .sw.band { background: var(--z2); opacity: .30; }
+.legend .sw.now  { background: var(--z2); height: 2px; vertical-align: 4px; }
+.legend .sw.prev { background: var(--mute); height: 2px; vertical-align: 4px; }
+.yax span em {
+  display: block; font-style: normal; font-size: 8px;
+  color: var(--dim); letter-spacing: .08em;
+}
+
+/* ---------- motion: once, on load, and never in the way ---------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .cplot polyline.draw {
+    stroke-dasharray: 400; stroke-dashoffset: 400;
+    animation: gw-draw 1.1s cubic-bezier(.22, 1, .36, 1) forwards;
+  }
+  .cplot circle.tip { animation: gw-pop .4s .85s cubic-bezier(.16, 1, .3, 1) both; }
+  .track .dot { animation: gw-slide .6s cubic-bezier(.22, 1, .36, 1) both; }
+  .hnum { animation: gw-fade .45s cubic-bezier(.22, 1, .36, 1) both; }
+}
+@keyframes gw-draw  { to { stroke-dashoffset: 0; } }
+@keyframes gw-pop   { from { transform: scale(0); transform-origin: center; opacity: 0; }
+                      to { transform: scale(1); opacity: 1; } }
+@keyframes gw-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes gw-fade  { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
