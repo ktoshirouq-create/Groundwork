@@ -63,10 +63,12 @@
   function zoneBarHTML(tz) {
     const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
     if (!total) return '';
+    /* exact m:ss per zone — the parts add up to the whole */
     const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z =>
       '<div class="zseg" style="background:' + ZCOL[z] + '; flex:' + tz[z] + '">' +
-      Math.round(tz[z] / 60) + '\u2032</div>');
-    if (tz.unknown > 0) parts.push('<div class="zseg" style="background:var(--stop); flex:' + tz.unknown + '"></div>');
+      Calc.fmtDuration(tz[z]) + '</div>');
+    if (tz.unknown > 0) parts.push('<div class="zseg" style="background:var(--stop); flex:' +
+      tz.unknown + '">' + Calc.fmtDuration(tz.unknown) + '</div>');
     return '<div class="zbar">' + parts.join('') + '</div>';
   }
 
@@ -91,19 +93,45 @@
   }
 
   function ribbonHTML() {
-    const cfg = WORLD[world];
+    const wc = WORLD[world];
     if (scope === 'all') return '';
-    const bars = Calc.ribbon(real(), scope, key(), cfg.ribbon, cfg.metric);
+    const cfg = Store.config();
+    const bounds = Calc.zoneBounds(cfg);
+    const bars = Calc.ribbon(real(), scope, key(), wc.ribbon, wc.metric);
     const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
+
     const label = b => {
       if (scope === 'week') return Calc.isoWeek(b.key).split('-W')[1].replace(/^0/, '');
       if (scope === 'month') return MON[+b.key.slice(5) - 1][0];
       return b.key.slice(2);
     };
-    const cells = bars.map((b, i) =>
-      '<div class="rp' + (b.selected ? ' on' : '') + (b.value ? '' : ' none') +
-      '" data-period="' + b.key + '"><div class="b" style="height:' +
-      (b.value ? Math.max(6, Math.round(b.value / max * 100)) : 0) + '%"></div></div>').join('');
+
+    /* each bar's height is volume; its make-up is time in zone, so twelve
+       periods of zone balance read at a glance */
+    const cells = bars.map(b => {
+      if (!b.value) return '<div class="rp none" data-period="' + b.key + '"><div class="seg"></div></div>';
+      const h = Math.max(6, Math.round(b.value / max * 100));
+      const inP = real().filter(a => Calc.inPeriod(a, scope, b.key));
+      const laps = [];
+      inP.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
+      const tz = Calc.timeInZone(laps, bounds);
+      const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
+
+      let inner;
+      if (!zTotal) {
+        inner = '<div class="seg" style="background:var(--dim); height:100%"></div>';
+      } else {
+        const order = [5, 4, 3, 2, 1];
+        inner = order.filter(z => tz[z] > 0).map(z =>
+          '<div class="seg" style="background:' + ZCOL[z] + '; height:' +
+          (tz[z] / zTotal * 100).toFixed(1) + '%"></div>').join('');
+        if (tz.unknown > 0) inner = '<div class="seg" style="background:var(--stop); height:' +
+          (tz.unknown / zTotal * 100).toFixed(1) + '%"></div>' + inner;
+      }
+      return '<div class="rp' + (b.selected ? ' on' : '') + '" data-period="' + b.key +
+        '" style="height:100%"><div class="stackwrap" style="height:' + h + '%">' + inner + '</div></div>';
+    }).join('');
+
     const labels = bars.map((b, i) =>
       '<div>' + (scope === 'week' ? (i % 2 === 0 || b.selected ? label(b) : '') : label(b)) + '</div>'
     ).join('');
@@ -115,7 +143,6 @@
 
     return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' + gapLine;
   }
-
 
   /* ------------------------------------------------------------- charts */
 
@@ -219,6 +246,126 @@
         '</div></div>').join('') + '</div>';
   }
 
+
+  /* ---------------------------------------------------------- the read */
+
+  function fmtRead(v, kind) {
+    if (v == null) return '\u2014';
+    if (kind === 'pace') return Calc.fmtPace(v);
+    if (kind === 'pct') return Math.round(v);
+    if (kind === 'km') return (Math.round(v * 100) / 100).toFixed(2);
+    if (kind === 'factor') return v.toFixed(2);
+    if (kind === 'bpm') return (v >= 0 ? '+' : '') + Math.round(v);
+    return Math.round(v);
+  }
+
+  /* Position on the track. Runs worst -> best, so the dot moving right is
+     always improvement whichever direction the metric prefers. */
+  function trackPos(v, range, betterWhen) {
+    if (v == null || !range || range.max === range.min) return null;
+    const t = (v - range.min) / (range.max - range.min);
+    return betterWhen === 'down' ? (1 - t) * 100 : t * 100;
+  }
+
+  function readHTML(type) {
+    const cfg = Store.config();
+    const rows = Calc.readRows(Store.all(), cfg, type, today());
+    if (!rows.length) return '';
+
+    let h = '<div class="sec"><span>The read</span><span>last 3 vs 3 before</span></div>';
+
+    rows.forEach(r => {
+      const has = r.now != null;
+      const d = (r.need === 0 && has) ? Calc.delta(r.now, r.prev, r.betterWhen) : null;
+      const pos = trackPos(r.now, r.range, r.betterWhen);
+      const bandFrom = r.band ? trackPos(r.betterWhen === 'down' ? r.band.max : r.band.min, r.range, r.betterWhen) : null;
+      const bandTo = r.band ? trackPos(r.betterWhen === 'down' ? r.band.min : r.band.max, r.range, r.betterWhen) : null;
+
+      h += '<div class="rd">';
+      h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val' +
+        (has ? '' : ' pending') + '">' +
+        (has ? fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '')
+             : (r.range ? 'not enough yet' : 'nothing logged')) +
+        (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's') : null) : '') +
+        '</div></div>';
+
+      h += '<div class="track' + (r.need ? ' off' : '') + '"><div class="line"></div>' +
+        (bandFrom != null && bandTo != null && Math.abs(bandTo - bandFrom) > 0.5
+          ? '<div class="band" style="left:' + Math.min(bandFrom, bandTo).toFixed(1) +
+            '%; width:' + Math.abs(bandTo - bandFrom).toFixed(1) + '%"></div>' : '') +
+        (pos != null ? '<div class="dot' + (r.need ? ' off' : '') +
+          '" style="left:' + pos.toFixed(1) + '%"></div>' : '') +
+        '</div>';
+
+      if (r.range) {
+        const worst = r.betterWhen === 'down' ? r.range.max : r.range.min;
+        const best = r.betterWhen === 'down' ? r.range.min : r.range.max;
+        h += '<div class="rd-ends"><span>' + fmtRead(worst, r.kind) +
+          (r.worstLabel ? ' ' + esc(r.worstLabel) : '') + '</span><span>' +
+          fmtRead(best, r.kind) + (r.bestLabel ? ' ' + esc(r.bestLabel) : '') + '</span></div>';
+      } else if (r.missingNote) {
+        h += '<div class="rd-ends"><span>\u2014</span><span>' + esc(r.missingNote) + '</span></div>';
+      }
+
+      if (r.need > 0 && r.range) h += '<div class="rd-note">' + r.need +
+        ' more before the trend arrow opens.</div>';
+      else if (r.need > 0 && r.missingNote) h += '<div class="rd-note">' + esc(r.missingNote) + '</div>';
+      if (r.note) h += '<div class="rd-note">' + esc(r.note) + '</div>';
+
+      h += '</div>';
+    });
+    return h;
+  }
+
+  /* ------------------------------------------------- the noticing card */
+
+  function noticedHTML(act) {
+    const n = Calc.noticed(act, Store.all(), Store.config());
+    if (!n) return '';
+    const gain = Math.round(n.gain);
+    const pct = Math.min(100, n.ratio / (Calc.NOTICE.threshold * 2) * 100);
+    return '<div class="noticed">' +
+      '<div class="l">Something changed</div>' +
+      '<div class="h">' + gain + ' seconds faster at the same heart rate' +
+      '<s>than your last ' + n.n + '</s></div>' +
+      '<div class="w">Those ' + n.n + ' sat at ' + Calc.fmtPace(n.baseline) + ' with a ' +
+      Math.round(n.spread) + '-second spread. This came in at ' + Calc.fmtPace(n.value) +
+      ' \u2014 ' + n.ratio.toFixed(1) + '\u00d7 that spread, so it is not just a good day.' +
+      (n.banded ? ' Compared against runs of similar length.' : '') + '</div>' +
+      '<div class="sigbar"><div class="l2"></div>' +
+      '<div class="fill" style="width:' + pct.toFixed(0) + '%"></div>' +
+      '<div class="thr" style="left:50%"></div>' +
+      '<div class="cap" style="left:50%; transform:translateX(-50%)">threshold</div>' +
+      '<div class="cap" style="right:0">' + n.ratio.toFixed(1) + '\u00d7</div></div></div>';
+  }
+
+  /* --------------------------------------------- zone share, by week */
+
+  function zoneShareHTML() {
+    const cfg = Store.config();
+    const weeks = Calc.zoneShareSeries(real(), cfg, 12, scope === 'week' ? key() : null);
+    if (!weeks.some(w => w.total > 0)) return '';
+
+    let h = '<div class="sec"><span>Zone share</span><span>12 weeks</span></div>';
+    h += '<div class="zchart">' + weeks.map(w => {
+      if (!w.total) return '<div class="zc none"><div class="s"></div></div>';
+      const order = [5, 4, 3, 2, 1];
+      let inner = order.filter(z => w.zones[z] > 0).map(z =>
+        '<div class="s" style="background:' + ZCOL[z] + '; height:' +
+        (w.zones[z] / w.total * 100).toFixed(1) + '%"></div>').join('');
+      if (w.zones.unknown > 0) inner = '<div class="s" style="background:var(--stop); height:' +
+        (w.zones.unknown / w.total * 100).toFixed(1) + '%"></div>' + inner;
+      return '<div class="zc">' + inner + '</div>';
+    }).join('') + '</div>';
+    h += '<div class="zclbl">' + weeks.map((w, i) =>
+      '<div>' + (i % 2 === 0 ? Calc.isoWeek(w.key).split('-W')[1].replace(/^0/, '') : '') + '</div>'
+    ).join('') + '</div>';
+    h += '<div class="est">One bar per week, scaled to 100%. Amber shrinking and teal ' +
+      'growing week on week is the base work landing.</div>';
+    return h;
+  }
+
+
   /* ------------------------------------------------------------------ home */
 
   function renderHome() {
@@ -296,6 +443,9 @@
         '<div class="hsub">Needs a run with average heart rate.</div>';
     }
 
+    const newest = mine.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (newest) h += noticedHTML(newest);
+
     /* the trend — always all-time, whatever period is selected */
     const segs = Calc.paceSeries(mine, cfg);
     const flat = [].concat.apply([], segs);
@@ -338,6 +488,9 @@
     const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
     const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
 
+    h += readHTML('run');
+    h += zoneShareHTML();
+
     h += '<div style="margin-top:15px">';
     h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' + (prev ? dd(s.distance_km, prev.distance_km, null) : ''),
       prev ? vs + ' ' + prev.distance_km.toFixed(2) : 'nothing before this');
@@ -345,7 +498,6 @@
       prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
     h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
     h += '</div>';
-    h += recordsHTML('run');
     return h;
   }
 
@@ -445,7 +597,7 @@
     }
 
     if (inP.length >= 3) h += scatterHTML(inP);
-    h += recordsHTML('hike');
+    h += readHTML('hike');
     return h;
   }
 
@@ -554,6 +706,8 @@
     if (a.conditions) sub.push(String(a.conditions).toUpperCase());
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
 
+    if (a.type === 'run') h += noticedHTML(a);
+
     if (Calc.fullLaps(a.laps).length) {
       h += '<div class="sec"><span>Per kilometre</span></div>';
       if (a.type === 'hike') {
@@ -566,14 +720,24 @@
       }
     }
 
-    if (d != null) h += '<div class="callout' + (d > 8 ? ' warn' : '') + '">' +
-      'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> from the first third to the last' +
-      (d > 8 ? '. A base effort should hold closer to flat.' : '.') + '</div>';
+    if (d != null) {
+      h += '<div class="callout' + (d > 8 ? ' warn' : '') + '">' +
+        'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> across the run' +
+        (d > 8 ? '. A base effort should hold closer to flat.' : '.') +
+        '</div><div class="est">Measured after the opening kilometre \u2014 heart rate ' +
+        'climbing from rest at the start is not drift.</div>';
+    } else if (Calc.hasLapHr(a.laps)) {
+      const need = Calc.driftNeeds(a.laps);
+      h += '<div class="est">Drift needs ' + need + ' more full kilometre' + (need === 1 ? '' : 's') +
+        ' \u2014 the opening one is dropped, and three are needed after that.</div>';
+    }
 
     h += '<div class="rule"></div><div class="grid2">';
     if (a.type === 'run') {
-      h += metric('Aerobic cost', c ? c.value : '\u2014', c ? 'b/km' : '',
-        c ? (c.basis === 'gap' ? 'gradient-adjusted' : 'raw pace') : 'needs heart rate', !c);
+      const ap = Calc.aerobicPace(a, cfg);
+      h += metric('Aerobic pace', ap != null ? Calc.fmtPace(ap) : '\u2014', ap != null ? '/km' : '',
+        ap != null ? 'at ' + Calc.refHr(cfg) + ' bpm' + (c.basis === 'gap' ? ', gradient-adjusted' : '')
+                   : 'needs heart rate', ap == null);
       h += metric('Pace', Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)), '/km',
         a.gap_pace_s != null ? 'GAP ' + Calc.fmtPace(a.gap_pace_s) : '');
     } else {
@@ -595,6 +759,13 @@
         tf == null ? 'needs moving time' :
           'Naismith ' + Calc.fmtDuration(Calc.naismithHours(a.distance_km, a.ascent_m, cfg) * 3600), tf == null);
     }
+    if (a.resting_hr != null) {
+      const bl = Calc.restingBaseline(Store.all(), a.date);
+      h += metric('Resting HR', a.resting_hr, 'bpm',
+        bl != null ? (a.resting_hr === Math.round(bl) ? 'at baseline'
+          : Math.abs(a.resting_hr - bl).toFixed(0) + ' ' + (a.resting_hr > bl ? 'above' : 'below') + ' baseline')
+        : '');
+    }
     if (a.cadence_spm != null) h += metric('Cadence', a.cadence_spm, 'spm', '');
     h += '</div>';
 
@@ -609,10 +780,15 @@
     if (a.feel) h += '<div class="sec"><span>Felt</span></div><div class="small muted">' + esc(a.feel) + '</div>';
     if (a.note) h += '<div class="sec"><span>Note</span></div><div class="small muted">' + esc(a.note) + '</div>';
 
+    h += '<div class="btnrow">' +
+      '<button class="btn" data-edit="' + esc(a.id) + '">Edit</button>' +
+      '<button class="btn" data-replace="' + esc(a.id) + '">Replace from paste</button></div>';
     h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete this ' + a.type + '</button>';
 
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
+    $('#view-detail [data-edit]').onclick = () => go('edit', a.id);
+    $('#view-detail [data-replace]').onclick = () => go('replace', a.id);
     $('#view-detail [data-delete]').onclick = () => {
       if (!confirm('Delete "' + a.name + '"? This cannot be undone.')) return;
       Store.remove(a.id).then(() => go('home'));
@@ -719,7 +895,15 @@
         draft.conditions = cd && cd.value.trim() ? cd.value.trim() : null;
         draft.pack = pk && pk.value ? pk.value : null;
       }
-      if (dup) draft.id = dup.id;
+      if (dup) {
+        draft.id = dup.id;
+        draft.created_at = dup.created_at;
+        /* a paste never overwrites what you typed */
+        Parse.TYPED.forEach(k => {
+          if (k === 'name' || k === 'source') return;   // both are on this form
+          draft[k] = dup[k];
+        });
+      }
       const act = Model.make(draft);
       Store.put(act).then(() => {
         setWorld(act.type);
@@ -810,6 +994,200 @@
     };
   }
 
+
+  /* ------------------------------------------------------------ editing */
+
+  const FIELD_DEFS = {
+    run: [
+      ['date', 'Date', 'date'], ['name', 'Name', 'text'],
+      ['distance_km', 'Distance (km)', 'number'], ['elapsed_s', 'Time (m:ss)', 'duration'],
+      ['gap_pace_s', 'GAP pace (m:ss)', 'duration'], ['avg_hr', 'Avg HR', 'number'],
+      ['resting_hr', 'Resting HR', 'number'], ['cadence_spm', 'Cadence', 'number'],
+      ['ascent_m', 'Ascent (m)', 'number'], ['temp_c', 'Temperature', 'number'],
+      ['rpe', 'RPE', 'number'], ['feel', 'Feel', 'text']
+    ],
+    hike: [
+      ['date', 'Date', 'date'], ['name', 'Name', 'text'],
+      ['distance_km', 'Distance (km)', 'number'], ['elapsed_s', 'Elapsed (h:mm:ss)', 'duration'],
+      ['moving_s', 'Moving (h:mm:ss)', 'duration'], ['ascent_m', 'Ascent (m)', 'number'],
+      ['descent_m', 'Descent (m)', 'number'], ['avg_hr', 'Avg HR', 'number'],
+      ['resting_hr', 'Resting HR', 'number'], ['temp_c', 'Temperature', 'number'],
+      ['rpe', 'RPE', 'number'], ['conditions', 'Conditions', 'text']
+    ]
+  };
+
+  function fieldValue(a, key, kind) {
+    const v = a[key];
+    if (v == null) return '';
+    if (kind === 'duration') return Calc.fmtDuration(v);
+    return String(v);
+  }
+
+  function parseField(raw, kind) {
+    const s = String(raw).trim();
+    if (s === '') return null;
+    if (kind === 'duration') return Parse._duration(s);
+    if (kind === 'number') { const n = parseFloat(s.replace(',', '.')); return isNaN(n) ? null : n; }
+    return s;
+  }
+
+  function renderEdit(id) {
+    const a = Store.byId(id);
+    if (!a) { go('home'); return; }
+    const defs = FIELD_DEFS[a.type] || FIELD_DEFS.run;
+
+    let h = '<div class="back" data-back="1">\u2190 Cancel</div>';
+    h += '<div class="ttl">Edit</div><div class="sub">' + esc(a.name.toUpperCase()) + '</div>';
+
+    h += '<div class="sec"><span>Fields</span><span>blank clears</span></div>';
+    defs.forEach(([k, label, kind]) => {
+      h += '<label><span>' + esc(label) + '</span><input type="text" data-f="' + k +
+        '" data-kind="' + kind + '" value="' + esc(fieldValue(a, k, kind)) + '"></label>';
+    });
+
+    h += '<label><span>Source</span><select data-f="source" data-kind="text">' +
+      '<option value="tracked"' + (a.source === 'tracked' ? ' selected' : '') + '>Tracked on the watch</option>' +
+      '<option value="typed"' + (a.source === 'typed' ? ' selected' : '') + '>Not recorded \u2014 typed</option>' +
+      '</select></label>';
+    if (a.type === 'hike') {
+      h += '<label><span>Pack</span><select data-f="pack" data-kind="text">' +
+        ['', 'day', 'overnight', 'multi'].map(v =>
+          '<option value="' + v + '"' + (a.pack === (v || null) ? ' selected' : '') + '>' +
+          (v ? v[0].toUpperCase() + v.slice(1) : '\u2014') + '</option>').join('') + '</select></label>';
+    }
+    h += '<label><span>Note</span><input type="text" data-f="note" data-kind="text" value="' +
+      esc(a.note || '') + '"></label>';
+
+    if ((a.laps || []).length) {
+      h += '<div class="sec"><span>Laps</span><span>' + a.laps.length + '</span></div>';
+      a.laps.forEach((l, i) => {
+        h += '<div class="lapedit"><div class="ln">' + l.n + '</div>' +
+          '<input type="text" data-lap="' + i + '" data-lk="distance_km" value="' + l.distance_km + '" aria-label="Lap distance">' +
+          '<input type="text" data-lap="' + i + '" data-lk="time_s" value="' + Calc.fmtDuration(l.time_s) + '" aria-label="Lap time">' +
+          '<input type="text" data-lap="' + i + '" data-lk="avg_hr" value="' + (l.avg_hr == null ? '' : l.avg_hr) + '" aria-label="Lap heart rate">' +
+          '</div>';
+      });
+      h += '<div class="est">Distance in km, time as m:ss, heart rate in bpm. Blank clears.</div>';
+    }
+
+    h += '<div id="editflags"></div>';
+    h += '<button class="btn" id="e-save">Save changes</button>';
+    h += '<button class="btn ghost" data-back="1">Cancel</button>';
+
+    el('view-edit').innerHTML = h;
+    document.querySelectorAll('#view-edit [data-back]').forEach(b => b.onclick = () => go('detail', id));
+
+    el('e-save').onclick = () => {
+      const next = Object.assign({}, a);
+      document.querySelectorAll('#view-edit [data-f]').forEach(inp => {
+        next[inp.dataset.f] = parseField(inp.value, inp.dataset.kind);
+      });
+      if ((a.laps || []).length) {
+        next.laps = a.laps.map((l, i) => {
+          const get = k => {
+            const inp = document.querySelector('#view-edit [data-lap="' + i + '"][data-lk="' + k + '"]');
+            return inp ? inp.value : '';
+          };
+          return {
+            n: l.n,
+            distance_km: parseField(get('distance_km'), 'number'),
+            time_s: parseField(get('time_s'), 'duration'),
+            avg_hr: parseField(get('avg_hr'), 'number'),
+            role: l.role
+          };
+        }).filter(l => l.distance_km != null && l.time_s != null);
+      }
+
+      const flags = validateActivity(next);
+      const errors = flags.filter(f => f.level === 'error');
+      el('editflags').innerHTML = flags.map(f =>
+        '<div class="flag ' + (f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '') + '">' +
+        '<i>' + (f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!') + '</i><div>' +
+        esc(f.msg) + '</div></div>').join('');
+      if (errors.length) return;
+
+      next.updated_at = new Date().toISOString();
+      Store.put(next).then(() => go('detail', next.id));
+    };
+  }
+
+  /* Same checks as an import, applied to a hand-edited record. */
+  function validateActivity(a) {
+    const flags = [];
+    const add = (level, msg) => flags.push({ level: level, msg: msg });
+    if (!a.date) add('error', 'A date is required.');
+    else if (a.date > today()) add('error', 'That date is in the future.');
+    if (a.distance_km == null || a.distance_km <= 0) add('error', 'A distance is required.');
+    if (a.elapsed_s == null || a.elapsed_s <= 0) add('error', 'A time is required.');
+    if (a.moving_s != null && a.elapsed_s != null && a.moving_s > a.elapsed_s)
+      add('error', 'Moving time is longer than elapsed time.');
+    if (a.avg_hr != null && (a.avg_hr < 30 || a.avg_hr > 220)) add('error', 'Avg HR is out of range.');
+    if (a.resting_hr != null && (a.resting_hr < 25 || a.resting_hr > 120)) add('error', 'Resting HR is out of range.');
+    (a.laps || []).forEach(l => {
+      if (l.avg_hr != null && (l.avg_hr < 30 || l.avg_hr > 220))
+        add('error', 'Lap ' + l.n + ' heart rate is out of range.');
+    });
+    if ((a.laps || []).length) {
+      const ld = a.laps.reduce((t, l) => t + l.distance_km, 0);
+      const lt = a.laps.reduce((t, l) => t + l.time_s, 0);
+      if (a.distance_km && Math.abs(ld - a.distance_km) / a.distance_km > 0.02)
+        add('warn', 'Laps total ' + ld.toFixed(2) + ' km against ' + a.distance_km + ' km.');
+      if (a.elapsed_s && Math.abs(lt - a.elapsed_s) > 30)
+        add('warn', 'Laps total ' + Calc.fmtDuration(lt) + ' against ' + Calc.fmtDuration(a.elapsed_s) + '.');
+    }
+    return flags;
+  }
+
+  /* ------------------------------------------------- replace from paste */
+
+  function renderReplace(id) {
+    const a = Store.byId(id);
+    if (!a) { go('home'); return; }
+
+    let h = '<div class="back" data-back="1">\u2190 Cancel</div>';
+    h += '<div class="ttl">Replace from paste</div><div class="sub">' + esc(a.name.toUpperCase()) + '</div>';
+    h += '<div class="small muted" style="margin-top:12px">Paste a full table or just the lap ' +
+      'rows. Anything the paste leaves out keeps its current value; a field written as ' +
+      '\u2014 is cleared. Your name, source and notes are never touched.</div>';
+    h += '<label><span>Paste</span><textarea id="r-paste" placeholder="Paste the table, or only the lap rows."></textarea></label>';
+    h += '<button class="btn" id="r-read">Read it</button>';
+    h += '<div id="r-preview"></div>';
+
+    el('view-replace').innerHTML = h;
+    document.querySelectorAll('#view-replace [data-back]').forEach(b => b.onclick = () => go('detail', id));
+
+    el('r-read').onclick = () => {
+      const text = el('r-paste').value;
+      if (!text.trim()) return;
+      const p = Parse.parse(text, { today: today() });
+      const merged = Parse.mergeInto(a, p);
+      const flags = Parse.validateMerge(a, p);
+      const errors = flags.filter(f => f.level === 'error');
+
+      let ph = '<div class="rule"></div><div class="sec"><span>What changes</span><span>' +
+        merged.changes.length + '</span></div>';
+      if (!merged.changes.length) ph += '<div class="empty-state">Nothing in that paste differs from the record.</div>';
+      merged.changes.forEach(ch => {
+        ph += '<div class="diff"><div class="dk">' + esc(ch.field) + '</div>' +
+          '<div class="dv"><s>' + esc(ch.from == null ? '\u2014' : ch.from) + '</s> \u2192 ' +
+          '<b>' + esc(ch.to == null ? '\u2014' : ch.to) + '</b></div></div>';
+      });
+      flags.forEach(f => {
+        ph += '<div class="flag ' + (f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '') +
+          '"><i>' + (f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!') + '</i><div>' +
+          esc(f.msg) + '</div></div>';
+      });
+      ph += '<button class="btn" id="r-save"' +
+        (errors.length || !merged.changes.length ? ' disabled' : '') + '>Apply these changes</button>';
+      el('r-preview').innerHTML = ph;
+
+      const save = el('r-save');
+      if (save && !save.disabled) save.onclick = () =>
+        Store.put(merged.activity).then(() => go('detail', id));
+    };
+  }
+
+
   /* --------------------------------------------------------------- wiring */
 
   function bind() {
@@ -837,17 +1215,19 @@
       b.setAttribute('aria-pressed', String(b.dataset.world === w)));
   }
 
-  const VIEWS = ['home', 'detail', 'import', 'settings'];
+  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace'];
 
   function go(view, param) {
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
     el('worlds').hidden = (view !== 'home');
-    el('fab').hidden = (view === 'import');
+    el('fab').hidden = (view !== 'home' && view !== 'detail');
     window.scrollTo(0, 0);
     if (view === 'home') renderHome();
     if (view === 'detail') renderDetail(param);
     if (view === 'import') renderImport();
     if (view === 'settings') renderSettings();
+    if (view === 'edit') renderEdit(param);
+    if (view === 'replace') renderReplace(param);
   }
 
   document.querySelectorAll('#worlds button').forEach(b => {

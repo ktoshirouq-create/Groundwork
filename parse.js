@@ -20,6 +20,7 @@
     avggradeadjpace: 'gap_pace_s', gappace: 'gap_pace_s',
     gradeadjustedpace: 'gap_pace_s', avggradeadjustedpace: 'gap_pace_s',
     avghr: 'avg_hr', averageheartrate: 'avg_hr', avgheartrate: 'avg_hr', hr: 'avg_hr',
+    restinghr: 'resting_hr', restingheartrate: 'resting_hr', resting: 'resting_hr',
     maxhr: '_ignore', maxheartrate: '_ignore',
     avgcadence: 'cadence_spm', cadence: 'cadence_spm', avgruncadence: 'cadence_spm',
     totalascent: 'ascent_m', ascent: 'ascent_m', elevationgain: 'ascent_m', elevation: 'ascent_m',
@@ -94,6 +95,7 @@
     const today = opts.today || new Date().toISOString().slice(0, 10);
     const out = {
       fields: {},
+      cleared: [],
       laps: [],
       notes: [],      // flag lines carried through from the transcription
       unmatched: [],  // rows we couldn't place
@@ -144,7 +146,9 @@
         const val = c[1];
         if (!key) { out.unmatched.push(line); return; }
         if (key === '_ignore') return;
-        if (val === '' || val === '—' || val === '-' || norm(val) === 'na') return;
+        if (val === '' || val === '—' || val === '-' || norm(val) === 'na') {
+          out.cleared.push(key); return;
+        }
 
         switch (key) {
           case 'date': {
@@ -185,6 +189,7 @@
 
   const RANGES = {
     avg_hr: [30, 220],
+    resting_hr: [25, 120],
     cadence_spm: [100, 220],
     distance_km: [0.1, 100],
     ascent_m: [0, 5000],
@@ -263,6 +268,7 @@
       ele_max_m: f.ele_max_m != null ? f.ele_max_m : null,
       temp_c: f.temp_c != null ? f.temp_c : null,
       avg_hr: f.avg_hr != null ? f.avg_hr : null,
+      resting_hr: f.resting_hr != null ? f.resting_hr : null,
       gap_pace_s: f.gap_pace_s != null ? f.gap_pace_s : null,
       cadence_spm: f.cadence_spm != null ? f.cadence_spm : null,
       rpe: f.rpe != null ? f.rpe : null,
@@ -278,7 +284,100 @@
     return a;
   }
 
-  const api = { parse, validate, inferType, toActivity, _duration: duration, _date: date };
+
+  /* ---------- merge, for replacing an existing activity ----------
+     A field absent from the paste keeps its stored value; a field written as
+     "—" clears it. Typed fields are never touched by a paste — they came from
+     you, not from a screenshot. */
+
+  const TYPED = ['name', 'source', 'conditions', 'pack', 'note'];
+
+  function mergeInto(existing, p, opts) {
+    opts = opts || {};
+    const f = p.fields;
+    const out = Object.assign({}, existing);
+    const changes = [];
+
+    const set = (k, v) => {
+      const before = out[k];
+      if (before === v) return;
+      out[k] = v;
+      changes.push({ field: k, from: before, to: v });
+    };
+
+    Object.keys(f).forEach(k => {
+      if (k === 'avg_pace_s') return;          // derived, never stored
+      if (TYPED.indexOf(k) >= 0) return;
+      set(k, f[k]);
+    });
+
+    /* cleared fields: the parser drops "—" rows, so anything the transcription
+       explicitly voided arrives here */
+    (p.cleared || []).forEach(k => {
+      if (TYPED.indexOf(k) >= 0) return;
+      set(k, null);
+    });
+
+    if (p.laps.length) {
+      const prev = existing.laps || [];
+      const sig = ls => ls.map(l =>
+        [l.n, l.distance_km, l.time_s, l.avg_hr, l.role || 'main'].join(':')).join('|');
+      out.laps = p.laps.map(l => ({
+        n: l.n, distance_km: l.distance_km, time_s: l.time_s,
+        avg_hr: l.avg_hr, role: out.type === 'hike' ? 'main' : l.role
+      }));
+      /* compare content, not just count — a lap-only paste that adds heart rate
+         to laps you already had is exactly the case this exists for */
+      if (sig(prev) !== sig(out.laps)) {
+        const hrBefore = prev.filter(l => l.avg_hr != null).length;
+        const hrAfter = out.laps.filter(l => l.avg_hr != null).length;
+        changes.push({
+          field: 'laps',
+          from: prev.length + ' laps' + (hrBefore ? ', ' + hrBefore + ' with HR' : ', no HR'),
+          to: out.laps.length + ' laps' + (hrAfter ? ', ' + hrAfter + ' with HR' : ', no HR')
+        });
+      }
+    }
+
+    out.updated_at = new Date().toISOString();
+    return { activity: out, changes: changes };
+  }
+
+  /* Validation for a replace: the stored record supplies anything the paste
+     leaves out, so a lap-only paste is legal. */
+  function validateMerge(existing, p, opts) {
+    const merged = mergeInto(existing, p, opts).activity;
+    const flags = [];
+    const add = (level, msg) => flags.push({ level: level, msg: msg });
+
+    if (!p.laps.length && !Object.keys(p.fields).length)
+      add('error', 'Nothing recognised in that paste.');
+
+    if (p.fields.date && p.fields.date !== existing.date)
+      add('warn', 'This paste is dated ' + p.fields.date + ', the stored run is ' + existing.date + '.');
+
+    if (p.laps.length) {
+      const ld = p.laps.reduce((a, l) => a + l.distance_km, 0);
+      const lt = p.laps.reduce((a, l) => a + l.time_s, 0);
+      if (merged.distance_km && Math.abs(ld - merged.distance_km) / merged.distance_km > 0.02)
+        add('warn', 'Laps total ' + ld.toFixed(2) + ' km against ' + merged.distance_km + ' km on the record.');
+      if (merged.elapsed_s && Math.abs(lt - merged.elapsed_s) > 30)
+        add('warn', 'Laps total ' + Math.round(lt) + 's against ' + merged.elapsed_s + 's on the record.');
+    }
+
+    Object.keys(RANGES).forEach(k => {
+      if (merged[k] == null) return;
+      const [lo, hi] = RANGES[k];
+      if (merged[k] < lo || merged[k] > hi) add('error', k + ' would become ' + merged[k] + '.');
+    });
+
+    p.warnings.forEach(w => add('warn', w));
+    p.unmatched.forEach(u => add('info', 'Row not recognised: ' + u.slice(0, 48)));
+    return flags;
+  }
+
+  const api = { parse, validate, inferType, toActivity, mergeInto, validateMerge, TYPED,
+                _duration: duration, _date: date };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Parse = api;
 
