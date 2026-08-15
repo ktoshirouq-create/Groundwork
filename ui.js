@@ -173,9 +173,10 @@
     const breaks = segments.length - 1;
     const breakW = 7;
     const usable = 100 - breakW * breaks;
-    /* A two-run block would otherwise get a twelfth of the width and read as a
-       sliver. Give every segment a floor, then take it back proportionally. */
-    const MINW = segments.length > 1 ? 22 : 0;
+    /* Width is proportional to how many runs a block holds — a two-run block
+       must not occupy the same width as a fourteen-run one. The floor only
+       exists so a single-point segment doesn't vanish. */
+    const MINW = segments.length > 1 ? 12 : 0;
     let raw = counts.map(n => n / totalPts * usable);
     if (MINW) {
       const short = raw.map(w => Math.max(0, MINW - w));
@@ -199,22 +200,27 @@
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
 
-    /* One band across the whole plot, drawn first. Previously this was painted
-       per segment, which is what made a single chart read as two panels. */
-    if (opt.band) {
-      const y1 = yOf(opt.band[0]), y2 = yOf(opt.band[1]);
-      svg += '<rect x="0" y="' + Math.min(y1, y2).toFixed(2) + '" width="100" height="' +
-        Math.abs(y2 - y1).toFixed(2) + '" fill="#35A28F" fill-opacity=".10"/>';
+    /* A filled band has a hard top and bottom edge, and any full-height divider
+       crossing it turns one plot into two boxes. Rendered side by side, every
+       filled variant boxed and every line variant did not — so the previous
+       block's best is a single dashed rule instead. */
+    if (opt.mark != null) {
+      const my = yOf(opt.mark).toFixed(2);
+      svg += '<line x1="0" y1="' + my + '" x2="100" y2="' + my + '" stroke="var(--z2)" ' +
+        'stroke-width=".7" stroke-dasharray="3 3" opacity=".75" vector-effect="non-scaling-stroke"/>';
     }
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
 
-    /* the gutter is marked, never filled */
+    /* Ticks at the edges, never a full-height rule. A line spanning the plot
+       divides it however it's styled. */
     gutters.forEach(g => {
       const mid = ((g[0] + g[1]) / 2).toFixed(2);
-      svg += '<line x1="' + mid + '" y1="0" x2="' + mid + '" y2="100" stroke="#55686D" ' +
-        'stroke-width=".5" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>';
+      svg += '<line x1="' + mid + '" y1="0" x2="' + mid + '" y2="8" stroke="#55686D" ' +
+        'stroke-width=".7" vector-effect="non-scaling-stroke"/>' +
+        '<line x1="' + mid + '" y1="92" x2="' + mid + '" y2="100" stroke="#55686D" ' +
+        'stroke-width=".7" vector-effect="non-scaling-stroke"/>';
     });
 
     paths.forEach((p, i) => {
@@ -479,20 +485,20 @@
     const flat = [].concat.apply([], segs);
     if (flat.length >= 2) {
       const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
-      const band = prevSeg && prevSeg.length >= 3
-        ? [Math.min.apply(null, prevSeg.slice(-6).map(p => p.value)),
-           Math.max.apply(null, prevSeg.slice(-6).map(p => p.value))]
+      const mark = prevSeg && prevSeg.length >= 3
+        ? Math.min.apply(null, prevSeg.map(p => p.value))
         : null;
       const first = flat[0].date, lastD = flat[flat.length - 1].date;
       h += lineChart(segs, {
-        invert: true, band: band, height: 150,
+        invert: true, mark: mark, height: 150,
         format: v => Calc.fmtPace(v),
         anchorLabels: ['best', 'slowest'],
         label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
         xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
-        legend: (band ? '<span><i class="sw band"></i>where the last block finished</span>' : '') +
-                '<span><i class="sw now"></i>this block</span>' +
-                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '')
+        legend: '<span><i class="sw now"></i>this block</span>' +
+                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '') +
+                (mark != null ? '<span><i class="sw mark"></i>best before the break, ' +
+                  Calc.fmtPace(mark) + '</span>' : '')
       });
       h += '<div class="est">Faster is higher' +
         (segs.length > 1 ? '. The gutter is time off.' : '.') + '</div>';

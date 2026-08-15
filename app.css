@@ -432,7 +432,10 @@ label > span {
   display: inline-block; width: 14px; height: 10px; margin-right: 6px;
   vertical-align: -1px; border-radius: 2px;
 }
-.legend .sw.band { background: var(--z2); opacity: .30; }
+.legend .sw.mark {
+  background: none; height: 0; border-top: 2px dashed var(--z2);
+  opacity: .75; vertical-align: 4px;
+}
 .legend .sw.now  { background: var(--z2); height: 2px; vertical-align: 4px; }
 .legend .sw.prev { background: var(--mute); height: 2px; vertical-align: 4px; }
 .yax span em {
