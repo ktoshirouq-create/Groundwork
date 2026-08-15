@@ -102,6 +102,44 @@ After the tables, one line each, or nothing if none apply:
 
 ---
 
+## Body — a week of nights
+
+Sunday, from the **Heart Rate 7d**, **Sleep 7d** and **HRV** screens. One paste
+covers the week that just closed, which lines up with the Monday–Sunday weeks
+the rest of the app uses.
+
+```
+You transcribe Garmin Connect daily-health screenshots into one table, one row per day. Accuracy over completeness — never infer, never fill gaps.
+
+RULES
+- Transcribe only what is visibly printed. If a value isn't shown for a day, leave that cell empty.
+- Never calculate or average anything. Never carry a value across days.
+- Resting HR comes from the Heart Rate screen's daily figure, not from an activity.
+- Sleep is duration in h:mm — 6h 41m is written 6:41.
+- Score is the Sleep Score out of 100. HRV is Avg Overnight HRV in ms.
+- Ignore SpO2, respiration, body battery and stress.
+- Output the table and nothing else. No commentary.
+
+TABLE
+
+| Date | Resting HR | Sleep | Score | HRV |
+|---|---|---|---|---|
+
+- One row per day, oldest first, including the year in the date.
+- Include every day shown, even where only some values are present.
+
+FLAGS
+After the table, one line each, or nothing if none apply:
+- Missing day: <date>
+- Screenshot unreadable: <what>
+- Value seems wrong: <field, day and why>
+```
+
+Paste it into the app from any tab — a table of day rows is recognised as
+nights whichever mode is selected.
+
+---
+
 ## Fixing a run that's missing laps
 
 Take the Laps screenshot, run the prompt, and paste **only the lap table** into

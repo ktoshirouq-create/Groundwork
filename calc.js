@@ -294,7 +294,7 @@
   function weekRollup(acts, weekStartDate, cutDayIndex) {
     const end = cutDayIndex == null ? 6 : cutDayIndex;
     const inWeek = acts.filter(a =>
-      a.type !== 'test' &&
+      ACTIVITY_TYPES.indexOf(a.type) >= 0 &&
       weekStart(a.date) === weekStartDate &&
       dayIndex(a.date) <= end
     );
@@ -312,7 +312,7 @@
   }
 
   function monthRollup(acts, ym) {          // ym = 'YYYY-MM'
-    const inMonth = acts.filter(a => a.type !== 'test' && a.date.slice(0, 7) === ym);
+    const inMonth = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && a.date.slice(0, 7) === ym);
     const ascentKnown = inMonth.filter(a => a.ascent_m != null && a.source === 'tracked');
     const sum = (f) => inMonth.reduce((t, a) => t + (a[f] || 0), 0);
     return {
@@ -346,7 +346,7 @@
 
   /* ---------- model: shape, ids, duplicates, migrations ---------- */
 
-  const SCHEMA = 1;
+  const SCHEMA = 2;
 
   function newId(type, date) {
     const r = Math.random().toString(36).slice(2, 6);
@@ -359,6 +359,7 @@
     ascent_m: null, descent_m: null, ele_min_m: null, ele_max_m: null,
     temp_c: null, avg_hr: null, resting_hr: null, gap_pace_s: null, cadence_spm: null,
     rpe: null, feel: null, conditions: null, pack: null, note: null,
+    sleep_s: null, sleep_score: null, hrv_ms: null,
     laps: [], created_at: null, updated_at: null
   };
 
@@ -368,6 +369,7 @@
     if (!a.id) a.id = newId(a.type, a.date || 'undated');
     a.created_at = a.created_at || now;
     a.updated_at = now;
+    if (a.type === 'day') a.name = a.date || '';
     if (!a.name) {
       const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       const d = a.date ? (+a.date.slice(8)) + ' ' + M[+a.date.slice(5, 7) - 1] : 'undated';
@@ -392,7 +394,14 @@
     if (!b.schema) b.schema = SCHEMA;
     b.activities = b.activities || [];
     b.config = b.config || {};
-    /* future migrations branch on b.schema here, then set it forward */
+    /* names written as "Run, 2026-08-11" predate the readable format */
+    if (b.schema < 2) {
+      const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      b.activities.forEach(a => {
+        const m = /^(Run|Hike), (\d{4})-(\d{2})-(\d{2})$/.exec(a.name || '');
+        if (m) a.name = m[1] + ' \u00b7 ' + (+m[4]) + ' ' + M[+m[3] - 1];
+      });
+    }
     b.schema = SCHEMA;
     return b;
   }
@@ -463,8 +472,10 @@
     return span + (cur ? ' \u00b7 THIS WEEK' : '');
   }
 
+  const ACTIVITY_TYPES = ['run', 'hike'];
+
   function summarize(acts) {
-    const real = acts.filter(a => a.type !== 'test');
+    const real = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
     const ascentKnown = real.filter(a => a.ascent_m != null && a.source === 'tracked');
     const days = {};
     real.forEach(a => { days[a.date] = 1; });
@@ -486,7 +497,7 @@
     let key = selectedKey;
     for (let i = 0; i < n; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
     return out.map(k => {
-      const inK = acts.filter(a => a.type !== 'test' && inPeriod(a, scope, k));
+      const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
       const s = summarize(inK);
       const v = metric === 'ascent' ? (s.ascent_m || 0) : s.distance_km;
       return { key: k, value: v, count: s.count, selected: k === selectedKey };
@@ -497,7 +508,7 @@
   function previousWithData(acts, scope, key) {
     let k = shiftKey(key, scope, -1);
     for (let i = 0; i < 60; i++) {
-      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return k;
+      if (acts.some(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k))) return k;
       k = shiftKey(k, scope, -1);
     }
     return null;
@@ -507,7 +518,7 @@
   function nextWithData(acts, scope, key) {
     let k = shiftKey(key, scope, 1);
     for (let i = 0; i < 60; i++) {
-      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return k;
+      if (acts.some(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k))) return k;
       k = shiftKey(k, scope, 1);
     }
     return null;
@@ -517,7 +528,7 @@
   function emptyRunBefore(acts, scope, key) {
     let k = shiftKey(key, scope, -1), n = 0;
     for (let i = 0; i < 400; i++) {
-      if (acts.some(a => a.type !== 'test' && inPeriod(a, scope, k))) return n;
+      if (acts.some(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k))) return n;
       n++; k = shiftKey(k, scope, -1);
     }
     return n;
@@ -636,13 +647,6 @@
 
   /* ---------- resting heart rate ---------- */
 
-  function restingSeries(acts) {
-    return acts
-      .filter(a => a.resting_hr != null && a.type !== 'test')
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(a => ({ date: a.date, value: a.resting_hr }));
-  }
-
   /* 90-day rolling median. This is what the Karvonen anchor follows. */
   function restingBaseline(acts, asOf) {
     const end = asOf || new Date().toISOString().slice(0, 10);
@@ -719,7 +723,7 @@
   function zoneShareSeries(acts, cfg, n, endKey) {
     const bounds = zoneBounds(cfg);
     return weekKeys(acts, n, endKey).map(k => {
-      const inWeek = acts.filter(a => a.type !== 'test' && weekStart(a.date) === k);
+      const inWeek = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && weekStart(a.date) === k);
       const laps = [];
       inWeek.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
       const tz = timeInZone(laps, bounds);
@@ -731,7 +735,7 @@
   function weeklySeries(acts, n, endKey, field) {
     const bounds = null;
     return weekKeys(acts, n, endKey).map(k => {
-      const inWeek = acts.filter(a => a.type !== 'test' && weekStart(a.date) === k);
+      const inWeek = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && weekStart(a.date) === k);
       const s = summarize(inWeek);
       return { key: k, value: field === 'days' ? s.days : s.distance_km, count: s.count };
     });
@@ -766,11 +770,45 @@
   function readRows(acts, cfg, type, asOf) {
     const count = arr => (arr || []).length;
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    const year = lastYear(acts.filter(a => a.type === type || a.type === 'test'), asOf);
+    const year = type === 'body'
+      ? lastYear(acts, asOf)
+      : lastYear(acts.filter(a => a.type === type || a.type === 'test'), asOf);
     const mine = year.filter(a => a.type === type).sort((a, b) => a.date.localeCompare(b.date));
     const rows = [];
 
     const push = (o) => rows.push(o);
+
+    if (type === 'body') {
+      const rs = restingSeries(year).map(p => p.value);
+      const rw = windowStats(rs);
+      push({ n: rs.length, key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
+             now: rw.now, prev: rw.prev, need: rw.need, betterWhen: 'down',
+             range: rangeOf(rs), band: rs.length >= 3 ? rangeOf(rs.slice(-3)) : null,
+             bestLabel: 'lowest' });
+
+      const sl = sleepSeries(year).map(p => p.value);
+      const sw = windowStats(sl);
+      push({ n: sl.length, key: 'sleep', label: 'Sleep', unit: 'median', kind: 'sleep',
+             now: sw.now, prev: sw.prev, need: sw.need, betterWhen: 'up',
+             range: rangeOf(sl), band: sl.length >= 3 ? rangeOf(sl.slice(-3)) : null,
+             worstLabel: 'shortest', bestLabel: 'longest' });
+
+      const hv = hrvSeries(year).map(p => p.value);
+      const hw = windowStats(hv);
+      push({ n: hv.length, key: 'hrv', label: 'Overnight HRV', unit: 'ms', kind: 'int',
+             now: hw.now, prev: hw.prev, need: hw.need, betterWhen: 'up',
+             range: rangeOf(hv), band: hv.length >= 3 ? rangeOf(hv.slice(-3)) : null,
+             bestLabel: 'highest' });
+
+      const sc = dayRecords(year).filter(d => d.sleep_score != null)
+        .sort((a, b) => a.date.localeCompare(b.date)).map(d => d.sleep_score);
+      const cw2 = windowStats(sc);
+      push({ n: sc.length, key: 'score', label: 'Sleep score', unit: '', kind: 'int',
+             now: cw2.now, prev: cw2.prev, need: cw2.need, betterWhen: 'up',
+             range: rangeOf(sc), band: sc.length >= 3 ? rangeOf(sc.slice(-3)) : null,
+             bestLabel: 'best' });
+      return rows;
+    }
 
     if (type === 'run') {
       const paces = mine.filter(a => a.avg_hr != null).map(a => aerobicPace(a, c)).filter(v => v != null);
@@ -842,7 +880,7 @@
              range: rangeOf(ms), band: null, bestLabel: 'most' });
     }
 
-    /* resting HR applies to both worlds */
+    /* resting HR applies to both activity worlds */
     const rest = restingSeries(year).map(p => p.value);
     const restW = windowStats(rest);
     push({ n: count(rest), key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
@@ -851,6 +889,89 @@
            bestLabel: 'lowest', missingNote: 'add Resting HR to the paste' });
 
     return rows;
+  }
+
+  /* ---------- Body: one record per day ----------
+     Sundays bring a week of nights from the 7d screens; a run may also carry a
+     resting HR read the same morning. Both are kept, and a day record always
+     wins for its own date so a single morning can never hold two figures. */
+
+  const DAY_FIELDS = ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'];
+
+  function dayRecords(acts) {
+    return acts.filter(a => a.type === 'day');
+  }
+
+  /* One value per date. Day records first, run-day readings only where no day
+     record covers that date. */
+  function restingByDate(acts) {
+    const out = {};
+    acts.filter(a => a.type !== 'day' && a.type !== 'test' && a.resting_hr != null)
+        .forEach(a => { out[a.date] = { value: a.resting_hr, from: 'activity' }; });
+    dayRecords(acts).filter(d => d.resting_hr != null)
+        .forEach(d => { out[d.date] = { value: d.resting_hr, from: 'day' }; });
+    return out;
+  }
+
+  function restingSeries(acts) {
+    const by = restingByDate(acts);
+    return Object.keys(by).sort().map(d => ({ date: d, value: by[d].value, from: by[d].from }));
+  }
+
+  /* Dates where a day record and an activity disagree by 3 bpm or more. */
+  function restingConflicts(acts, threshold) {
+    const t = threshold || 3;
+    const byAct = {};
+    acts.filter(a => a.type !== 'day' && a.type !== 'test' && a.resting_hr != null)
+        .forEach(a => { byAct[a.date] = a.resting_hr; });
+    return dayRecords(acts).filter(d => d.resting_hr != null && byAct[d.date] != null &&
+      Math.abs(d.resting_hr - byAct[d.date]) >= t)
+      .map(d => ({ date: d.date, day: d.resting_hr, activity: byAct[d.date] }));
+  }
+
+  function sleepSeries(acts) {
+    return dayRecords(acts).filter(d => d.sleep_s != null)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(d => ({ date: d.date, value: d.sleep_s, score: d.sleep_score }));
+  }
+
+  function hrvSeries(acts) {
+    return dayRecords(acts).filter(d => d.hrv_ms != null)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(d => ({ date: d.date, value: d.hrv_ms }));
+  }
+
+  function dayFor(acts, date) {
+    return dayRecords(acts).find(d => d.date === date) || null;
+  }
+
+  /* Dates carrying an activity, for the training ticks under the RHR chart. */
+  function trainedDates(acts) {
+    const s = {};
+    acts.filter(a => a.type === 'run' || a.type === 'hike').forEach(a => { s[a.date] = 1; });
+    return s;
+  }
+
+  /* Two groups, compared only when the gap clears twice their spread — the same
+     bar the noticing card uses. Never draws a trend line through fifteen dots. */
+  function splitCompare(a, b, betterWhen) {
+    if (!a || !b || a.length < 3 || b.length < 3) {
+      return { enough: false, needA: Math.max(0, 3 - (a || []).length),
+               needB: Math.max(0, 3 - (b || []).length) };
+    }
+    const ma = median(a), mb = median(b);
+    /* Spread must be measured WITHIN each group. Pooling the raw values would
+       fold the very difference we're testing into the yardstick, and a real gap
+       would inflate the spread enough to hide itself. */
+    const dev = a.map(v => Math.abs(v - ma)).concat(b.map(v => Math.abs(v - mb)));
+    const sd = Math.max(median(dev) * 1.4826, 1e-9);
+    const diff = ma - mb;
+    return {
+      enough: true, a: ma, b: mb, n: a.length, m: b.length,
+      diff: diff, ratio: Math.abs(diff) / sd, spread: sd,
+      significant: Math.abs(diff) / sd >= 2,
+      betterWhen: betterWhen
+    };
   }
 
   const api = {
@@ -863,12 +984,14 @@
     naismithHours, terrainFactor, flatEquivKm,
     comparable, median,
     isoWeek, weekStart, dayIndex, daysBetween, splitOnGaps,
-    weekRollup, monthRollup, confidence,
+    ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, aerobicPace, paceSeries, cumulativeAscent, ascentRateSeries,
     records, delta, driftNeeds,
     restingSeries, restingBaseline, suggestedRestingAnchor,
+    DAY_FIELDS, dayRecords, restingByDate, restingConflicts,
+    sleepSeries, hrvSeries, dayFor, trainedDates, splitCompare,
     spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

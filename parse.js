@@ -21,6 +21,9 @@
     gradeadjustedpace: 'gap_pace_s', avggradeadjustedpace: 'gap_pace_s',
     avghr: 'avg_hr', averageheartrate: 'avg_hr', avgheartrate: 'avg_hr', hr: 'avg_hr',
     restinghr: 'resting_hr', restingheartrate: 'resting_hr', resting: 'resting_hr',
+    sleep: 'sleep_s', duration: 'sleep_s', sleepduration: 'sleep_s',
+    score: 'sleep_score', sleepscore: 'sleep_score',
+    hrv: 'hrv_ms', avgovernighthrv: 'hrv_ms', overnighthrv: 'hrv_ms',
     maxhr: '_ignore', maxheartrate: '_ignore',
     avgcadence: 'cadence_spm', cadence: 'cadence_spm', avgruncadence: 'cadence_spm',
     totalascent: 'ascent_m', ascent: 'ascent_m', elevationgain: 'ascent_m', elevation: 'ascent_m',
@@ -38,6 +41,18 @@
     if (v == null) return null;
     const m = String(v).replace(',', '.').match(/-?\d+(\.\d+)?/);
     return m ? parseFloat(m[0]) : null;
+  }
+
+  /* Sleep is written h:mm, so 7:04 is seven hours four minutes — not 7m04s.
+     Anything with three parts, or over 24, is read as h:mm:ss. */
+  function sleepDuration(v) {
+    if (v == null) return null;
+    const s = String(v).trim();
+    const hm = s.match(/^(\d{1,2})\s*[:h]\s*(\d{1,2})\s*m?$/i);
+    if (hm) return (+hm[1]) * 3600 + (+hm[2]) * 60;
+    const h = s.match(/^(\d{1,2}(?:\.\d+)?)\s*h(?:ours?)?$/i);
+    if (h) return Math.round(parseFloat(h[1]) * 3600);
+    return duration(v);
   }
 
   /* "22:17" -> 1337 ; "1:32:49" -> 5569 ; "7:24 /km" -> 444 ; "6:52.6" -> 413 */
@@ -97,6 +112,7 @@
       fields: {},
       cleared: [],
       laps: [],
+      days: [],
       notes: [],      // flag lines carried through from the transcription
       unmatched: [],  // rows we couldn't place
       warnings: []
@@ -115,6 +131,30 @@
       /* header rows */
       const h0 = norm(c[0]);
       if (h0 === 'metric' || h0 === 'lap' || h0 === 'field') return;
+      if (h0 === 'date' && c.length >= 3) return;
+
+      /* Day row: starts with a date. Lap rows start with a bare integer, so the
+         two never collide and no mode switch is needed. */
+      if (c.length >= 3 && !/^\d+$/.test(c[0])) {
+        const dd = date(c[0], today);
+        if (dd.value) {
+          const row = { date: dd.value, inferredYear: dd.inferredYear };
+          const rest = c.slice(1);
+          /* Resting HR | Sleep | Score | HRV, in that order, blanks allowed */
+          const order = ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'];
+          rest.forEach((v, i) => {
+            if (i >= order.length) return;
+            if (v === '' || v === '\u2014' || v === '-') return;
+            const k = order[i];
+            row[k] = (k === 'sleep_s') ? sleepDuration(v) : num(v);
+          });
+          if (row.resting_hr != null || row.sleep_s != null || row.hrv_ms != null) {
+            out.days.push(row);
+            if (dd.inferredYear) out.yearInferred = dd.value.slice(0, 4);
+            return;
+          }
+        }
+      }
 
       /* lap row: first cell is a bare number and there are 3+ cells */
       if (c.length >= 3 && /^\d+$/.test(c[0])) {
@@ -160,6 +200,8 @@
           case 'elapsed_s':
           case 'moving_s':
             out.fields[key] = duration(val); break;
+          case 'sleep_s':
+            out.fields.sleep_s = sleepDuration(val); break;
           case 'avg_pace_s':
           case 'gap_pace_s':
             out.fields[key] = duration(val); break;
@@ -376,8 +418,62 @@
     return flags;
   }
 
+
+  /* ---------- Body: a week of nights ---------- */
+
+  function toDays(p, existing, opts) {
+    opts = opts || {};
+    const by = {};
+    (existing || []).filter(a => a.type === 'day').forEach(d => { by[d.date] = d; });
+    return p.days.map(row => {
+      const prev = by[row.date];
+      const rec = Object.assign({}, prev || {}, {
+        type: 'day', date: row.date, source: 'tracked'
+      });
+      ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'].forEach(k => {
+        if (row[k] != null) rec[k] = row[k];
+      });
+      rec.replaces = !!prev;
+      if (prev) rec.id = prev.id;
+      return rec;
+    });
+  }
+
+  function validateDays(p, existing, opts) {
+    opts = opts || {};
+    const today = opts.today || new Date().toISOString().slice(0, 10);
+    const flags = [];
+    const add = (level, msg) => flags.push({ level: level, msg: msg });
+
+    if (!p.days.length) { add('error', 'No day rows found in that paste.'); return flags; }
+
+    const seen = {};
+    p.days.forEach(r => {
+      if (r.date > today) add('error', r.date + ' is in the future.');
+      if (seen[r.date]) add('warn', r.date + ' appears twice in the paste.');
+      seen[r.date] = 1;
+      if (r.resting_hr != null && (r.resting_hr < 25 || r.resting_hr > 120))
+        add('error', 'Resting HR ' + r.resting_hr + ' on ' + r.date + ' is out of range.');
+      if (r.hrv_ms != null && (r.hrv_ms < 5 || r.hrv_ms > 250))
+        add('error', 'HRV ' + r.hrv_ms + ' on ' + r.date + ' is out of range.');
+      if (r.sleep_score != null && (r.sleep_score < 0 || r.sleep_score > 100))
+        add('error', 'Sleep score ' + r.sleep_score + ' on ' + r.date + ' is out of range.');
+      if (r.sleep_s != null && (r.sleep_s < 3600 || r.sleep_s > 16 * 3600))
+        add('warn', 'Sleep of ' + Math.round(r.sleep_s / 3600) + 'h on ' + r.date + ' looks wrong.');
+    });
+
+    const already = (existing || []).filter(a => a.type === 'day' && seen[a.date]).length;
+    if (already) add('info', already + ' of these nights already logged — saving replaces them.');
+
+    if (p.yearInferred) add('info', 'No year on these dates — assumed ' + p.yearInferred + '.');
+    p.warnings.forEach(w => add('warn', w));
+    p.unmatched.forEach(u => add('info', 'Row not recognised: ' + u.slice(0, 48)));
+    return flags;
+  }
+
   const api = { parse, validate, inferType, toActivity, mergeInto, validateMerge, TYPED,
-                _duration: duration, _date: date };
+                toDays, validateDays,
+                _duration: duration, _sleep: sleepDuration, _date: date };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Parse = api;
 

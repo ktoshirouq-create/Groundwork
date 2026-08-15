@@ -6,7 +6,9 @@
 
   const WORLD = {
     run:  { scopes: ['week', 'month', 'year'], scope: 'week', ribbon: 12, metric: 'distance' },
-    hike: { scopes: ['month', 'year', 'all'],  scope: 'year', ribbon: 12, metric: 'ascent' }
+    hike: { scopes: ['month', 'year', 'all'],  scope: 'year', ribbon: 12, metric: 'ascent' },
+    /* Body holds one record per day, so it has no ribbon and no activity list. */
+    body: { scopes: ['week', 'month', 'year'], scope: 'month', ribbon: 0, metric: null }
   };
 
   let world = 'run';
@@ -161,8 +163,10 @@
     let lo = opt.min != null ? opt.min : Math.min.apply(null, all);
     let hi = opt.max != null ? opt.max : Math.max.apply(null, all);
     if (hi === lo) hi = lo + 1;
+    /* extra headroom at the good end, so a best-ever value can't sit on the
+       dashed rule marking the previous best */
     const pad = (hi - lo) * 0.12;
-    lo -= pad; hi += pad;
+    lo -= pad * (opt.invert ? 1.6 : 1); hi += pad * (opt.invert ? 1 : 1.6);
     const yOf = v => {
       const t = (v - lo) / (hi - lo);
       return opt.invert ? t * 100 : 100 - t * 100;
@@ -212,6 +216,14 @@
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
+
+    /* small ticks under the plot, marking days you trained */
+    if (opt.ticksBelow && opt.ticksBelow.length) {
+      opt.ticksBelow.forEach(px => {
+        svg += '<line x1="' + px.toFixed(2) + '" y1="94" x2="' + px.toFixed(2) +
+          '" y2="100" stroke="var(--z3)" stroke-width="1.4" vector-effect="non-scaling-stroke"/>';
+      });
+    }
 
     /* Ticks at the edges, never a full-height rule. A line spanning the plot
        divides it however it's styled. */
@@ -277,6 +289,8 @@
   function fmtRead(v, kind) {
     if (v == null) return '\u2014';
     if (kind === 'pace') return Calc.fmtPace(v);
+    if (kind === 'sleep') { const h = Math.floor(v / 3600), m = Math.round((v % 3600) / 60);
+      return h + ':' + String(m).padStart(2, '0'); }
     if (kind === 'pct') return Math.round(v);
     if (kind === 'km') return (Math.round(v * 100) / 100).toFixed(2);
     if (kind === 'factor') return v.toFixed(2);
@@ -314,7 +328,8 @@
       h += '<div class="rd">';
       h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val">' +
         fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '') +
-        (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's') : null) : '') +
+        (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's')
+             : r.kind === 'sleep' ? (x => Math.abs(Math.round(x.diff / 60)) + 'm') : null) : '') +
         '</div></div>';
       h += '<div class="track' + (r.need ? ' off' : '') + '"><div class="line"></div>' +
         (bandFrom != null && bandTo != null && Math.abs(bandTo - bandFrom) > 0.5
@@ -335,8 +350,10 @@
       const unitOf = { '%': '%', 'bpm': ' bpm', 'km': ' km', '/km': '/km',
                        'days / week': ' a week', 'm/h': ' m/h', 'm': ' m' };
       const named = waiting.map(r => {
-        const u = unitOf[r.unit] != null ? unitOf[r.unit] : (r.unit ? ' ' + r.unit : '');
-        const v = r.now != null ? fmtRead(r.now, r.kind) + u : null;
+        const un = unitOf[r.unit] != null ? unitOf[r.unit] : (r.unit ? ' ' + r.unit : '');
+        /* one observation is not a value worth printing — that's the same
+           degenerate case the tracks already refuse */
+        const v = (r.now != null && r.n >= 2) ? fmtRead(r.now, r.kind) + un : null;
         return esc(r.label.toLowerCase()) + (v ? ' <b>' + v + '</b>' : '');
       });
       const last = named.pop();
@@ -403,6 +420,7 @@
   /* ------------------------------------------------------------------ home */
 
   function renderHome() {
+    if (world === 'body') return renderBody();
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
     const wc = WORLD[world];
@@ -433,8 +451,10 @@
 
     /* the list */
     const sorted = inP.slice().sort((a, b) => b.date.localeCompare(a.date));
-    h += '<div class="sec"><span>' + esc(Calc.periodLabel(k, scope, today())) + '</span><span>' +
-      (sorted.length ? sorted.length + (world === 'run' ? ' runs' : ' days out') : '') + '</span></div>';
+    const isNow = Calc.periodKey(today(), scope) === k;
+    h += '<div class="sec"><span>' + (isNow ? 'This ' + scope : esc(Calc.periodLabel(k, scope, today()))) +
+      '</span><span>' + (sorted.length ? sorted.length + (world === 'run' ? ' runs' : ' days out') : '') +
+      '</span></div>';
 
     if (!sorted.length) {
       const noun = world === 'run' ? 'run' : 'hike';
@@ -497,11 +517,10 @@
         xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
         legend: '<span><i class="sw now"></i>this block</span>' +
                 (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '') +
-                (mark != null ? '<span><i class="sw mark"></i>best before the break, ' +
+                (mark != null ? '<span><i class="sw mark"></i>previous best ' +
                   Calc.fmtPace(mark) + '</span>' : '')
       });
-      h += '<div class="est">Faster is higher' +
-        (segs.length > 1 ? '. The gutter is time off.' : '.') + '</div>';
+      h += '<div class="est">Faster is higher.</div>';
     } else {
       h += '<div class="est">The trend line opens once you have two runs with heart rate.</div>';
     }
@@ -740,6 +759,128 @@
       vbarsHTML(a, bounds, true) + '</div>';
   }
 
+
+  /* ------------------------------------------------------------------ body */
+
+  function fmtSleep(sec) {
+    if (sec == null) return '\u2014';
+    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    return h + ':' + String(m).padStart(2, '0');
+  }
+
+  function renderBody() {
+    const cfg = Store.config();
+    const all = Store.all();
+    const k = key();
+    const rest = Calc.restingSeries(all);
+    const inP = rest.filter(p => Calc.inPeriod({ date: p.date, type: 'day' }, scope, k));
+
+    let h = '<div class="top"><div>' +
+      '<div class="ttl">' + esc(Calc.periodLabel(k, scope, today())) + '</div>' +
+      '<div class="sub">' + esc(Calc.periodSpan(k, scope, today())) + '</div>' +
+      '</div><button class="corner" data-go="settings">SETUP</button></div>';
+    h += '<div class="bar">' + WORLD.body.scopes.map(sc =>
+      '<button class="chip" data-scope="' + sc + '" aria-pressed="' + (sc === scope) + '">' +
+      sc[0].toUpperCase() + sc.slice(1) + '</button>').join('') + '</div>';
+
+    if (!rest.length) {
+      h += '<div class="empty-state">Nothing logged yet.<br>' +
+        'Tap + and paste a week from the Heart Rate and Sleep screens.</div>';
+      el('view-home').innerHTML = h;
+      bind();
+      return;
+    }
+
+    h += '<div class="rule"></div>';
+
+    /* hero: today against the rolling baseline */
+    const base = Calc.restingBaseline(all, today());
+    const latest = rest[rest.length - 1];
+    h += '<div class="eyebrow">Resting heart rate</div>';
+    h += '<div class="hero"><div class="hnum">' + latest.value + '</div><div class="hunit">bpm</div>' +
+      (base != null ? deltaHTML(Calc.delta(latest.value, base, 'down'),
+        x => Math.abs(Math.round(x.diff)) + '') : '') + '</div>';
+    h += '<div class="hsub">' + (base == null
+      ? 'Baseline opens once three nights are logged.'
+      : (latest.value === Math.round(base)
+          ? 'At your baseline of <b>' + Math.round(base) + '</b>, the 90-day median.'
+          : Math.abs(latest.value - Math.round(base)) + ' ' +
+            (latest.value > base ? 'above' : 'below') + ' your baseline of <b>' +
+            Math.round(base) + '</b>, the 90-day median.')) + '</div>';
+
+    /* resting HR, with training days ticked underneath */
+    if (inP.length >= 4) {
+      const trained = Calc.trainedDates(all);
+      h += lineChart([inP], {
+        invert: true, mark: base, height: 140,
+        format: v => Math.round(v),
+        anchorLabels: ['lowest', 'highest'],
+        label: 'Resting heart rate with the 90-day median and the days you trained.',
+        ticksBelow: inP.map((p, i) => trained[p.date] ? i / (inP.length - 1) * 100 : null).filter(v => v != null),
+        xax: [fmtDate(inP[0].date).toUpperCase(), fmtDate(latest.date).toUpperCase()],
+        legend: '<span><i class="sw now"></i>resting HR</span>' +
+                (base != null ? '<span><i class="sw mark"></i>90-day median</span>' : '') +
+                '<span><i class="sw tick"></i>you trained</span>'
+      }) || '';
+
+      /* the finding worth surfacing: raised for days after training */
+      const runs = inP.filter(p => trained[p.date]);
+      const above = inP.filter(p => base != null && p.value - base >= 4);
+      if (above.length >= 3) h += '<div class="callout warn">Resting heart rate sat <b>4 or more above baseline</b> on ' +
+        above.length + ' of these days. That is the pattern to watch when a block starts biting.</div>';
+    } else {
+      h += '<div class="est">The trend opens once four days are logged in this period.</div>';
+    }
+
+    /* sleep */
+    const sleep = Calc.sleepSeries(all)
+      .filter(p => Calc.inPeriod({ date: p.date, type: 'day' }, scope, k));
+    if (sleep.length >= 3) {
+      const med = Calc.median(sleep.map(p => p.value));
+      const max = Math.max.apply(null, sleep.map(p => p.value));
+      h += '<div class="sec"><span>Sleep</span><span>' + fmtSleep(med) + ' median</span></div>';
+      h += '<div class="sleep">' + sleep.map(p =>
+        '<div class="sb' + (p.value < 6 * 3600 ? ' low' : '') + '" title="' + p.date + ' \u00b7 ' +
+        fmtSleep(p.value) + '"><div class="v" style="height:' +
+        Math.max(6, Math.round(p.value / max * 100)) + '%"></div></div>').join('') + '</div>';
+      h += '<div class="est">Amber is a night under six hours. The reference is your own median, not eight hours.</div>';
+    }
+
+    h += readHTML('body');
+
+    /* recent nights */
+    const days = Calc.dayRecords(all)
+      .filter(d => Calc.inPeriod(d, scope, k))
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 8);
+    if (days.length) {
+      h += '<div class="sec"><span>Recent nights</span><span>' + days.length + ' shown</span></div>';
+      h += days.map(d => {
+        const hi = base != null && d.resting_hr != null && d.resting_hr - base >= 4;
+        const bits = [];
+        if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
+        if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
+        if (d.hrv_ms != null) bits.push('HRV ' + d.hrv_ms);
+        return '<div class="drow" data-id="' + esc(d.id) + '">' +
+          '<div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' + (+d.date.slice(8)) + '</div>' +
+          '<div class="dmain">' + esc(bits.join(' \u00b7 ')) + '</div>' +
+          '<div class="dfig' + (hi ? ' up' : '') + '">' +
+          (d.resting_hr == null ? '\u2014' : d.resting_hr) + '</div></div>';
+      }).join('');
+    }
+
+    /* conflicts, if a run and a day record disagree */
+    const conf = Calc.restingConflicts(all);
+    if (conf.length) {
+      h += '<div class="flag"><i>!</i><div>' + conf.length + ' day' + (conf.length === 1 ? '' : 's') +
+        ' where a run and a night record disagree by 3 bpm or more. The night record is used.</div></div>';
+    }
+
+    el('view-home').innerHTML = h;
+    bind();
+  }
+
+
   /* ---------------------------------------------------------------- detail */
 
   function renderDetail(id) {
@@ -862,6 +1003,8 @@
       '<button class="chip" data-imp="run" aria-pressed="' + (type === 'run') + '">Run</button>' +
       '<button class="chip" data-imp="hike" aria-pressed="' + (type === 'hike') + '">Hike</button>' +
       '<button class="chip" data-imp="auto" aria-pressed="false">Decide for me</button></div>';
+    h += '<div class="small muted" style="margin-top:10px">A table of day rows is read as a ' +
+      'week of nights, whichever of these is selected.</div>';
     h += '<label><span>Paste the table</span><textarea id="paste" placeholder="Paste straight from Gemini. Pipes, headers and flag lines are all fine."></textarea></label>';
     h += '<button class="btn" id="read">Read it</button>';
     h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
@@ -881,6 +1024,8 @@
       const text = el('paste').value;
       if (!text.trim()) return;
       const p = Parse.parse(text, { today: today() });
+      /* a paste of day rows is a week of nights, whatever tab you came from */
+      if (p.days.length) { renderDayPreview(p); return; }
       const t = type === 'auto' ? (Parse.inferType(p) || 'run') : type;
       draft = Parse.toActivity(p, { type: t });
       renderPreview(p, Parse.validate(p, { today: today() }));
@@ -968,6 +1113,79 @@
       });
     };
   }
+
+
+  function renderDayPreview(p) {
+    const all = Store.all();
+    const recs = Parse.toDays(p, all, { today: today() });
+    const flags = Parse.validateDays(p, all, { today: today() });
+    const errors = flags.filter(f => f.level === 'error');
+
+    /* On a first import there is no baseline yet, so compare against the median
+       of the week being pasted — otherwise the preview says nothing at exactly
+       the moment the anchor is being established. */
+    const prior = Calc.restingBaseline(all, today());
+    const incoming = Calc.median(recs.map(r => r.resting_hr).filter(v => v != null));
+    const base = prior != null ? prior : incoming;
+    const firstEver = prior == null;
+
+    let h = '<div class="rule"></div><div class="sec"><span>Check it</span><span>' +
+      recs.length + ' night' + (recs.length === 1 ? '' : 's') + '</span></div>';
+
+    recs.slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(d => {
+      const hi = base != null && d.resting_hr != null && d.resting_hr - base >= 4;
+      const bits = [];
+      if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
+      if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
+      if (d.hrv_ms != null) bits.push('HRV ' + d.hrv_ms);
+      h += '<div class="drow"><div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' +
+        (+d.date.slice(8)) + '</div><div class="dmain">' + esc(bits.join(' \u00b7 ')) +
+        (d.replaces ? ' <span>\u00b7 replaces</span>' : '') + '</div>' +
+        '<div class="dfig' + (hi ? ' up' : '') + '">' +
+        (d.resting_hr == null ? '\u2014' : d.resting_hr) + '</div></div>';
+    });
+
+    if (!errors.length) h += '<div class="flag ok"><i>\u2713</i><div>Nothing inconsistent found.</div></div>';
+    flags.forEach(f => {
+      const cls = f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '';
+      const mark = f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!';
+      h += '<div class="flag ' + cls + '"><i>' + mark + '</i><div>' + esc(f.msg) + '</div></div>';
+    });
+
+    /* say what this does to the anchor, before it happens */
+    const after = Calc.restingBaseline(
+      all.filter(a => !recs.some(r => r.id && r.id === a.id))
+         .concat(recs.map(r => Object.assign({}, r, { id: r.id || 'x' + r.date }))), today());
+    if (after != null) {
+      const anchor = Store.config().resting_hr;
+      const moves = Math.abs(Math.round(after) - anchor) >= 2;
+      h += '<div class="flag info"><i>i</i><div>' +
+        (firstEver
+          ? '90-day median will be set to ' + Math.round(after) + '.'
+          : '90-day median moves ' + Math.round(prior) + ' \u2192 ' + Math.round(after) + '.') +
+        (moves
+          ? ' Your zone anchor follows, ' + anchor + ' \u2192 ' + Math.round(after) + '.'
+          : ' Your zones don\u2019t change.') + '</div></div>';
+    }
+
+    h += '<button class="btn" id="save-days"' + (errors.length ? ' disabled' : '') + '>Save ' +
+      recs.length + ' night' + (recs.length === 1 ? '' : 's') + '</button>';
+    el('preview').innerHTML = h;
+
+    const btn = el('save-days');
+    if (btn && !errors.length) btn.onclick = () => {
+      const chain = recs.reduce((prom, r) =>
+        prom.then(() => Store.put(Model.make(r))), Promise.resolve());
+      chain.then(() => {
+        /* the anchor follows the rolling median, but only on a real shift */
+        const next = Calc.suggestedRestingAnchor(Store.all(), Store.config(), today());
+        return next != null
+          ? Store.setConfig({ resting_hr: next, resting_hr_dated: today() })
+          : null;
+      }).then(() => { setWorld('body'); go('home'); });
+    };
+  }
+
 
   /* -------------------------------------------------------------- settings */
 

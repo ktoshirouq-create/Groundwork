@@ -25,20 +25,52 @@ Code.gs       Apps Script backend, for when you move to Sheets
 backfill.json 16 runs from Oct 2025 – Aug 2026 plus both field tests
 ```
 
-## Two worlds
+## Three worlds
 
-Running and Hiking share one shell and differ on purpose:
+|          | Running              | Hiking                | Body                  |
+|----------|----------------------|-----------------------|-----------------------|
+| Scopes   | Week / Month / Year  | Month / Year / All    | Week / Month / Year   |
+| Default  | Week                 | Year                  | Month                 |
+| Hero     | Aerobic pace, min/km | Cumulative ascent     | Resting HR vs baseline|
+| Record   | one per activity     | one per activity      | **one per day**       |
 
-|            | Running                   | Hiking                          |
-|------------|---------------------------|---------------------------------|
-| Scopes     | Week / Month / Year       | Month / Year / All time         |
-| Default    | Week                      | Year                            |
-| Hero       | Aerobic pace, min/km      | Cumulative ascent, metres up    |
-| Ribbon     | Distance per week         | Ascent per month                |
-| List       | Dense rows, drift strips  | Spacious cards, one per day out |
+No Week for hiking — you don't hike weekly. No All time for running — the
+training block is the unit. Body defaults to Month because seven points show
+nothing.
 
-No Week for hiking — you don't hike on a weekly rhythm. No All time for
-running — the training block is the unit.
+## Body
+
+One record per day: resting HR, sleep, sleep score, overnight HRV. Pasted
+weekly on a Sunday from Garmin's 7d screens, which aligns with the
+Monday–Sunday weeks everything else uses.
+
+**Day records never enter an activity rollup.** `Calc.ACTIVITY_TYPES` is the
+explicit list; anything counting runs or hikes filters on it.
+
+**Resting HR has two sources and one precedence rule.** A day record always
+wins for its own date; a run's own reading fills the gaps between Sundays.
+Where both exist and differ by 3 bpm or more, the app says so rather than
+silently choosing. The 90-day median is computed over merged dates, so one
+morning can never be counted twice.
+
+Before Body, that median came only from days you ran — days you felt well
+enough to run. A daily sample removes the bias, and the zone anchor follows it
+on any shift of 2 bpm or more.
+
+**SpO2 is deliberately absent.** Wrist pulse oximetry through motion and skin
+contact is unreliable; an 84% reading is artifact, not data, and no trend
+should be built on it.
+
+### Comparing groups
+
+`splitCompare` answers questions like "is pace worse after a short night" as
+two medians, never a scatter with a fitted line. It measures spread **within**
+each group — pooling the raw values would fold the difference being tested into
+the yardstick, so a real gap would inflate the spread enough to hide itself.
+It reports significance only past twice that spread.
+
+One confound to remember: Thursday-to-Sunday night shifts mean short nights
+cluster on work days, so a sleep effect and a weekday effect look identical.
 
 ## Aerobic pace
 
@@ -129,7 +161,8 @@ adds to `41:41` — never `7′ · 23′ · 11′` making 42 minutes.
 node tests/harness.js       98 assertions — maths and parsing, on real data
 npm install jsdom
 node tests/integration.js   77 assertions — boots the UI and drives it
-node tests/charts.js        28 assertions — charts, the read, deltas
+node tests/charts.js        47 assertions — charts, the read, deltas
+node tests/body.js          42 assertions — day records, the weekly paste, the anchor
 ```
 
 ## Moving to Sheets
