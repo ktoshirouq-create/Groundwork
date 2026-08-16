@@ -40,9 +40,14 @@ nothing.
 
 ## Body
 
-One record per day: resting HR, sleep, sleep score, overnight HRV. Pasted
-weekly on a Sunday from Garmin's 7d screens, which aligns with the
-Monday–Sunday weeks everything else uses.
+One record per day: **resting HR, sleep, sleep score**. Pasted weekly on a
+Sunday from Garmin's 7d screens, which aligns with the Monday–Sunday weeks
+everything else uses.
+
+HRV is deliberately absent. Garmin's weekly screen reports only a 7-day
+average, and daily entry would be seven transcriptions for the field with the
+least signal — resting heart rate covers overlapping physiology for free. The
+`hrv_ms` slot stays on the record so it can return without a migration.
 
 **Day records never enter an activity rollup.** `Calc.ACTIVITY_TYPES` is the
 explicit list; anything counting runs or hikes filters on it.
@@ -82,9 +87,15 @@ would hold at that heart rate**.
 8:14  8 Oct 2025      6:51  17 Nov 2025      7:10  13 Aug 2026
 ```
 
-The reference follows your anchors, so re-anchoring rescales everything by the
-same factor: absolute paces shift, the shape of the curve never does. There's a
-test for that.
+**The reference is pinned at 145, not derived from your zones.** It used to
+follow the top of Z2 — which meant that dropping your resting heart rate, the
+thing getting fitter does, rescaled every pace you had ever recorded and made
+them all look slower. The metric would have punished the adaptation it exists
+to detect.
+
+Pinned, it is simply a unit: cost expressed in min/km, comparable forever. The
+zones still move freely for the work they actually do. `suggestedPaceRef` will
+offer a re-pin if the anchors drift far enough, but never applies one silently.
 
 On charts, **faster is plotted higher**, so a rising line always means progress.
 
@@ -208,7 +219,7 @@ npm install jsdom
 node tests/integration.js   77 assertions — boots the UI and drives it
 node tests/charts.js        54 assertions — charts, Form, deltas
 node tests/load.js          39 assertions — load, the week strip, the importer
-node tests/body.js          42 assertions — day records, the weekly paste, the anchor
+node tests/body.js          49 assertions — day records, the weekly paste, the anchor
 ```
 
 ## Moving to Sheets

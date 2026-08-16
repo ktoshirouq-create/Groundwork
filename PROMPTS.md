@@ -104,29 +104,33 @@ After the tables, one line each, or nothing if none apply:
 
 ## Body — a week of nights
 
-Sunday, from the **Heart Rate 7d**, **Sleep 7d** and **HRV** screens. One paste
-covers the week that just closed, which lines up with the Monday–Sunday weeks
-the rest of the app uses.
+Sunday, from the **Heart Rate 7d** and **Sleep 7d** screens. One paste covers
+the week that just closed, which lines up with the Monday–Sunday weeks the rest
+of the app uses.
 
 ```
-You transcribe Garmin Connect daily-health screenshots into one table, one row per day. Accuracy over completeness — never infer, never fill gaps.
+You transcribe Garmin Connect weekly health screenshots into one table, one row per day. Accuracy over completeness — never infer, never fill gaps.
+
+SOURCES
+- Heart Rate 7d — the day list at the bottom. Each row shows TWO bpm figures: take the FIRST (resting). Ignore the second, that's the daily high.
+- Sleep 7d — the day list at the bottom. Each row shows a Score and a Duration. Take both.
 
 RULES
 - Transcribe only what is visibly printed. If a value isn't shown for a day, leave that cell empty.
 - Never calculate or average anything. Never carry a value across days.
-- Resting HR comes from the Heart Rate screen's daily figure, not from an activity.
-- Sleep is duration in h:mm — 6h 41m is written 6:41.
-- Score is the Sleep Score out of 100. HRV is Avg Overnight HRV in ms.
-- Ignore SpO2, respiration, body battery and stress.
-- Output the table and nothing else. No commentary.
+- IGNORE every summary block: Avg Score, Avg Sleep Duration, Avg Resting Heart Rate, Avg Overnight Heart Rate, Sleep Need, Body Battery, SpO2, Respiration, Avg Bedtime, Avg Wake Time. Those are averages, not days.
+- Ignore the Sleep Duration vs Sleep Need chart and the Sleep Consistency chart entirely. Use the day list only.
+- Sleep duration in h:mm. "6h 41m" is written 6:41. "8h 12m" is 8:12.
+- Output the table and nothing else. No commentary, no totals row.
 
 TABLE
 
-| Date | Resting HR | Sleep | Score | HRV |
-|---|---|---|---|---|
+| Date | Resting HR | Sleep | Score |
+|---|---|---|---|
 
-- One row per day, oldest first, including the year in the date.
-- Include every day shown, even where only some values are present.
+- One row per day, OLDEST FIRST, with the year in the date. The lists are newest first, so reverse them.
+- Exactly four columns. Never add a fifth.
+- One row per date only — if a date appears on more than one screenshot, merge into a single row.
 
 FLAGS
 After the table, one line each, or nothing if none apply:
@@ -136,7 +140,11 @@ After the table, one line each, or nothing if none apply:
 ```
 
 Paste it into the app from any tab — a table of day rows is recognised as
-nights whichever mode is selected.
+nights whichever type is selected.
+
+**No HRV.** Garmin's weekly screen only reports a 7-day average, and daily
+entry would be seven transcriptions for the field with the least signal.
+Resting heart rate covers overlapping physiology and comes for free.
 
 ---
 

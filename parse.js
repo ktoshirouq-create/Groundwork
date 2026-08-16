@@ -23,7 +23,6 @@
     restinghr: 'resting_hr', restingheartrate: 'resting_hr', resting: 'resting_hr',
     sleep: 'sleep_s', duration: 'sleep_s', sleepduration: 'sleep_s',
     score: 'sleep_score', sleepscore: 'sleep_score',
-    hrv: 'hrv_ms', avgovernighthrv: 'hrv_ms', overnighthrv: 'hrv_ms',
     maxhr: '_ignore', maxheartrate: '_ignore',
     avgcadence: 'cadence_spm', cadence: 'cadence_spm', avgruncadence: 'cadence_spm',
     totalascent: 'ascent_m', ascent: 'ascent_m', elevationgain: 'ascent_m', elevation: 'ascent_m',
@@ -141,14 +140,14 @@
           const row = { date: dd.value, inferredYear: dd.inferredYear };
           const rest = c.slice(1);
           /* Resting HR | Sleep | Score | HRV, in that order, blanks allowed */
-          const order = ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'];
+          const order = ['resting_hr', 'sleep_s', 'sleep_score'];
           rest.forEach((v, i) => {
             if (i >= order.length) return;
             if (v === '' || v === '\u2014' || v === '-') return;
             const k = order[i];
             row[k] = (k === 'sleep_s') ? sleepDuration(v) : num(v);
           });
-          if (row.resting_hr != null || row.sleep_s != null || row.hrv_ms != null) {
+          if (row.resting_hr != null || row.sleep_s != null || row.sleep_score != null) {
             out.days.push(row);
             if (dd.inferredYear) out.yearInferred = dd.value.slice(0, 4);
             return;
@@ -430,7 +429,7 @@
       const rec = Object.assign({}, prev || {}, {
         type: 'day', date: row.date, source: 'tracked'
       });
-      ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'].forEach(k => {
+      ['resting_hr', 'sleep_s', 'sleep_score'].forEach(k => {
         if (row[k] != null) rec[k] = row[k];
       });
       rec.replaces = !!prev;
@@ -454,8 +453,6 @@
       seen[r.date] = 1;
       if (r.resting_hr != null && (r.resting_hr < 25 || r.resting_hr > 120))
         add('error', 'Resting HR ' + r.resting_hr + ' on ' + r.date + ' is out of range.');
-      if (r.hrv_ms != null && (r.hrv_ms < 5 || r.hrv_ms > 250))
-        add('error', 'HRV ' + r.hrv_ms + ' on ' + r.date + ' is out of range.');
       if (r.sleep_score != null && (r.sleep_score < 0 || r.sleep_score > 100))
         add('error', 'Sleep score ' + r.sleep_score + ' on ' + r.date + ' is out of range.');
       if (r.sleep_s != null && (r.sleep_s < 3600 || r.sleep_s > 16 * 3600))

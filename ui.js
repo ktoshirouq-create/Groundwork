@@ -927,7 +927,6 @@
         const bits = [];
         if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
         if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
-        if (d.hrv_ms != null) bits.push('HRV ' + d.hrv_ms);
         return '<div class="drow" data-id="' + esc(d.id) + '">' +
           '<div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' + (+d.date.slice(8)) + '</div>' +
           '<div class="dmain">' + esc(bits.join(' \u00b7 ')) + '</div>' +
@@ -1238,7 +1237,6 @@
       const bits = [];
       if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
       if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
-      if (d.hrv_ms != null) bits.push('HRV ' + d.hrv_ms);
       h += '<div class="drow"><div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' +
         (+d.date.slice(8)) + '</div><div class="dmain">' + esc(bits.join(' \u00b7 ')) +
         (d.replaces ? ' <span>\u00b7 replaces</span>' : '') + '</div>' +

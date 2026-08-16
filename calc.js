@@ -13,6 +13,9 @@
     max_hr_dated: '2025-11-06',
     resting_hr_dated: '2026-08-14',
     lthr_dated: '2025-11-20',
+    /* pinned when the metric was introduced; see refHr */
+    pace_ref_hr: 145,
+    pace_ref_dated: '2026-08-16',
     FLAT_KMH: 5,
     ASCENT_MH: 600,
     STOP_SHARE_LIMIT: 0.15,
@@ -544,9 +547,26 @@
 
   /* Aerobic cost is HR x pace. Divide by a fixed heart rate and it becomes the
      pace you would hold at that heart rate — same measurement, readable units.
-     The reference is the top of Z2, so it follows the anchors; re-anchoring
-     rescales every value by the same factor and never changes the shape. */
-  function refHr(cfg) { return zoneBounds(cfg).z3; }
+
+     The reference is PINNED, not derived from the zones. It was the top of Z2,
+     which meant re-anchoring rescaled every historical value: get fitter, drop
+     your resting heart rate, and every aerobic pace you have ever recorded gets
+     slower. The metric would have punished the adaptation it exists to detect.
+
+     Pinned, it is simply a unit — cost expressed in min/km, comparable forever.
+     The zones still move freely for the work they actually do. */
+  function refHr(cfg) {
+    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
+    return c.pace_ref_hr || zoneBounds(c).z3;
+  }
+
+  /* What the reference would be if it were re-derived from today's anchors.
+     Offered, never applied silently. */
+  function suggestedPaceRef(cfg) {
+    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
+    const derived = zoneBounds(c).z3;
+    return derived !== refHr(c) ? derived : null;
+  }
 
   function aerobicPace(act, cfg) {
     const c = aerobicCost(act);
@@ -804,13 +824,6 @@
              range: rangeOf(sl), band: sl.length >= 3 ? rangeOf(sl.slice(-3)) : null,
              worstLabel: 'shortest', bestLabel: 'longest' });
 
-      const hv = hrvSeries(year).map(p => p.value);
-      const hw = windowStats(hv);
-      push({ n: hv.length, key: 'hrv', label: 'Overnight HRV', unit: 'ms', kind: 'int',
-             now: hw.now, prev: hw.prev, need: hw.need, betterWhen: 'up',
-             range: rangeOf(hv), band: hv.length >= 3 ? rangeOf(hv.slice(-3)) : null,
-             bestLabel: 'highest' });
-
       const sc = dayRecords(year).filter(d => d.sleep_score != null)
         .sort((a, b) => a.date.localeCompare(b.date)).map(d => d.sleep_score);
       const cw2 = windowStats(sc);
@@ -917,7 +930,11 @@
      resting HR read the same morning. Both are kept, and a day record always
      wins for its own date so a single morning can never hold two figures. */
 
-  const DAY_FIELDS = ['resting_hr', 'sleep_s', 'sleep_score', 'hrv_ms'];
+  /* HRV was here. Garmin's weekly screen only reports a 7-day average, and
+     daily entry would be seven transcriptions for the field with the least
+     signal — resting HR covers overlapping physiology for free. The field stays
+     on the record so it can come back without a migration. */
+  const DAY_FIELDS = ['resting_hr', 'sleep_s', 'sleep_score'];
 
   function dayRecords(acts) {
     return acts.filter(a => a.type === 'day');
@@ -954,12 +971,6 @@
     return dayRecords(acts).filter(d => d.sleep_s != null)
       .sort((a, b) => a.date.localeCompare(b.date))
       .map(d => ({ date: d.date, value: d.sleep_s, score: d.sleep_score }));
-  }
-
-  function hrvSeries(acts) {
-    return dayRecords(acts).filter(d => d.hrv_ms != null)
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(d => ({ date: d.date, value: d.hrv_ms }));
   }
 
   function dayFor(acts, date) {
@@ -1072,12 +1083,12 @@
     ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
-    refHr, aerobicPace, paceSeries, PACE_WINDOW, cumulativeAscent, ascentRateSeries,
+    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, cumulativeAscent, ascentRateSeries,
     records, delta, driftNeeds,
     load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT,
     restingSeries, restingBaseline, suggestedRestingAnchor,
     DAY_FIELDS, dayRecords, restingByDate, restingConflicts,
-    sleepSeries, hrvSeries, dayFor, trainedDates, splitCompare,
+    sleepSeries, dayFor, trainedDates, splitCompare,
     spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
