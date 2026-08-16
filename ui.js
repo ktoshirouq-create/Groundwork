@@ -7,8 +7,9 @@
   const WORLD = {
     run:  { scopes: ['week', 'month', 'year'], scope: 'week', ribbon: 12, metric: 'distance' },
     hike: { scopes: ['month', 'year', 'all'],  scope: 'year', ribbon: 12, metric: 'ascent' },
-    /* Body holds one record per day, so it has no ribbon and no activity list. */
-    body: { scopes: ['week', 'month', 'year'], scope: 'month', ribbon: 0, metric: null }
+    /* Body holds one record per day, so it has no ribbon and no activity list.
+       No week scope either — seven points show nothing. */
+    body: { scopes: ['month', 'year'], scope: 'month', ribbon: 0, metric: null }
   };
 
   let world = 'run';
@@ -163,10 +164,14 @@
     let lo = opt.min != null ? opt.min : Math.min.apply(null, all);
     let hi = opt.max != null ? opt.max : Math.max.apply(null, all);
     if (hi === lo) hi = lo + 1;
-    /* extra headroom at the good end, so a best-ever value can't sit on the
-       dashed rule marking the previous best */
+    /* Both ends get padding; the good end gets more, so a best-ever value can't
+       sit on the dashed rule. Previously the extra was taken from the other
+       end, which pushed the worst point clean off the plot — on the resting-HR
+       chart that silently dropped the highest day and split the line in two. */
     const pad = (hi - lo) * 0.12;
-    lo -= pad * (opt.invert ? 1.6 : 1); hi += pad * (opt.invert ? 1 : 1.6);
+    const extra = pad * 0.6;
+    if (opt.invert) { lo -= pad + extra; hi += pad; }
+    else { lo -= pad; hi += pad + extra; }
     const yOf = v => {
       const t = (v - lo) / (hi - lo);
       return opt.invert ? t * 100 : 100 - t * 100;
@@ -904,13 +909,19 @@
       .filter(p => Calc.inPeriod({ date: p.date, type: 'day' }, scope, k));
     if (sleep.length >= 3) {
       const med = Calc.median(sleep.map(p => p.value));
-      const max = Math.max.apply(null, sleep.map(p => p.value));
+      const max = Math.max.apply(null, sleep.map(p => p.value)) * 1.06;
       h += '<div class="sec"><span>Sleep</span><span>' + fmtSleep(med) + ' median</span></div>';
-      h += '<div class="sleep">' + sleep.map(p =>
-        '<div class="sb' + (p.value < 6 * 3600 ? ' low' : '') + '" title="' + p.date + ' \u00b7 ' +
-        fmtSleep(p.value) + '"><div class="v" style="height:' +
-        Math.max(6, Math.round(p.value / max * 100)) + '%"></div></div>').join('') + '</div>';
-      h += '<div class="est">Amber is a night under six hours. The reference is your own median, not eight hours.</div>';
+      /* a bare row of bars has no scale — the median rule gives it one */
+      h += '<div class="sleepwrap">' +
+        '<div class="sleepmed" style="bottom:' + (med / max * 100).toFixed(1) + '%">' +
+        '<span>' + fmtSleep(med) + '</span></div>' +
+        '<div class="sleep">' + sleep.map(p =>
+          '<div class="sb' + (p.value < 6 * 3600 ? ' low' : '') + '" title="' + p.date + ' \u00b7 ' +
+          fmtSleep(p.value) + '"><div class="v" style="height:' +
+          Math.max(6, Math.round(p.value / max * 100)) + '%"></div></div>').join('') + '</div></div>';
+      const short = sleep.filter(p => p.value < 6 * 3600).length;
+      h += '<div class="est">Amber is a night under six hours \u2014 ' + short + ' of ' +
+        sleep.length + '. The line is your own median, not eight hours.</div>';
     }
 
     h += readHTML('body');

@@ -518,3 +518,20 @@ label > span {
 }
 .clear[hidden] { display: none; }
 .clear:active { background: var(--dim); }
+
+/* ---------- sleep bars, with a median to read them against ---------- */
+
+.sleepwrap { position: relative; margin-top: 12px; }
+.sleepwrap .sleep { margin-top: 0; }
+.sleepmed {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px dashed var(--ink); opacity: .55; z-index: 2; pointer-events: none;
+}
+.sleepmed span {
+  position: absolute; right: 0; top: -13px;
+  font-family: var(--f-data); font-size: 8.5px; color: var(--ink);
+  background: var(--bg); padding: 0 3px; opacity: .9;
+}
+
+/* the last list on a screen must clear the add button at rest, not just while scrolling */
+.drow:last-of-type { margin-bottom: 34px; }
