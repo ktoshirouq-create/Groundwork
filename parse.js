@@ -95,11 +95,18 @@
 
   /* ---------- line classification ---------- */
 
+  /* Gemini varies its output: pipes one day, CSV the next, tabs if it has been
+     near a spreadsheet. A row is a row — split on whatever separator it used. */
   function cells(line) {
-    return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+    if (line.indexOf('|') >= 0) {
+      return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+    }
+    if (line.indexOf('\t') >= 0) return line.split('\t').map(c => c.trim());
+    if (line.indexOf(',') >= 0) return line.split(',').map(c => c.trim());
+    return [line.trim()];
   }
 
-  const isSeparator = line => /^[\s|:-]+$/.test(line);
+  const isSeparator = line => /^[\s|,:-]+$/.test(line);
   const isFlagLine = line => /^(missing field|screenshot unreadable|value seems wrong|no lap hr)/i.test(line.trim());
 
   /* ---------- main ---------- */
@@ -121,8 +128,8 @@
       const line = raw.trim();
       if (!line) return;
       if (isFlagLine(line)) { out.notes.push(line); return; }
-      if (!line.includes('|')) { out.unmatched.push(line); return; }
       if (isSeparator(line)) return;
+      if (!/[|,\t]/.test(line)) { out.unmatched.push(line); return; }
 
       const c = cells(line).filter((v, i, a) => !(v === '' && i === a.length - 1));
       if (!c.length) return;

@@ -1,5 +1,8 @@
 # Transcription prompts
 
+Pipes, commas or tabs all parse — Gemini varies its output and the app doesn't
+care. The tables below ask for pipes because they're the least ambiguous.
+
 Paste one of these into Gemini with the screenshots. Send **Overview + Stats +
 Laps** for a run; **Overview + Stats + Laps** for a hike too.
 

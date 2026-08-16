@@ -1085,14 +1085,31 @@
         '<button class="chip" data-imp="' + t + '" aria-pressed="' + (t === type) + '">' +
         (t === 'auto' ? 'Decide for me' : t === 'body' ? 'Body' : t[0].toUpperCase() + t.slice(1)) +
         '</button>').join('') + '</div>';
-    h += '<label><span>Paste the table</span><textarea id="paste" placeholder="' +
-      esc(PLACEHOLDER[type]) + '"></textarea></label>';
+    h += '<label><span>Paste the table</span><div class="pastewrap">' +
+      '<textarea id="paste" placeholder="' + esc(PLACEHOLDER[type]) + '"></textarea>' +
+      '<button class="clear" id="paste-clear" type="button" aria-label="Clear">\u2715</button>' +
+      '</div></label>';
     h += '<button class="btn" id="read">Read it</button>';
     h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
     h += '<div id="preview"></div>';
     el('view-import').innerHTML = h;
 
     $('#view-import [data-back]').onclick = () => go('home');
+
+    const syncClear = () => {
+      el('paste-clear').hidden = !el('paste').value.length;
+    };
+    el('paste').addEventListener('input', syncClear);
+    syncClear();
+
+    el('paste-clear').onclick = () => {
+      el('paste').value = '';
+      el('preview').innerHTML = '';
+      draft = null;
+      syncClear();
+      el('paste').focus();
+    };
+
     document.querySelectorAll('#view-import [data-imp]').forEach(b => {
       b.onclick = () => {
         type = b.dataset.imp;
@@ -1100,7 +1117,12 @@
           x.setAttribute('aria-pressed', String(x === b)));
         el('imp-title').textContent = LABEL[type];
         el('paste').placeholder = PLACEHOLDER[type];
+        /* whatever is in the box was for the old type — clear it rather than
+           let a run table sit under a Body heading */
+        el('paste').value = '';
         el('preview').innerHTML = '';
+        draft = null;
+        syncClear();
       };
     });
 
@@ -1522,12 +1544,25 @@
     h += '<div class="small muted" style="margin-top:12px">Paste a full table or just the lap ' +
       'rows. Anything the paste leaves out keeps its current value; a field written as ' +
       '\u2014 is cleared. Your name, source and notes are never touched.</div>';
-    h += '<label><span>Paste</span><textarea id="r-paste" placeholder="Paste the table, or only the lap rows."></textarea></label>';
+    h += '<label><span>Paste</span><div class="pastewrap">' +
+      '<textarea id="r-paste" placeholder="Paste the table, or only the lap rows."></textarea>' +
+      '<button class="clear" id="r-clear" type="button" aria-label="Clear">\u2715</button>' +
+      '</div></label>';
     h += '<button class="btn" id="r-read">Read it</button>';
     h += '<div id="r-preview"></div>';
 
     el('view-replace').innerHTML = h;
     document.querySelectorAll('#view-replace [data-back]').forEach(b => b.onclick = () => go('detail', id));
+
+    const rSync = () => { el('r-clear').hidden = !el('r-paste').value.length; };
+    el('r-paste').addEventListener('input', rSync);
+    rSync();
+    el('r-clear').onclick = () => {
+      el('r-paste').value = '';
+      el('r-preview').innerHTML = '';
+      rSync();
+      el('r-paste').focus();
+    };
 
     el('r-read').onclick = () => {
       const text = el('r-paste').value;

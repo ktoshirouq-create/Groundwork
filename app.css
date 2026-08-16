@@ -505,3 +505,16 @@ label > span {
 .lb .v { border-radius: 3px 3px 0 0; background: var(--z2); }
 .lb.spike .v { background: var(--z3); }
 .lb.none .v { background: var(--line); height: 3px; }
+
+/* ---------- paste box, with a way out ---------- */
+
+.pastewrap { position: relative; }
+.pastewrap textarea { padding-right: 42px; }
+.clear {
+  position: absolute; top: 8px; right: 8px;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--line); color: var(--ink); border: none;
+  font-size: 12px; line-height: 1; cursor: pointer; padding: 0;
+}
+.clear[hidden] { display: none; }
+.clear:active { background: var(--dim); }
