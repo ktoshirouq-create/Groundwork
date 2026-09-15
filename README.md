@@ -8,7 +8,13 @@ screenshot and pasted in. Everything else is computed.
 ```
 index.html   app.css   sw.js   manifest.json
 calc.js      store.js  parse.js  ui.js
+icon-192.png  icon-512.png
+icon-maskable-192.png  icon-maskable-512.png
 ```
+
+**Runs only.** Hiking and Body were stripped out in September — the scope had
+got ahead of the use. Both are in the repo history if either needs to come
+back; nothing about the data model prevents it.
 
 No folders. GitHub mobile drops subfolders silently.
 
@@ -24,58 +30,6 @@ sw.js         service worker — BUMP `CACHE` ON EVERY JS OR CSS CHANGE
 Code.gs       Apps Script backend, for when you move to Sheets
 backfill.json 16 runs from Oct 2025 – Aug 2026 plus both field tests
 ```
-
-## Three worlds
-
-|          | Running              | Hiking                | Body                  |
-|----------|----------------------|-----------------------|-----------------------|
-| Scopes   | Week / Month / Year  | Month / Year / All    | Week / Month / Year   |
-| Default  | Week                 | Year                  | Month                 |
-| Hero     | Aerobic pace, min/km | Cumulative ascent     | Resting HR vs baseline|
-| Record   | one per activity     | one per activity      | **one per day**       |
-
-No Week for hiking — you don't hike weekly. No All time for running — the
-training block is the unit. Body defaults to Month because seven points show
-nothing.
-
-## Body
-
-One record per day: **resting HR, sleep, sleep score**. Pasted weekly on a
-Sunday from Garmin's 7d screens, which aligns with the Monday–Sunday weeks
-everything else uses.
-
-HRV is deliberately absent. Garmin's weekly screen reports only a 7-day
-average, and daily entry would be seven transcriptions for the field with the
-least signal — resting heart rate covers overlapping physiology for free. The
-`hrv_ms` slot stays on the record so it can return without a migration.
-
-**Day records never enter an activity rollup.** `Calc.ACTIVITY_TYPES` is the
-explicit list; anything counting runs or hikes filters on it.
-
-**Resting HR has two sources and one precedence rule.** A day record always
-wins for its own date; a run's own reading fills the gaps between Sundays.
-Where both exist and differ by 3 bpm or more, the app says so rather than
-silently choosing. The 90-day median is computed over merged dates, so one
-morning can never be counted twice.
-
-Before Body, that median came only from days you ran — days you felt well
-enough to run. A daily sample removes the bias, and the zone anchor follows it
-on any shift of 2 bpm or more.
-
-**SpO2 is deliberately absent.** Wrist pulse oximetry through motion and skin
-contact is unreliable; an 84% reading is artifact, not data, and no trend
-should be built on it.
-
-### Comparing groups
-
-`splitCompare` answers questions like "is pace worse after a short night" as
-two medians, never a scatter with a fitted line. It measures spread **within**
-each group — pooling the raw values would fold the difference being tested into
-the yardstick, so a real gap would inflate the spread enough to hide itself.
-It reports significance only past twice that spread.
-
-One confound to remember: Thursday-to-Sunday night shifts mean short nights
-cluster on work days, so a sleep effect and a weekday effect look identical.
 
 ## Aerobic pace
 
@@ -162,12 +116,11 @@ consistent" and "how hard was it" in one row.
 
 ## Importing
 
-Four options: **Decide for me** (the default), Run, Hike, Body.
+One paste box. Pipes, commas or tabs all parse — Gemini varies its output and
+the app doesn't care.
 
-Inference reads field shape — ascent with moving time is a hike, cadence or GAP
-is a run, day rows are nights. An explicit choice always wins, but the preview
-says when it disagrees rather than silently obeying. Day rows are recognised
-whichever chip is selected, because they can't be anything else.
+Absent fields keep their stored value on a replace, a field written as `—`
+clears it, and **name, source and note are never touched by a paste**.
 
 ## The noticing card
 
@@ -180,12 +133,6 @@ Silent otherwise — no card, no placeholder. It shows its working so you can
 disagree with it.
 
 Checked against real history: fires on 17 Nov 2025, silent on 1 Dec.
-
-## Resting HR
-
-A field on the paste. Its 90-day rolling median is what the Karvonen resting
-anchor follows, and the anchor only moves on a shift of 2 bpm or more so
-aerobic pace never drifts for non-fitness reasons.
 
 ## Editing
 
@@ -241,8 +188,6 @@ thing protecting the data — treat both as secrets.
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.
-- **Flat km/h, ascent m/h** — Naismith. 5 km/h is classic, 4 is the
-  conservative rough-terrain variant. Changing it moves every terrain factor.
 - **Export** — until Sheets is wired, this device is the only copy.
 
 ## Still to come

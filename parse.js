@@ -21,13 +21,9 @@
     gradeadjustedpace: 'gap_pace_s', avggradeadjustedpace: 'gap_pace_s',
     avghr: 'avg_hr', averageheartrate: 'avg_hr', avgheartrate: 'avg_hr', hr: 'avg_hr',
     restinghr: 'resting_hr', restingheartrate: 'resting_hr', resting: 'resting_hr',
-    sleep: 'sleep_s', duration: 'sleep_s', sleepduration: 'sleep_s',
-    score: 'sleep_score', sleepscore: 'sleep_score',
     maxhr: '_ignore', maxheartrate: '_ignore',
     avgcadence: 'cadence_spm', cadence: 'cadence_spm', avgruncadence: 'cadence_spm',
     totalascent: 'ascent_m', ascent: 'ascent_m', elevationgain: 'ascent_m', elevation: 'ascent_m',
-    totaldescent: 'descent_m', descent: 'descent_m',
-    minelevation: 'ele_min_m', maxelevation: 'ele_max_m',
     rpe: 'rpe', perceivedeffort: 'rpe',
     feel: 'feel'
   };
@@ -118,7 +114,6 @@
       fields: {},
       cleared: [],
       laps: [],
-      days: [],
       notes: [],      // flag lines carried through from the transcription
       unmatched: [],  // rows we couldn't place
       warnings: []
@@ -137,30 +132,6 @@
       /* header rows */
       const h0 = norm(c[0]);
       if (h0 === 'metric' || h0 === 'lap' || h0 === 'field') return;
-      if (h0 === 'date' && c.length >= 3) return;
-
-      /* Day row: starts with a date. Lap rows start with a bare integer, so the
-         two never collide and no mode switch is needed. */
-      if (c.length >= 3 && !/^\d+$/.test(c[0])) {
-        const dd = date(c[0], today);
-        if (dd.value) {
-          const row = { date: dd.value, inferredYear: dd.inferredYear };
-          const rest = c.slice(1);
-          /* Resting HR | Sleep | Score | HRV, in that order, blanks allowed */
-          const order = ['resting_hr', 'sleep_s', 'sleep_score'];
-          rest.forEach((v, i) => {
-            if (i >= order.length) return;
-            if (v === '' || v === '\u2014' || v === '-') return;
-            const k = order[i];
-            row[k] = (k === 'sleep_s') ? sleepDuration(v) : num(v);
-          });
-          if (row.resting_hr != null || row.sleep_s != null || row.sleep_score != null) {
-            out.days.push(row);
-            if (dd.inferredYear) out.yearInferred = dd.value.slice(0, 4);
-            return;
-          }
-        }
-      }
 
       /* lap row: first cell is a bare number and there are 3+ cells */
       if (c.length >= 3 && /^\d+$/.test(c[0])) {
@@ -206,8 +177,6 @@
           case 'elapsed_s':
           case 'moving_s':
             out.fields[key] = duration(val); break;
-          case 'sleep_s':
-            out.fields.sleep_s = sleepDuration(val); break;
           case 'avg_pace_s':
           case 'gap_pace_s':
             out.fields[key] = duration(val); break;
@@ -229,11 +198,7 @@
 
   /* ---------- inference and validation ---------- */
 
-  function inferType(p) {
-    if (p.fields.ascent_m != null && p.fields.moving_s != null) return 'hike';
-    if (p.fields.cadence_spm != null || p.fields.gap_pace_s != null) return 'run';
-    return null;
-  }
+  function inferType() { return 'run'; }
 
   const RANGES = {
     avg_hr: [30, 220],
@@ -241,9 +206,6 @@
     cadence_spm: [100, 220],
     distance_km: [0.1, 100],
     ascent_m: [0, 5000],
-    descent_m: [0, 5000],
-    ele_min_m: [-500, 3000],
-    ele_max_m: [-500, 3000],
     temp_c: [-40, 50],
     rpe: [1, 10]
   };
@@ -303,7 +265,7 @@
   function toActivity(p, extra) {
     const f = p.fields;
     const a = Object.assign({
-      type: extra && extra.type || inferType(p) || 'run',
+      type: 'run',
       date: f.date,
       name: (extra && extra.name) || '',
       source: (extra && extra.source) || 'tracked',
@@ -311,9 +273,6 @@
       elapsed_s: f.elapsed_s,
       moving_s: f.moving_s != null ? f.moving_s : null,
       ascent_m: f.ascent_m != null ? f.ascent_m : null,
-      descent_m: f.descent_m != null ? f.descent_m : null,
-      ele_min_m: f.ele_min_m != null ? f.ele_min_m : null,
-      ele_max_m: f.ele_max_m != null ? f.ele_max_m : null,
       temp_c: f.temp_c != null ? f.temp_c : null,
       avg_hr: f.avg_hr != null ? f.avg_hr : null,
       resting_hr: f.resting_hr != null ? f.resting_hr : null,
@@ -321,13 +280,11 @@
       cadence_spm: f.cadence_spm != null ? f.cadence_spm : null,
       rpe: f.rpe != null ? f.rpe : null,
       feel: f.feel || null,
-      conditions: (extra && extra.conditions) || null,
-      pack: (extra && extra.pack) || null,
       note: (extra && extra.note) || null
     }, extra && extra.override || {});
     a.laps = p.laps.map(l => ({
       n: l.n, distance_km: l.distance_km, time_s: l.time_s,
-      avg_hr: l.avg_hr, role: a.type === 'hike' ? 'main' : l.role
+      avg_hr: l.avg_hr, role: l.role
     }));
     return a;
   }
@@ -338,7 +295,7 @@
      "—" clears it. Typed fields are never touched by a paste — they came from
      you, not from a screenshot. */
 
-  const TYPED = ['name', 'source', 'conditions', 'pack', 'note'];
+  const TYPED = ['name', 'source', 'note'];
 
   function mergeInto(existing, p, opts) {
     opts = opts || {};
@@ -372,7 +329,7 @@
         [l.n, l.distance_km, l.time_s, l.avg_hr, l.role || 'main'].join(':')).join('|');
       out.laps = p.laps.map(l => ({
         n: l.n, distance_km: l.distance_km, time_s: l.time_s,
-        avg_hr: l.avg_hr, role: out.type === 'hike' ? 'main' : l.role
+        avg_hr: l.avg_hr, role: l.role
       }));
       /* compare content, not just count — a lap-only paste that adds heart rate
          to laps you already had is exactly the case this exists for */
@@ -425,58 +382,7 @@
   }
 
 
-  /* ---------- Body: a week of nights ---------- */
-
-  function toDays(p, existing, opts) {
-    opts = opts || {};
-    const by = {};
-    (existing || []).filter(a => a.type === 'day').forEach(d => { by[d.date] = d; });
-    return p.days.map(row => {
-      const prev = by[row.date];
-      const rec = Object.assign({}, prev || {}, {
-        type: 'day', date: row.date, source: 'tracked'
-      });
-      ['resting_hr', 'sleep_s', 'sleep_score'].forEach(k => {
-        if (row[k] != null) rec[k] = row[k];
-      });
-      rec.replaces = !!prev;
-      if (prev) rec.id = prev.id;
-      return rec;
-    });
-  }
-
-  function validateDays(p, existing, opts) {
-    opts = opts || {};
-    const today = opts.today || new Date().toISOString().slice(0, 10);
-    const flags = [];
-    const add = (level, msg) => flags.push({ level: level, msg: msg });
-
-    if (!p.days.length) { add('error', 'No day rows found in that paste.'); return flags; }
-
-    const seen = {};
-    p.days.forEach(r => {
-      if (r.date > today) add('error', r.date + ' is in the future.');
-      if (seen[r.date]) add('warn', r.date + ' appears twice in the paste.');
-      seen[r.date] = 1;
-      if (r.resting_hr != null && (r.resting_hr < 25 || r.resting_hr > 120))
-        add('error', 'Resting HR ' + r.resting_hr + ' on ' + r.date + ' is out of range.');
-      if (r.sleep_score != null && (r.sleep_score < 0 || r.sleep_score > 100))
-        add('error', 'Sleep score ' + r.sleep_score + ' on ' + r.date + ' is out of range.');
-      if (r.sleep_s != null && (r.sleep_s < 3600 || r.sleep_s > 16 * 3600))
-        add('warn', 'Sleep of ' + Math.round(r.sleep_s / 3600) + 'h on ' + r.date + ' looks wrong.');
-    });
-
-    const already = (existing || []).filter(a => a.type === 'day' && seen[a.date]).length;
-    if (already) add('info', already + ' of these nights already logged — saving replaces them.');
-
-    if (p.yearInferred) add('info', 'No year on these dates — assumed ' + p.yearInferred + '.');
-    p.warnings.forEach(w => add('warn', w));
-    p.unmatched.forEach(u => add('info', 'Row not recognised: ' + u.slice(0, 48)));
-    return flags;
-  }
-
   const api = { parse, validate, inferType, toActivity, mergeInto, validateMerge, TYPED,
-                toDays, validateDays,
                 _duration: duration, _sleep: sleepDuration, _date: date };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Parse = api;

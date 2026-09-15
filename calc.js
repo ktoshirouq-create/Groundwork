@@ -183,49 +183,6 @@
     return out;
   }
 
-  /* ---------- hiking ---------- */
-
-  function stopShare(act) {
-    if (!act || act.moving_s == null || !act.elapsed_s) return null;
-    return (act.elapsed_s - act.moving_s) / act.elapsed_s;
-  }
-
-  function hrIsReliable(act, cfg) {
-    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    const ss = stopShare(act);
-    if (ss == null) return true;
-    return ss <= c.STOP_SHARE_LIMIT;
-  }
-
-  function ascentRate(act) {
-    if (!act || act.ascent_m == null) return null;
-    const secs = act.moving_s != null ? act.moving_s : act.elapsed_s;
-    if (!secs) return null;
-    return {
-      value: Math.round(act.ascent_m / (secs / 3600)),
-      basis: act.moving_s != null ? 'moving' : 'elapsed'
-    };
-  }
-
-  function naismithHours(distance_km, ascent_m, cfg) {
-    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    if (distance_km == null || ascent_m == null) return null;
-    return distance_km / c.FLAT_KMH + ascent_m / c.ASCENT_MH;
-  }
-
-  function terrainFactor(act, cfg) {
-    if (!act || act.moving_s == null) return null;
-    const n = naismithHours(act.distance_km, act.ascent_m, cfg);
-    if (!n) return null;
-    return Math.round((act.moving_s / 3600) / n * 100) / 100;
-  }
-
-  function flatEquivKm(act, cfg) {
-    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    if (!act || act.distance_km == null || act.ascent_m == null) return null;
-    return Math.round((act.distance_km + act.ascent_m * c.FLAT_KMH / c.ASCENT_MH) * 100) / 100;
-  }
-
   /* ---------- baselines ---------- */
 
   function comparable(act, all) {
@@ -475,7 +432,7 @@
     return span + (cur ? ' \u00b7 THIS WEEK' : '');
   }
 
-  const ACTIVITY_TYPES = ['run', 'hike'];
+  const ACTIVITY_TYPES = ['run'];
 
   function summarize(acts) {
     const real = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
@@ -596,67 +553,30 @@
     return segs;
   }
 
-  /* Cumulative ascent through a calendar year, as {frac, total} points. */
-  function cumulativeAscent(acts, year) {
-    const inYear = acts
-      .filter(a => a.type === 'hike' && a.date.slice(0, 4) === String(year) && a.ascent_m != null)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const start = new Date(year + '-01-01T12:00:00');
-    const days = ((+year % 4 === 0 && +year % 100 !== 0) || +year % 400 === 0) ? 366 : 365;
-    let total = 0;
-    const pts = [{ frac: 0, total: 0, date: year + '-01-01' }];
-    inYear.forEach(a => {
-      total += a.ascent_m;
-      const doy = Math.round((new Date(a.date + 'T12:00:00') - start) / 86400000);
-      pts.push({ frac: doy / days, total: total, date: a.date });
-    });
-    return pts;
-  }
-
-  function ascentRateSeries(acts) {
-    return acts
-      .filter(a => a.type === 'hike' && a.source === 'tracked')
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(a => { const r = ascentRate(a); return r ? { date: a.date, value: r.value } : null; })
-      .filter(Boolean);
-  }
-
   /* ---------- records ---------- */
 
-  function records(acts, cfg, type) {
-    const mine = acts.filter(a => a.type === type);
+  function records(acts, cfg) {
+    const mine = acts.filter(a => a.type === 'run');
     if (!mine.length) return [];
     const out = [];
     const by = (arr, f, dir) => arr.filter(a => f(a) != null)
       .sort((a, b) => dir === 'min' ? f(a) - f(b) : f(b) - f(a))[0];
 
-    if (type === 'run') {
-      const best = by(mine, a => aerobicPace(a, cfg), 'min');
-      if (best) out.push({ label: 'Best aerobic pace', value: fmtPace(aerobicPace(best, cfg)), unit: '/km', when: best.date, id: best.id });
-      const far = by(mine, a => a.distance_km, 'max');
-      if (far) out.push({ label: 'Longest run', value: far.distance_km.toFixed(2), unit: 'km', when: far.date, id: far.id });
-      const weeks = {};
-      mine.forEach(a => { const k = weekStart(a.date); weeks[k] = (weeks[k] || 0) + (a.distance_km || 0); });
-      const bw = Object.keys(weeks).sort((a, b) => weeks[b] - weeks[a])[0];
-      if (bw) out.push({ label: 'Biggest week', value: weeks[bw].toFixed(1), unit: 'km', when: bw });
-      const drifts = mine.map(a => ({ a: a, d: drift(a.laps) })).filter(x => x.d != null);
-      if (drifts.length) {
-        const low = drifts.sort((x, y) => x.d - y.d)[0];
-        out.push({ label: 'Lowest drift', value: (low.d >= 0 ? '+' : '') + low.d, unit: 'bpm',
-          when: drifts.length > 1 ? low.a.date : 'only one measured', id: low.a.id });
-      }
-    } else {
-      const high = by(mine, a => a.ascent_m, 'max');
-      if (high) out.push({ label: 'Biggest day', value: high.ascent_m, unit: 'm', when: high.date, id: high.id });
-      const rate = by(mine, a => { const r = ascentRate(a); return r && r.value; }, 'max');
-      if (rate) out.push({ label: 'Fastest climb', value: ascentRate(rate).value, unit: 'm/h', when: rate.date, id: rate.id });
-      const months = {};
-      mine.forEach(a => { if (a.ascent_m == null) return;
-        const k = a.date.slice(0, 7); months[k] = (months[k] || 0) + a.ascent_m; });
-      const bm = Object.keys(months).sort((a, b) => months[b] - months[a])[0];
-      if (bm) out.push({ label: 'Biggest month', value: months[bm], unit: 'm', when: bm });
-      const tf = by(mine, a => terrainFactor(a, cfg), 'min');
-      if (tf) out.push({ label: 'Best terrain factor', value: terrainFactor(tf, cfg).toFixed(2), unit: '', when: tf.date, id: tf.id });
+    const best = by(mine, a => aerobicPace(a, cfg), 'min');
+    if (best) out.push({ label: 'Best aerobic pace', value: fmtPace(aerobicPace(best, cfg)),
+      unit: '/km', when: best.date, id: best.id });
+    const far = by(mine, a => a.distance_km, 'max');
+    if (far) out.push({ label: 'Longest run', value: far.distance_km.toFixed(2),
+      unit: 'km', when: far.date, id: far.id });
+    const weeks = {};
+    mine.forEach(a => { const k = weekStart(a.date); weeks[k] = (weeks[k] || 0) + (a.distance_km || 0); });
+    const bw = Object.keys(weeks).sort((a, b) => weeks[b] - weeks[a])[0];
+    if (bw) out.push({ label: 'Biggest week', value: weeks[bw].toFixed(1), unit: 'km', when: bw });
+    const drifts = mine.map(a => ({ a: a, d: drift(a.laps) })).filter(x => x.d != null);
+    if (drifts.length) {
+      const low = drifts.sort((x, y) => x.d - y.d)[0];
+      out.push({ label: 'Lowest drift', value: (low.d >= 0 ? '+' : '') + low.d, unit: 'bpm',
+        when: drifts.length > 1 ? low.a.date : 'only one measured', id: low.a.id });
     }
     return out;
   }
@@ -674,28 +594,6 @@
     if (dir !== 'flat' && betterWhen) tone = (dir === betterWhen) ? 'good' : 'bad';
     else if (dir !== 'flat') tone = 'neutral';
     return { diff: diff, pct: pct, dir: dir, tone: tone };
-  }
-
-  /* ---------- resting heart rate ---------- */
-
-  /* 90-day rolling median. This is what the Karvonen anchor follows. */
-  function restingBaseline(acts, asOf) {
-    const end = asOf || new Date().toISOString().slice(0, 10);
-    const start = new Date(end + 'T12:00:00');
-    start.setDate(start.getDate() - 90);
-    const from = start.toISOString().slice(0, 10);
-    const vals = restingSeries(acts).filter(p => p.date >= from && p.date <= end).map(p => p.value);
-    return vals.length >= 3 ? median(vals) : null;
-  }
-
-  /* The anchor only moves on a shift of 2 bpm or more, so aerobic pace never
-     drifts for reasons that have nothing to do with fitness. */
-  function suggestedRestingAnchor(acts, cfg, asOf) {
-    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    const b = restingBaseline(acts, asOf);
-    if (b == null) return null;
-    const rounded = Math.round(b);
-    return Math.abs(rounded - c.resting_hr) >= 2 ? rounded : null;
   }
 
   /* ---------- spread and significance ---------- */
@@ -798,43 +696,16 @@
     return acts.filter(a => a.date >= from && a.date <= end);
   }
 
-  function readRows(acts, cfg, type, asOf) {
+  function readRows(acts, cfg, asOf) {
     const count = arr => (arr || []).length;
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    const year = type === 'body'
-      ? lastYear(acts, asOf)
-      : lastYear(acts.filter(a => a.type === type || a.type === 'test'), asOf);
-    const mine = year.filter(a => a.type === type).sort((a, b) => a.date.localeCompare(b.date));
+    const year = lastYear(acts.filter(a => a.type === 'run' || a.type === 'test'), asOf);
+    const mine = year.filter(a => a.type === 'run').sort((a, b) => a.date.localeCompare(b.date));
     const rows = [];
 
     const push = (o) => rows.push(o);
 
-    if (type === 'body') {
-      const rs = restingSeries(year).map(p => p.value);
-      const rw = windowStats(rs);
-      push({ n: rs.length, key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
-             now: rw.now, prev: rw.prev, need: rw.need, betterWhen: 'down',
-             range: rangeOf(rs), band: rs.length >= 3 ? rangeOf(rs.slice(-3)) : null,
-             bestLabel: 'lowest' });
-
-      const sl = sleepSeries(year).map(p => p.value);
-      const sw = windowStats(sl);
-      push({ n: sl.length, key: 'sleep', label: 'Sleep', unit: 'median', kind: 'sleep',
-             now: sw.now, prev: sw.prev, need: sw.need, betterWhen: 'up',
-             range: rangeOf(sl), band: sl.length >= 3 ? rangeOf(sl.slice(-3)) : null,
-             worstLabel: 'shortest', bestLabel: 'longest' });
-
-      const sc = dayRecords(year).filter(d => d.sleep_score != null)
-        .sort((a, b) => a.date.localeCompare(b.date)).map(d => d.sleep_score);
-      const cw2 = windowStats(sc);
-      push({ n: sc.length, key: 'score', label: 'Sleep score', unit: '', kind: 'int',
-             now: cw2.now, prev: cw2.prev, need: cw2.need, betterWhen: 'up',
-             range: rangeOf(sc), band: sc.length >= 3 ? rangeOf(sc.slice(-3)) : null,
-             bestLabel: 'best' });
-      return rows;
-    }
-
-    if (type === 'run') {
+    {
       const paces = mine.filter(a => a.avg_hr != null).map(a => aerobicPace(a, c)).filter(v => v != null);
       const w = windowStats(paces);
       push({ n: count(paces), key: 'pace', label: 'Aerobic pace', unit: '/km', kind: 'pace',
@@ -889,121 +760,9 @@
              range: rangeOf(vols), band: vols.length >= 3 ? rangeOf(vols.slice(-3)) : null,
              worstLabel: 'least', bestLabel: 'most',
              note: 'Shown without a verdict \u2014 a short week may be the right week.' });
-    } else {
-      const rates = mine.map(a => { const r = ascentRate(a); return r && r.value; }).filter(Boolean);
-      const rw = windowStats(rates);
-      push({ n: count(rates), key: 'rate', label: 'Ascent rate', unit: 'm/h', kind: 'int',
-             now: rw.now, prev: rw.prev, need: rw.need, betterWhen: 'up',
-             range: rangeOf(rates), band: rates.length >= 3 ? rangeOf(rates.slice(-3)) : null,
-             bestLabel: 'fastest' });
-
-      const tfs = mine.map(a => terrainFactor(a, c)).filter(v => v != null);
-      const tw = windowStats(tfs);
-      push({ n: count(tfs), key: 'tf', label: 'Terrain factor', unit: '', kind: 'factor',
-             now: tw.now, prev: tw.prev, need: tw.need, betterWhen: 'down',
-             range: rangeOf(tfs), band: tfs.length >= 3 ? rangeOf(tfs.slice(-3)) : null,
-             bestLabel: 'best' });
-
-      const months = {};
-      mine.forEach(a => { if (a.ascent_m == null) return;
-        const k = a.date.slice(0, 7); months[k] = (months[k] || 0) + a.ascent_m; });
-      const ms = Object.keys(months).sort().map(k => months[k]);
-      const mw = windowStats(ms, 2);
-      push({ n: count(ms), key: 'ascent', label: 'Monthly ascent', unit: 'm', kind: 'int',
-             now: mw.now, prev: mw.prev, need: mw.need, betterWhen: null,
-             range: rangeOf(ms), band: null, bestLabel: 'most' });
     }
-
-    /* resting HR applies to both activity worlds */
-    const rest = restingSeries(year).map(p => p.value);
-    const restW = windowStats(rest);
-    push({ n: count(rest), key: 'resting', label: 'Resting HR', unit: 'bpm', kind: 'int',
-           now: restW.now, prev: restW.prev, need: restW.need, betterWhen: 'down',
-           range: rangeOf(rest), band: rest.length >= 3 ? rangeOf(rest.slice(-3)) : null,
-           bestLabel: 'lowest', missingNote: 'add Resting HR to the paste' });
 
     return rows;
-  }
-
-  /* ---------- Body: one record per day ----------
-     Sundays bring a week of nights from the 7d screens; a run may also carry a
-     resting HR read the same morning. Both are kept, and a day record always
-     wins for its own date so a single morning can never hold two figures. */
-
-  /* HRV was here. Garmin's weekly screen only reports a 7-day average, and
-     daily entry would be seven transcriptions for the field with the least
-     signal — resting HR covers overlapping physiology for free. The field stays
-     on the record so it can come back without a migration. */
-  const DAY_FIELDS = ['resting_hr', 'sleep_s', 'sleep_score'];
-
-  function dayRecords(acts) {
-    return acts.filter(a => a.type === 'day');
-  }
-
-  /* One value per date. Day records first, run-day readings only where no day
-     record covers that date. */
-  function restingByDate(acts) {
-    const out = {};
-    acts.filter(a => a.type !== 'day' && a.type !== 'test' && a.resting_hr != null)
-        .forEach(a => { out[a.date] = { value: a.resting_hr, from: 'activity' }; });
-    dayRecords(acts).filter(d => d.resting_hr != null)
-        .forEach(d => { out[d.date] = { value: d.resting_hr, from: 'day' }; });
-    return out;
-  }
-
-  function restingSeries(acts) {
-    const by = restingByDate(acts);
-    return Object.keys(by).sort().map(d => ({ date: d, value: by[d].value, from: by[d].from }));
-  }
-
-  /* Dates where a day record and an activity disagree by 3 bpm or more. */
-  function restingConflicts(acts, threshold) {
-    const t = threshold || 3;
-    const byAct = {};
-    acts.filter(a => a.type !== 'day' && a.type !== 'test' && a.resting_hr != null)
-        .forEach(a => { byAct[a.date] = a.resting_hr; });
-    return dayRecords(acts).filter(d => d.resting_hr != null && byAct[d.date] != null &&
-      Math.abs(d.resting_hr - byAct[d.date]) >= t)
-      .map(d => ({ date: d.date, day: d.resting_hr, activity: byAct[d.date] }));
-  }
-
-  function sleepSeries(acts) {
-    return dayRecords(acts).filter(d => d.sleep_s != null)
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(d => ({ date: d.date, value: d.sleep_s, score: d.sleep_score }));
-  }
-
-  function dayFor(acts, date) {
-    return dayRecords(acts).find(d => d.date === date) || null;
-  }
-
-  /* Dates carrying an activity, for the training ticks under the RHR chart. */
-  function trainedDates(acts) {
-    const s = {};
-    acts.filter(a => a.type === 'run' || a.type === 'hike').forEach(a => { s[a.date] = 1; });
-    return s;
-  }
-
-  /* Two groups, compared only when the gap clears twice their spread — the same
-     bar the noticing card uses. Never draws a trend line through fifteen dots. */
-  function splitCompare(a, b, betterWhen) {
-    if (!a || !b || a.length < 3 || b.length < 3) {
-      return { enough: false, needA: Math.max(0, 3 - (a || []).length),
-               needB: Math.max(0, 3 - (b || []).length) };
-    }
-    const ma = median(a), mb = median(b);
-    /* Spread must be measured WITHIN each group. Pooling the raw values would
-       fold the very difference we're testing into the yardstick, and a real gap
-       would inflate the spread enough to hide itself. */
-    const dev = a.map(v => Math.abs(v - ma)).concat(b.map(v => Math.abs(v - mb)));
-    const sd = Math.max(median(dev) * 1.4826, 1e-9);
-    const diff = ma - mb;
-    return {
-      enough: true, a: ma, b: mb, n: a.length, m: b.length,
-      diff: diff, ratio: Math.abs(diff) / sd, spread: sd,
-      significant: Math.abs(diff) / sd >= 2,
-      betterWhen: betterWhen
-    };
   }
 
   /* ---------- load ----------
@@ -1075,21 +834,13 @@
     zoneBounds, zoneOf,
     paceSecPerKm, fmtPace, fmtDuration,
     fullLaps, mainLaps, hasLapHr, weightedHr,
-    aerobicCost, drift, timeInZone,
-    stopShare, hrIsReliable, ascentRate,
-    naismithHours, terrainFactor, flatEquivKm,
-    comparable, median,
+    aerobicCost, drift, timeInZone, comparable, median,
     isoWeek, weekStart, dayIndex, daysBetween, splitOnGaps,
     ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
-    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, cumulativeAscent, ascentRateSeries,
-    records, delta, driftNeeds,
-    load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT,
-    restingSeries, restingBaseline, suggestedRestingAnchor,
-    DAY_FIELDS, dayRecords, restingByDate, restingConflicts,
-    sleepSeries, dayFor, trainedDates, splitCompare,
-    spread, noticed, NOTICE,
+    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds,
+    load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };

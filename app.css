@@ -41,25 +41,11 @@ body {
 :focus-visible { outline: 2px solid var(--z2); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
-/* ---------- the world switch — the first thing on screen ---------- */
-
-#worlds {
-  position: sticky; top: 0; z-index: 20;
-  display: flex; background: var(--bg);
-  border-bottom: 1px solid var(--line);
-  padding-top: env(safe-area-inset-top);
+/* the world switch used to carry the top inset; the page carries it now */
+#main {
   max-width: 520px; margin: 0 auto;
+  padding: calc(15px + env(safe-area-inset-top)) 15px 24px;
 }
-#worlds button {
-  flex: 1; padding: 15px 0 12px; background: none; border: none;
-  border-bottom: 2px solid transparent; margin-bottom: -1px;
-  font-family: var(--f-display); font-size: 15px; font-weight: 600;
-  letter-spacing: .02em; color: var(--dim); cursor: pointer;
-}
-#worlds button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink); }
-#worlds[hidden] { display: none; }
-
-#main { max-width: 520px; margin: 0 auto; padding: 15px 15px 24px; }
 .view[hidden] { display: none; }
 
 /* ---------- add button ---------- */
@@ -143,7 +129,7 @@ body {
 }
 
 /* level 3 — row label, deliberately quieter than a section head */
-.rd-name, .g-l, .hstat .l {
+.rd-name, .g-l {
   font-family: var(--f-data); letter-spacing: .12em;
   text-transform: uppercase; color: var(--mute);
 }
@@ -211,32 +197,6 @@ body {
 .blk.unknown { background: var(--stop); }
 .rmeta { font-family: var(--f-data); font-size: 10px; color: var(--mute); margin: 6px 0 0 54px; }
 .rmeta b { color: var(--z3); font-weight: 500; }
-
-/* ---------- hike cards: spacious ---------- */
-
-.hcard { padding: 15px 0 14px; border-top: 1px solid var(--line); cursor: pointer; }
-.hcard:last-of-type { border-bottom: 1px solid var(--line); }
-.hdate { font-family: var(--f-data); font-size: 9.5px; letter-spacing: .12em; color: var(--dim); }
-.hname { font-family: var(--f-display); font-size: 17px; font-weight: 600; letter-spacing: -.015em; margin-top: 3px; }
-.hstats { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
-.hstat .l { font-family: var(--f-data); font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
-.hstat .v { font-family: var(--f-display); font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; margin-top: 1px; }
-.hstat .v s { text-decoration: none; font-size: 10px; color: var(--mute); font-weight: 500; margin-left: 1px; }
-
-/* height is time, colour is zone */
-.vbars { display: flex; gap: 3px; align-items: flex-end; height: 88px; margin-top: 12px; }
-.vbars.mini { height: 26px; gap: 2px; }
-.vcol { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 3px; }
-.vbar { border-radius: 2px 2px 0 0; }
-.vlbl { font-family: var(--f-data); font-size: 9.5px; text-align: center; margin-bottom: 4px; color: var(--mute); }
-
-/* ---------- scatter ---------- */
-
-.scat { position: relative; height: 150px; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 10px; }
-.pt { position: absolute; width: 10px; height: 10px; border-radius: 50%; margin: -5px 0 0 -5px; background: var(--z2); }
-.pt.on { background: var(--z3); width: 12px; height: 12px; margin: -6px 0 0 -6px; }
-.plbl { position: absolute; font-family: var(--f-data); font-size: 8.5px; color: var(--mute); white-space: nowrap; transform: translate(9px,-5px); }
-.ax { display: flex; justify-content: space-between; font-family: var(--f-data); font-size: 9px; color: var(--dim); margin-top: 4px; }
 
 /* ---------- callouts and flags ---------- */
 
@@ -467,23 +427,6 @@ label > span {
 @keyframes gw-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
 @keyframes gw-fade  { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-/* ---------- Body ---------- */
-
-.sleep { display: flex; align-items: flex-end; gap: 5px; height: 92px; margin-top: 12px; }
-.sb { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 3px; }
-.sb .v { border-radius: 3px 3px 0 0; background: var(--z1); }
-.sb.low .v { background: var(--z3); }
-
-.drow { display: flex; align-items: baseline; gap: 9px; padding: 10px 0; border-top: 1px solid var(--line); }
-.drow:last-of-type { border-bottom: 1px solid var(--line); }
-.dday { font-family: var(--f-data); font-size: 10px; color: var(--mute); width: 48px; flex: none; }
-.dmain { flex: 1; font-size: 12.5px; min-width: 0; }
-.dmain span { color: var(--mute); font-size: 11px; }
-.dfig { font-family: var(--f-data); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.dfig.up { color: var(--bad); }
-
-.legend .sw.tick { background: var(--z3); width: 2px; height: 9px; vertical-align: -1px; }
-
 /* the y-axis labels must stay inside the plot at both ends */
 .yax span:first-child { transform: none; }
 .yax span:last-child { transform: translateY(-100%); }
@@ -519,19 +462,5 @@ label > span {
 .clear[hidden] { display: none; }
 .clear:active { background: var(--dim); }
 
-/* ---------- sleep bars, with a median to read them against ---------- */
-
-.sleepwrap { position: relative; margin-top: 12px; }
-.sleepwrap .sleep { margin-top: 0; }
-.sleepmed {
-  position: absolute; left: 0; right: 0; height: 0;
-  border-top: 1px dashed var(--ink); opacity: .55; z-index: 2; pointer-events: none;
-}
-.sleepmed span {
-  position: absolute; right: 0; top: -13px;
-  font-family: var(--f-data); font-size: 8.5px; color: var(--ink);
-  background: var(--bg); padding: 0 3px; opacity: .9;
-}
-
-/* the last list on a screen must clear the add button at rest, not just while scrolling */
-.drow:last-of-type { margin-bottom: 34px; }
+/* the last row must clear the add button at rest, not just while scrolling */
+.rrow:last-of-type { margin-bottom: 34px; }

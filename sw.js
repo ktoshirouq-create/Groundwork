@@ -1,9 +1,11 @@
 /* Bump CACHE on every JS or CSS change. */
-const CACHE = 'groundwork-v14';
+const CACHE = 'groundwork-v15';
 const ASSETS = [
   './', './index.html', './app.css',
   './calc.js', './store.js', './parse.js', './ui.js',
-  './manifest.json'
+  './manifest.json',
+  './icon-192.png', './icon-512.png',
+  './icon-maskable-192.png', './icon-maskable-512.png'
 ];
 
 self.addEventListener('install', e => {

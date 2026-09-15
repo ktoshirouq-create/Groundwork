@@ -1,19 +1,14 @@
 /* ui.js — rendering and interaction. All maths lives in calc.js.
-   Two worlds (run, hike) share this shell but differ in scope, hero and density. */
+   Runs only. Hiking and Body were stripped out; the full version is in the
+   repo history if either needs to come back. */
 
 (function () {
   'use strict';
 
-  const WORLD = {
-    run:  { scopes: ['week', 'month', 'year'], scope: 'week', ribbon: 12, metric: 'distance' },
-    hike: { scopes: ['month', 'year', 'all'],  scope: 'year', ribbon: 12, metric: 'ascent' },
-    /* Body holds one record per day, so it has no ribbon and no activity list.
-       No week scope either — seven points show nothing. */
-    body: { scopes: ['month', 'year'], scope: 'month', ribbon: 0, metric: null }
-  };
+  const SCOPES = ['week', 'month', 'year'];
+  const RIBBON = 12;
 
-  let world = 'run';
-  let scope = WORLD.run.scope;
+  let scope = 'week';
   let periodKey = null;      // null = current period
   let draft = null;
 
@@ -26,7 +21,9 @@
   const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
   const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-  const today = () => new Date().toISOString().slice(0, 10);
+  /* The clock, behind one function. Tests pin it so they don't rot the moment
+     the calendar moves past the fixture dates. */
+  const today = () => window.__GW_TODAY || new Date().toISOString().slice(0, 10);
 
   function fmtDate(d) {
     const [y, m, day] = d.split('-');
@@ -34,8 +31,7 @@
     return (+y === new Date().getFullYear()) ? base : base + ' ' + y;
   }
 
-  function acts() { return Store.all().filter(a => a.type === world || a.type === 'test'); }
-  function real() { return Store.all().filter(a => a.type === world); }
+  function real() { return Store.all().filter(a => a.type === 'run'); }
   function key() { return periodKey || Calc.periodKey(today(), scope); }
 
   /* ---------------------------------------------------------------- pieces */
@@ -47,19 +43,6 @@
       const z = Calc.zoneOf(l.avg_hr, bounds);
       return '<div class="blk' + (z ? '' : ' unknown') + '" style="background:' +
         (z ? ZCOL[z] : 'var(--stop)') + '"></div>';
-    }).join('') + '</div>';
-  }
-
-  function vbarsHTML(a, bounds, mini) {
-    const laps = Calc.fullLaps(a.laps);
-    if (!laps.length) return '';
-    const max = Math.max.apply(null, laps.map(l => l.time_s));
-    return '<div class="vbars' + (mini ? ' mini' : '') + '">' + laps.map(l => {
-      const z = Calc.zoneOf(l.avg_hr, bounds);
-      return '<div class="vcol">' +
-        (mini ? '' : '<div class="vlbl">' + Math.round(l.time_s / 60) + '</div>') +
-        '<div class="vbar" style="background:' + (z ? ZCOL[z] : 'var(--stop)') +
-        '; height:' + Math.max(6, Math.round(l.time_s / max * 100)) + '%"></div></div>';
     }).join('') + '</div>';
   }
 
@@ -99,11 +82,10 @@
   }
 
   function ribbonHTML() {
-    const wc = WORLD[world];
     if (scope === 'all') return '';
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const bars = Calc.ribbon(real(), scope, key(), wc.ribbon, wc.metric);
+    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'distance');
     const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
 
     const label = b => {
@@ -274,9 +256,9 @@
     return '<span class="delta ' + cls + '">' + arrow + ' ' + text + '</span>';
   }
 
-  function recordsHTML(type) {
+  function recordsHTML() {
     const cfg = Store.config();
-    const recs = Calc.records(Store.all(), cfg, type);
+    const recs = Calc.records(Store.all(), cfg);
     if (!recs.length) return '';
     return '<div class="sec"><span>Records</span><span>all time</span></div>' +
       '<div class="recs">' + recs.map(r =>
@@ -372,9 +354,9 @@
     return betterWhen === 'down' ? (1 - t) * 100 : t * 100;
   }
 
-  function readHTML(type) {
+  function readHTML() {
     const cfg = Store.config();
-    const rows = Calc.readRows(Store.all(), cfg, type, today());
+    const rows = Calc.readRows(Store.all(), cfg, today());
     if (!rows.length) return '';
 
     const live = rows.filter(r => r.range && r.now != null);
@@ -486,10 +468,8 @@
   /* ------------------------------------------------------------------ home */
 
   function renderHome() {
-    if (world === 'body') return renderBody();
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const wc = WORLD[world];
     const k = key();
     const mine = real();
     const inP = mine.filter(a => Calc.inPeriod(a, scope, k));
@@ -499,12 +479,12 @@
       '<div class="sub">' + esc(Calc.periodSpan(k, scope, today())) + '</div>' +
       '</div><button class="corner" data-go="settings">SETUP</button></div>';
 
-    h += '<div class="bar">' + wc.scopes.map(s =>
+    h += '<div class="bar">' + SCOPES.map(s =>
       '<button class="chip" data-scope="' + s + '" aria-pressed="' + (s === scope) + '">' +
       (s === 'all' ? 'All time' : s[0].toUpperCase() + s.slice(1)) + '</button>').join('') + '</div>';
 
     if (!mine.length) {
-      h += '<div class="empty-state">No ' + (world === 'run' ? 'runs' : 'hikes') + ' logged yet.<br>' +
+      h += '<div class="empty-state">No runs logged yet.<br>' +
         'Tap + to paste your first one.</div>';
       el('view-home').innerHTML = h;
       bind();
@@ -512,19 +492,18 @@
     }
 
     h += ribbonHTML();
-    if (world === 'run') h += weekStripHTML();
+    h += weekStripHTML();
     h += '<div class="rule"></div>';
-    h += (world === 'run' ? runHero(inP, mine, bounds) : hikeHero(inP, mine, k));
+    h += runHero(inP, mine, bounds);
 
     /* the list */
     const sorted = inP.slice().sort((a, b) => b.date.localeCompare(a.date));
     const isNow = Calc.periodKey(today(), scope) === k;
     h += '<div class="sec"><span>' + (isNow ? 'This ' + scope : esc(Calc.periodLabel(k, scope, today()))) +
-      '</span><span>' + (sorted.length ? sorted.length + (world === 'run' ? ' runs' : ' days out') : '') +
-      '</span></div>';
+      '</span><span>' + (sorted.length ? sorted.length + ' runs' : '') + '</span></div>';
 
     if (!sorted.length) {
-      const noun = world === 'run' ? 'run' : 'hike';
+      const noun = 'run';
       const prev = Calc.previousWithData(mine, scope, k);
       const next = prev ? null : Calc.nextWithData(mine, scope, k);
       let line = '';
@@ -533,14 +512,12 @@
         ' lands in ' + esc(Calc.periodLabel(next, scope, today())) + '.';
       h += '<div class="empty-state">Nothing here.' + line + '</div>';
     } else {
-      h += sorted.map(a => world === 'run' ? runRow(a, bounds) : hikeCard(a, bounds)).join('');
+      h += sorted.map(a => runRow(a, bounds)).join('');
     }
 
     el('view-home').innerHTML = h;
     bind();
   }
-
-  /* ---------- run world ---------- */
 
   function runHero(inP, mine, bounds) {
     const cfg = Store.config();
@@ -628,7 +605,7 @@
     h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
     h += '</div>';
 
-    h += readHTML('run');
+    h += readHTML();
     h += loadHTML();
     h += zoneShareHTML();
     return h;
@@ -659,305 +636,6 @@
       '<div class="rmeta">' + meta.join(' \u00b7 ') + '</div></div>';
   }
 
-  /* ---------- hike world ---------- */
-
-  function hikeHero(inP, mine, k) {
-    const cfg = Store.config();
-    const s = Calc.summarize(inP);
-    const label = scope === 'all' ? 'ever' : scope === 'year' ? 'this year' : 'this month';
-    const yr = scope === 'year' ? key() : today().slice(0, 4);
-
-    let h = '<div class="eyebrow">Climbed ' + label + '</div>';
-    if (s.ascent_m != null) {
-      /* against the same point last year */
-      const thisYr = Calc.cumulativeAscent(mine, yr);
-      const lastYr = Calc.cumulativeAscent(mine, String(+yr - 1));
-      const nowFrac = scope === 'year' && yr === today().slice(0, 4)
-        ? thisYr[thisYr.length - 1].frac : 1;
-      let atSamePoint = null;
-      if (lastYr.length > 1) {
-        atSamePoint = 0;
-        lastYr.forEach(p => { if (p.frac <= nowFrac) atSamePoint = p.total; });
-      }
-      const d = scope === 'year' && atSamePoint ? Calc.delta(s.ascent_m, atSamePoint, 'up') : null;
-
-      h += '<div class="hero"><div class="hnum">' +
-        s.ascent_m.toLocaleString('en-GB').replace(/,/g, '\u2009') +
-        '</div><div class="hunit">metres up</div>' + deltaHTML(d) + '</div>';
-      h += '<div class="hsub">Across <b>' + s.days + ' day' + (s.days === 1 ? '' : 's') + ' out</b>' +
-        (atSamePoint ? '. At this point in ' + (+yr - 1) + ' you were on ' +
-          atSamePoint.toLocaleString('en-GB').replace(/,/g, '\u2009') + ' m' : '') +
-        (s.ascent_of < s.count ? ', from ' + s.ascent_of + ' of ' + s.count + ' with ascent recorded' : '') +
-        '.</div>';
-
-      /* the racing curve */
-      if (scope === 'year' && thisYr.length > 1) {
-        const segs = [];
-        if (lastYr.length > 1) segs.push(lastYr.map(p => ({ value: p.total, frac: p.frac })));
-        segs.push(thisYr.map(p => ({ value: p.total, frac: p.frac })));
-        h += cumulativeChart(segs, yr);
-        h += '<div class="est">Cumulative, so it only ever climbs. The dashed line is today \u2014 ' +
-          'everything to its right is what ' + (+yr - 1) + ' still had left.</div>';
-      }
-    } else {
-      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">metres up</div></div>' +
-        '<div class="hsub">No ascent recorded for this period.</div>';
-    }
-
-    const prevKey = Calc.previousWithData(real(), scope, k);
-    const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
-    const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
-
-    const factors = inP.map(a => Calc.terrainFactor(a, cfg)).filter(x => x != null);
-    const rates = inP.map(a => { const r = Calc.ascentRate(a); return r && r.value; }).filter(Boolean);
-    const biggest = inP.filter(a => a.ascent_m != null).sort((a, b) => b.ascent_m - a.ascent_m)[0];
-    const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
-
-    h += '<div style="margin-top:15px">';
-    h += cmp('Days out', String(s.days) + ' ' + (prev ? dd(s.days, prev.days, null) : ''),
-      prev ? vs + ' ' + prev.days : '');
-    h += cmp('Time on feet', Calc.fmtDuration(s.moving_s), prev ? vs + ' ' + Calc.fmtDuration(prev.moving_s) : '');
-    h += cmp('Distance', s.distance_km.toFixed(1) + ' km', prev ? vs + ' ' + prev.distance_km.toFixed(1) : '');
-    if (biggest) h += cmp('Biggest day', biggest.ascent_m + ' m', esc(biggest.name));
-    if (rates.length) h += cmp('Ascent rate', Math.round(Calc.median(rates)) + ' m/h', 'median of ' + rates.length);
-    h += cmp('Terrain factor',
-      factors.length ? Calc.median(factors).toFixed(2) : '\u2014',
-      factors.length ? 'median of ' + factors.length :
-        Calc.confidence(factors.length, 'terrain_trend').need + ' more tracked hikes');
-    h += '</div>';
-
-    /* ascent rate — the fitness line under the accumulation */
-    const rs = Calc.ascentRateSeries(mine);
-    if (rs.length >= 3) {
-      h += '<div class="sec"><span>Ascent rate</span><span>' + rs.length + ' tracked</span></div>';
-      h += lineChart([rs], { height: 76, format: v => Math.round(v) + ' m/h',
-        label: 'Ascent rate in metres per hour across tracked hikes.' });
-      h += '<div class="est">Metres per hour, hike by hike. Slower to move than aerobic pace \u2014 ' +
-        'it needs a season, not a month.</div>';
-    }
-
-    if (inP.length >= 3) h += scatterHTML(inP);
-    h += readHTML('hike');
-    return h;
-  }
-
-  /* Cumulative ascent, this year against last, plotted on day-of-year. */
-  function cumulativeChart(segs, yr) {
-    const all = [].concat.apply([], segs).map(p => p.value);
-    const hi = Math.max.apply(null, all) * 1.12 || 1;
-    const yOf = v => 100 - v / hi * 100;
-    const todayFrac = (new Date() - new Date(yr + '-01-01T12:00:00')) / 86400000 /
-      (((+yr % 4 === 0 && +yr % 100 !== 0) || +yr % 400 === 0) ? 366 : 365);
-
-    let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="150" role="img" ' +
-      'aria-label="Cumulative ascent through the year, ' + yr + ' against ' + (+yr - 1) + '.">';
-    svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
-      '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
-      '<line x1="0" y1="98" x2="100" y2="98"/></g>';
-    if (todayFrac > 0 && todayFrac < 1) {
-      const x = (todayFrac * 100).toFixed(1);
-      svg += '<line x1="' + x + '" y1="0" x2="' + x + '" y2="100" stroke="#55686D" ' +
-        'stroke-width=".4" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>';
-    }
-    segs.forEach((seg, i) => {
-      const last = i === segs.length - 1;
-      const pts = seg.map(p => (p.frac * 100).toFixed(2) + ',' + yOf(p.value).toFixed(2)).join(' ');
-      svg += '<polyline fill="none" stroke="' + (last ? 'var(--z2)' : 'var(--mute)') +
-        '" stroke-width="' + (last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke" points="' + pts + '"/>';
-      if (last) {
-        const e = seg[seg.length - 1];
-        svg += '<circle cx="' + (e.frac * 100).toFixed(2) + '" cy="' + yOf(e.value).toFixed(2) +
-          '" r="2.4" fill="var(--z2)"/>';
-      }
-    });
-    svg += '</svg>';
-
-    const axis = [0.02, 0.5].map(t =>
-      '<span style="top:' + (t * 100) + '%">' + Math.round(hi * (1 - t)).toLocaleString('en-GB').replace(/,/g, '\u2009') + ' m</span>'
-    ).join('');
-
-    return '<div class="chart"><div class="cwrap">' + svg +
-      '<div class="yax" style="height:150px">' + axis + '</div></div>' +
-      '<div class="xax"><span>JAN</span><span>TODAY</span><span>DEC</span></div>' +
-      '<div class="legend"><span><i style="background:var(--mute)"></i>' + (+yr - 1) + '</span>' +
-      '<span><i style="background:var(--z2)"></i>' + yr + '</span></div></div>';
-  }
-
-  function scatterHTML(list) {
-    const pts = list.filter(a => a.ascent_m != null && a.distance_km != null);
-    if (pts.length < 3) return '';
-    const maxD = Math.max.apply(null, pts.map(a => a.distance_km)) * 1.15;
-    const maxA = Math.max.apply(null, pts.map(a => a.ascent_m)) * 1.15;
-    const newest = pts.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-    let h = '<div class="sec"><span>Shape of your hiking</span><span>' + pts.length + ' hikes</span></div>';
-    h += '<div class="scat">' + pts.map(a => {
-      const x = (a.distance_km / maxD * 100).toFixed(1);
-      const y = (100 - a.ascent_m / maxA * 100).toFixed(1);
-      const on = a.id === newest.id;
-      return '<div class="pt' + (on ? ' on' : '') + '" style="left:' + x + '%; top:' + y + '%"></div>' +
-        (on ? '<div class="plbl" style="left:' + x + '%; top:' + y + '%">' + esc(a.name) + '</div>' : '');
-    }).join('') + '</div>';
-    h += '<div class="ax"><span>0 km</span><span>distance \u2192</span><span>' +
-      Math.round(maxD) + ' km</span></div>';
-    h += '<div class="est">Up the side is ascent. Top-left is short and steep; far right is long and rolling.</div>';
-    return h;
-  }
-
-  function hikeNameSize(a) {
-    const all = Store.all().filter(x => x.type === 'hike' && x.ascent_m != null).map(x => x.ascent_m);
-    const top = all.length ? Math.max.apply(null, all) : null;
-    const scale = (top && a.ascent_m != null) ? Math.min(1, a.ascent_m / top) : 0.5;
-    return (15.5 + scale * 3.5).toFixed(1);
-  }
-
-  function hikeCard(a, bounds) {
-    const cfg = Store.config();
-    const r = Calc.ascentRate(a);
-    const tf = Calc.terrainFactor(a, cfg);
-    const st = [];
-    if (a.ascent_m != null) st.push(['Ascent', a.ascent_m, 'm']);
-    st.push(['Distance', a.distance_km.toFixed(1), 'km']);
-    st.push(['On feet', Calc.fmtDuration(a.moving_s != null ? a.moving_s : a.elapsed_s), '']);
-    if (r) st.push(['Rate', r.value, 'm/h']);
-    if (tf != null) st.push(['Factor', tf.toFixed(2), '']);
-
-    return '<div class="hcard" data-id="' + esc(a.id) + '">' +
-      '<div class="hdate">' + DAYS[Calc.dayIndex(a.date)] + ' ' + fmtDate(a.date).toUpperCase() +
-      ' \u00b7 ' + a.source.toUpperCase() + '</div>' +
-      '<div class="hname" style="font-size:' + hikeNameSize(a) + 'px">' + esc(a.name) + '</div>' +
-      '<div class="hstats">' + st.map(x =>
-        '<div class="hstat"><div class="l">' + x[0] + '</div><div class="v">' + x[1] +
-        (x[2] ? '<s>' + x[2] + '</s>' : '') + '</div></div>').join('') + '</div>' +
-      vbarsHTML(a, bounds, true) + '</div>';
-  }
-
-
-  /* ------------------------------------------------------------------ body */
-
-  function fmtSleep(sec) {
-    if (sec == null) return '\u2014';
-    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-    return h + ':' + String(m).padStart(2, '0');
-  }
-
-  function renderBody() {
-    const cfg = Store.config();
-    const all = Store.all();
-    const k = key();
-    const rest = Calc.restingSeries(all);
-    const inP = rest.filter(p => Calc.inPeriod({ date: p.date, type: 'day' }, scope, k));
-
-    let h = '<div class="top"><div>' +
-      '<div class="ttl">' + esc(Calc.periodLabel(k, scope, today())) + '</div>' +
-      '<div class="sub">' + esc(Calc.periodSpan(k, scope, today())) + '</div>' +
-      '</div><button class="corner" data-go="settings">SETUP</button></div>';
-    h += '<div class="bar">' + WORLD.body.scopes.map(sc =>
-      '<button class="chip" data-scope="' + sc + '" aria-pressed="' + (sc === scope) + '">' +
-      sc[0].toUpperCase() + sc.slice(1) + '</button>').join('') + '</div>';
-
-    if (!rest.length) {
-      h += '<div class="empty-state">Nothing logged yet.<br>' +
-        'Tap + and paste a week from the Heart Rate and Sleep screens.</div>';
-      el('view-home').innerHTML = h;
-      bind();
-      return;
-    }
-
-    h += '<div class="rule"></div>';
-
-    /* hero: today against the rolling baseline */
-    const base = Calc.restingBaseline(all, today());
-    const latest = rest[rest.length - 1];
-    h += '<div class="eyebrow">Resting heart rate</div>';
-    h += '<div class="hero"><div class="hnum">' + latest.value + '</div><div class="hunit">bpm</div>' +
-      (base != null ? deltaHTML(Calc.delta(latest.value, base, 'down'),
-        x => Math.abs(Math.round(x.diff)) + '') : '') + '</div>';
-    h += '<div class="hsub">' + (base == null
-      ? 'Baseline opens once three nights are logged.'
-      : (latest.value === Math.round(base)
-          ? 'At your baseline of <b>' + Math.round(base) + '</b>, the 90-day median.'
-          : Math.abs(latest.value - Math.round(base)) + ' ' +
-            (latest.value > base ? 'above' : 'below') + ' your baseline of <b>' +
-            Math.round(base) + '</b>, the 90-day median.')) + '</div>';
-
-    /* resting HR, with training days ticked underneath */
-    if (inP.length >= 4) {
-      const trained = Calc.trainedDates(all);
-      h += lineChart([inP], {
-        invert: true, mark: base, height: 140,
-        format: v => Math.round(v),
-        anchorLabels: ['lowest', 'highest'],
-        label: 'Resting heart rate with the 90-day median and the days you trained.',
-        ticksBelow: inP.map((p, i) => trained[p.date] ? i / (inP.length - 1) * 100 : null).filter(v => v != null),
-        xax: [fmtDate(inP[0].date).toUpperCase(), fmtDate(latest.date).toUpperCase()],
-        legend: '<span><i class="sw now"></i>resting HR</span>' +
-                (base != null ? '<span><i class="sw mark"></i>90-day median</span>' : '') +
-                '<span><i class="sw tick"></i>you trained</span>'
-      }) || '';
-
-      /* the finding worth surfacing: raised for days after training */
-      const runs = inP.filter(p => trained[p.date]);
-      const above = inP.filter(p => base != null && p.value - base >= 4);
-      if (above.length >= 3) h += '<div class="callout warn">Resting heart rate sat <b>4 or more above baseline</b> on ' +
-        above.length + ' of these days. That is the pattern to watch when a block starts biting.</div>';
-    } else {
-      h += '<div class="est">The trend opens once four days are logged in this period.</div>';
-    }
-
-    /* sleep */
-    const sleep = Calc.sleepSeries(all)
-      .filter(p => Calc.inPeriod({ date: p.date, type: 'day' }, scope, k));
-    if (sleep.length >= 3) {
-      const med = Calc.median(sleep.map(p => p.value));
-      const max = Math.max.apply(null, sleep.map(p => p.value)) * 1.06;
-      h += '<div class="sec"><span>Sleep</span><span>' + fmtSleep(med) + ' median</span></div>';
-      /* a bare row of bars has no scale — the median rule gives it one */
-      h += '<div class="sleepwrap">' +
-        '<div class="sleepmed" style="bottom:' + (med / max * 100).toFixed(1) + '%">' +
-        '<span>' + fmtSleep(med) + '</span></div>' +
-        '<div class="sleep">' + sleep.map(p =>
-          '<div class="sb' + (p.value < 6 * 3600 ? ' low' : '') + '" title="' + p.date + ' \u00b7 ' +
-          fmtSleep(p.value) + '"><div class="v" style="height:' +
-          Math.max(6, Math.round(p.value / max * 100)) + '%"></div></div>').join('') + '</div></div>';
-      const short = sleep.filter(p => p.value < 6 * 3600).length;
-      h += '<div class="est">Amber is a night under six hours \u2014 ' + short + ' of ' +
-        sleep.length + '. The line is your own median, not eight hours.</div>';
-    }
-
-    h += readHTML('body');
-
-    /* recent nights */
-    const days = Calc.dayRecords(all)
-      .filter(d => Calc.inPeriod(d, scope, k))
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .slice(0, 8);
-    if (days.length) {
-      h += '<div class="sec"><span>Recent nights</span><span>' + days.length + ' shown</span></div>';
-      h += days.map(d => {
-        const hi = base != null && d.resting_hr != null && d.resting_hr - base >= 4;
-        const bits = [];
-        if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
-        if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
-        return '<div class="drow" data-id="' + esc(d.id) + '">' +
-          '<div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' + (+d.date.slice(8)) + '</div>' +
-          '<div class="dmain">' + esc(bits.join(' \u00b7 ')) + '</div>' +
-          '<div class="dfig' + (hi ? ' up' : '') + '">' +
-          (d.resting_hr == null ? '\u2014' : d.resting_hr) + '</div></div>';
-      }).join('');
-    }
-
-    /* conflicts, if a run and a day record disagree */
-    const conf = Calc.restingConflicts(all);
-    if (conf.length) {
-      h += '<div class="flag"><i>!</i><div>' + conf.length + ' day' + (conf.length === 1 ? '' : 's') +
-        ' where a run and a night record disagree by 3 bpm or more. The night record is used.</div></div>';
-    }
-
-    el('view-home').innerHTML = h;
-    bind();
-  }
-
-
   /* ---------------------------------------------------------------- detail */
 
   function renderDetail(id) {
@@ -969,29 +647,21 @@
     const d = Calc.drift(a.laps);
     const tz = Calc.timeInZone(a.laps, bounds);
     const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
-    const ss = Calc.stopShare(a);
-    const hrOk = Calc.hrIsReliable(a, cfg);
 
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
     h += '<div class="ttl">' + esc(a.name) + '</div>';
     const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase(), a.source.toUpperCase()];
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
-    if (a.conditions) sub.push(String(a.conditions).toUpperCase());
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
 
-    if (a.type === 'run') h += noticedHTML(a);
+    h += noticedHTML(a);
 
     if (Calc.fullLaps(a.laps).length) {
       h += '<div class="sec"><span>Per kilometre</span></div>';
-      if (a.type === 'hike') {
-        h += vbarsHTML(a, bounds, false);
-        h += '<div class="est">Height is minutes for that kilometre; colour is heart-rate zone. Tall and amber is the climb.</div>';
-      } else {
-        h += stripHTML(a, bounds, true);
-        h += '<div class="rmeta" style="margin-left:0">' +
-          Calc.fullLaps(a.laps).map(l => l.avg_hr == null ? '\u2014' : l.avg_hr).join(' \u00b7 ') + '</div>';
-      }
+      h += stripHTML(a, bounds, true);
+      h += '<div class="rmeta" style="margin-left:0">' +
+        Calc.fullLaps(a.laps).map(l => l.avg_hr == null ? '\u2014' : l.avg_hr).join(' \u00b7 ') + '</div>';
     }
 
     if (d != null) {
@@ -1007,39 +677,17 @@
     }
 
     h += '<div class="rule"></div><div class="grid2">';
-    if (a.type === 'run') {
-      const ap = Calc.aerobicPace(a, cfg);
-      h += metric('Aerobic pace', ap != null ? Calc.fmtPace(ap) : '\u2014', ap != null ? '/km' : '',
-        ap != null ? 'at ' + Calc.refHr(cfg) + ' bpm' + (c.basis === 'gap' ? ', gradient-adjusted' : '')
-                   : 'needs heart rate', ap == null);
-      h += metric('Pace', Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)), '/km',
-        a.gap_pace_s != null ? 'GAP ' + Calc.fmtPace(a.gap_pace_s) : '');
-    } else {
-      const ar = Calc.ascentRate(a);
-      h += metric('Ascent', a.ascent_m == null ? '\u2014' : a.ascent_m, a.ascent_m == null ? '' : 'm',
-        a.descent_m != null ? 'descent ' + a.descent_m + ' m' : '', a.ascent_m == null);
-      h += metric('Ascent rate', ar ? ar.value : '\u2014', ar ? 'm/h' : '',
-        ar ? 'on ' + ar.basis + ' time' : 'needs ascent', !ar);
-    }
+    const ap = Calc.aerobicPace(a, cfg);
+    h += metric('Aerobic pace', ap != null ? Calc.fmtPace(ap) : '\u2014', ap != null ? '/km' : '',
+      ap != null ? 'at ' + Calc.refHr(cfg) + ' bpm' + (c && c.basis === 'gap' ? ', gradient-adjusted' : '')
+                 : 'needs heart rate', ap == null);
+    h += metric('Pace', Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)), '/km',
+      a.gap_pace_s != null ? 'GAP ' + Calc.fmtPace(a.gap_pace_s) : '');
     h += metric('Distance', a.distance_km.toFixed(2), 'km',
-      a.type === 'hike' && Calc.flatEquivKm(a) != null ? 'flat-equiv ' + Calc.flatEquivKm(a) + ' km' : '');
-    h += metric('Time', Calc.fmtDuration(a.elapsed_s), '',
-      a.moving_s != null ? 'moving ' + Calc.fmtDuration(a.moving_s) : '');
+      a.ascent_m != null ? '+' + a.ascent_m + ' m' : '');
+    h += metric('Time', Calc.fmtDuration(a.elapsed_s), '', '');
     h += metric('Avg HR', a.avg_hr == null ? '\u2014' : a.avg_hr, a.avg_hr == null ? '' : 'bpm',
-      ss != null && !hrOk ? Math.round(ss * 100) + '% stopped' : '', a.avg_hr == null);
-    if (a.type === 'hike') {
-      const tf = Calc.terrainFactor(a, cfg);
-      h += metric('Terrain factor', tf == null ? '\u2014' : tf.toFixed(2), '',
-        tf == null ? 'needs moving time' :
-          'Naismith ' + Calc.fmtDuration(Calc.naismithHours(a.distance_km, a.ascent_m, cfg) * 3600), tf == null);
-    }
-    if (a.resting_hr != null) {
-      const bl = Calc.restingBaseline(Store.all(), a.date);
-      h += metric('Resting HR', a.resting_hr, 'bpm',
-        bl != null ? (a.resting_hr === Math.round(bl) ? 'at baseline'
-          : Math.abs(a.resting_hr - bl).toFixed(0) + ' ' + (a.resting_hr > bl ? 'above' : 'below') + ' baseline')
-        : '');
-    }
+      '', a.avg_hr == null);
     const ld = Calc.load(a, cfg);
     if (ld != null) {
       const sr = Calc.sessionRpe(a);
@@ -1047,9 +695,6 @@
     }
     if (a.cadence_spm != null) h += metric('Cadence', a.cadence_spm, 'spm', '');
     h += '</div>';
-
-    if (ss != null && !hrOk) h += '<div class="callout warn">Average heart rate is dragged down by <b>' +
-      Calc.fmtDuration(a.elapsed_s - a.moving_s) + ' stopped</b>. Shown here, kept out of trends.</div>';
 
     if (zTotal) {
       h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(zTotal) + '</span></div>';
@@ -1080,24 +725,10 @@
     draft = null;
     /* Inference is right nearly always, so it leads. The explicit chips are the
        override, not the norm. */
-    let type = 'auto';
-    const LABEL = { run: 'Add a run', hike: 'Add a hike', body: 'Add nights', auto: 'Add' };
-    const PLACEHOLDER = {
-      run: 'Paste the run table from Gemini.',
-      hike: 'Paste the hike table from Gemini.',
-      body: 'Paste a week of nights — one row per day.',
-      auto: 'Paste straight from Gemini. Runs, hikes and nights are all recognised.'
-    };
-
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
-    h += '<div class="ttl" id="imp-title">' + LABEL[type] + '</div>';
-    h += '<div class="bar">' +
-      ['auto', 'run', 'hike', 'body'].map(t =>
-        '<button class="chip" data-imp="' + t + '" aria-pressed="' + (t === type) + '">' +
-        (t === 'auto' ? 'Decide for me' : t === 'body' ? 'Body' : t[0].toUpperCase() + t.slice(1)) +
-        '</button>').join('') + '</div>';
+    h += '<div class="ttl">Add a run</div>';
     h += '<label><span>Paste the table</span><div class="pastewrap">' +
-      '<textarea id="paste" placeholder="' + esc(PLACEHOLDER[type]) + '"></textarea>' +
+      '<textarea id="paste" placeholder="Paste straight from Gemini. Pipes, commas and tabs all work."></textarea>' +
       '<button class="clear" id="paste-clear" type="button" aria-label="Clear">\u2715</button>' +
       '</div></label>';
     h += '<button class="btn" id="read">Read it</button>';
@@ -1107,12 +738,9 @@
 
     $('#view-import [data-back]').onclick = () => go('home');
 
-    const syncClear = () => {
-      el('paste-clear').hidden = !el('paste').value.length;
-    };
+    const syncClear = () => { el('paste-clear').hidden = !el('paste').value.length; };
     el('paste').addEventListener('input', syncClear);
     syncClear();
-
     el('paste-clear').onclick = () => {
       el('paste').value = '';
       el('preview').innerHTML = '';
@@ -1121,45 +749,12 @@
       el('paste').focus();
     };
 
-    document.querySelectorAll('#view-import [data-imp]').forEach(b => {
-      b.onclick = () => {
-        type = b.dataset.imp;
-        document.querySelectorAll('#view-import [data-imp]').forEach(x =>
-          x.setAttribute('aria-pressed', String(x === b)));
-        el('imp-title').textContent = LABEL[type];
-        el('paste').placeholder = PLACEHOLDER[type];
-        /* whatever is in the box was for the old type — clear it rather than
-           let a run table sit under a Body heading */
-        el('paste').value = '';
-        el('preview').innerHTML = '';
-        draft = null;
-        syncClear();
-      };
-    });
-
     el('read').onclick = () => {
       const text = el('paste').value;
       if (!text.trim()) return;
       const p = Parse.parse(text, { today: today() });
-
-      /* day rows are unambiguous — they can only be nights */
-      if (p.days.length) { renderDayPreview(p); return; }
-      if (type === 'body') {
-        el('preview').innerHTML = '<div class="flag error"><i>\u2715</i><div>' +
-          'No day rows in that paste. A week of nights needs one row per date.</div></div>';
-        return;
-      }
-
-      const guess = Parse.inferType(p);
-      const t = type === 'auto' ? (guess || 'run') : type;
-      draft = Parse.toActivity(p, { type: t });
-      const flags = Parse.validate(p, { today: today() });
-      /* an explicit choice always wins, but the app says when it disagrees */
-      if (type !== 'auto' && guess && guess !== type) {
-        flags.unshift({ level: 'warn', msg: 'You chose ' + type + ', but this reads as a ' +
-          guess + '. Saving it as ' + type + '.' });
-      }
-      renderPreview(p, flags);
+      draft = Parse.toActivity(p, {});
+      renderPreview(p, Parse.validate(p, { today: today() }));
     };
   }
 
@@ -1172,20 +767,13 @@
 
     let h = '<div class="rule"></div><div class="eyebrow">Check it</div>';
     h += '<label><span>Name</span><input type="text" id="p-name" value="' + esc(a.name || '') + '" placeholder="Where was it?"></label>';
-    if (a.type === 'hike') {
-      h += '<div class="field-row">' +
-        '<label><span>Conditions</span><input type="text" id="p-cond" placeholder="dry, warm"></label>' +
-        '<label><span>Pack</span><select id="p-pack"><option value="">\u2014</option>' +
-        '<option value="day">Day</option><option value="overnight">Overnight</option>' +
-        '<option value="multi">Multi-day</option></select></label></div>';
-    }
     h += '<label><span>Source</span><select id="p-source">' +
       '<option value="tracked">Tracked on the watch</option>' +
       '<option value="typed">Not recorded \u2014 typed from memory</option></select></label>';
 
     if (Calc.fullLaps(a.laps).length) {
       h += '<div style="margin-top:16px">' +
-        (a.type === 'hike' ? vbarsHTML(a, bounds, false) : stripHTML(a, bounds, true)) + '</div>';
+        stripHTML(a, bounds, true) + '</div>';
       h += '<div class="rmeta" style="margin-left:0">' + Calc.fullLaps(a.laps).length + ' laps' +
         ((a.laps || []).length > Calc.fullLaps(a.laps).length ? ' + partial' : '') +
         (d != null ? ' \u00b7 <b>drift ' + (d >= 0 ? '+' : '') + d + ' bpm</b>' : '') + '</div>';
@@ -1213,7 +801,7 @@
       '". Saving will replace it.</div></div>';
 
     h += '<button class="btn" id="save"' + (errors.length ? ' disabled' : '') + '>' +
-      (dup ? 'Replace' : 'Save') + ' ' + a.type + '</button>';
+      (dup ? 'Replace' : 'Save') + ' run' + '</button>';
     if (errors.length) h += '<div class="small muted" style="margin-top:9px">Fix the paste and read it again.</div>';
 
     el('preview').innerHTML = h;
@@ -1222,11 +810,6 @@
     if (save && !errors.length) save.onclick = () => {
       draft.name = el('p-name').value.trim();
       draft.source = el('p-source').value;
-      if (a.type === 'hike') {
-        const cd = el('p-cond'), pk = el('p-pack');
-        draft.conditions = cd && cd.value.trim() ? cd.value.trim() : null;
-        draft.pack = pk && pk.value ? pk.value : null;
-      }
       if (dup) {
         draft.id = dup.id;
         draft.created_at = dup.created_at;
@@ -1238,83 +821,9 @@
       }
       const act = Model.make(draft);
       Store.put(act).then(() => {
-        setWorld(act.type);
         periodKey = Calc.periodKey(act.date, scope);
         go('detail', act.id);
       });
-    };
-  }
-
-
-  function renderDayPreview(p) {
-    const all = Store.all();
-    const recs = Parse.toDays(p, all, { today: today() });
-    const flags = Parse.validateDays(p, all, { today: today() });
-    const errors = flags.filter(f => f.level === 'error');
-
-    /* On a first import there is no baseline yet, so compare against the median
-       of the week being pasted — otherwise the preview says nothing at exactly
-       the moment the anchor is being established. */
-    const prior = Calc.restingBaseline(all, today());
-    const incoming = Calc.median(recs.map(r => r.resting_hr).filter(v => v != null));
-    const base = prior != null ? prior : incoming;
-    const firstEver = prior == null;
-
-    let h = '<div class="rule"></div><div class="sec"><span>Check it</span><span>' +
-      recs.length + ' night' + (recs.length === 1 ? '' : 's') + '</span></div>';
-    h += '<div class="small muted" style="margin-bottom:10px">Day rows are read as nights ' +
-      'whichever type is selected.</div>';
-
-    recs.slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(d => {
-      const hi = base != null && d.resting_hr != null && d.resting_hr - base >= 4;
-      const bits = [];
-      if (d.sleep_s != null) bits.push(fmtSleep(d.sleep_s));
-      if (d.sleep_score != null) bits.push('score ' + d.sleep_score);
-      h += '<div class="drow"><div class="dday">' + DAYS[Calc.dayIndex(d.date)] + ' ' +
-        (+d.date.slice(8)) + '</div><div class="dmain">' + esc(bits.join(' \u00b7 ')) +
-        (d.replaces ? ' <span>\u00b7 replaces</span>' : '') + '</div>' +
-        '<div class="dfig' + (hi ? ' up' : '') + '">' +
-        (d.resting_hr == null ? '\u2014' : d.resting_hr) + '</div></div>';
-    });
-
-    if (!errors.length) h += '<div class="flag ok"><i>\u2713</i><div>Nothing inconsistent found.</div></div>';
-    flags.forEach(f => {
-      const cls = f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '';
-      const mark = f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!';
-      h += '<div class="flag ' + cls + '"><i>' + mark + '</i><div>' + esc(f.msg) + '</div></div>';
-    });
-
-    /* say what this does to the anchor, before it happens */
-    const after = Calc.restingBaseline(
-      all.filter(a => !recs.some(r => r.id && r.id === a.id))
-         .concat(recs.map(r => Object.assign({}, r, { id: r.id || 'x' + r.date }))), today());
-    if (after != null) {
-      const anchor = Store.config().resting_hr;
-      const moves = Math.abs(Math.round(after) - anchor) >= 2;
-      h += '<div class="flag info"><i>i</i><div>' +
-        (firstEver
-          ? '90-day median will be set to ' + Math.round(after) + '.'
-          : '90-day median moves ' + Math.round(prior) + ' \u2192 ' + Math.round(after) + '.') +
-        (moves
-          ? ' Your zone anchor follows, ' + anchor + ' \u2192 ' + Math.round(after) + '.'
-          : ' Your zones don\u2019t change.') + '</div></div>';
-    }
-
-    h += '<button class="btn" id="save-days"' + (errors.length ? ' disabled' : '') + '>Save ' +
-      recs.length + ' night' + (recs.length === 1 ? '' : 's') + '</button>';
-    el('preview').innerHTML = h;
-
-    const btn = el('save-days');
-    if (btn && !errors.length) btn.onclick = () => {
-      const chain = recs.reduce((prom, r) =>
-        prom.then(() => Store.put(Model.make(r))), Promise.resolve());
-      chain.then(() => {
-        /* the anchor follows the rolling median, but only on a real shift */
-        const next = Calc.suggestedRestingAnchor(Store.all(), Store.config(), today());
-        return next != null
-          ? Store.setConfig({ resting_hr: next, resting_hr_dated: today() })
-          : null;
-      }).then(() => { setWorld('body'); go('home'); });
     };
   }
 
@@ -1360,9 +869,19 @@
     h += '<button class="btn" id="c-save">Save settings</button>';
 
     const n = Store.all().length;
-    h += '<div class="sec"><span>Your data</span></div>';
+    const last = Store.config().exported_at || null;
+    const days = last ? Calc.daysBetween(last.slice(0, 10), today()) : null;
+    h += '<div class="sec"><span>Your data</span><span>' +
+      (days == null ? 'never exported' : days + ' days since export') + '</span></div>';
     h += '<div class="small muted">' + n + ' activit' + (n === 1 ? 'y' : 'ies') +
-      ', on this device only. Export now and then.</div>';
+      ', on this device only.</div>';
+    if (days == null || days >= 14) {
+      h += '<div class="flag"><i>!</i><div>' +
+        (days == null
+          ? 'Nothing has been exported yet. Android can clear a browser\u2019s storage without warning.'
+          : 'Last export was ' + days + ' days ago.') +
+        ' Add the app to your home screen too \u2014 installed apps are far less likely to be cleared.</div></div>';
+    }
     h += '<button class="btn ghost" id="c-export">Export everything</button>';
     h += '<label class="filebtn btn ghost" for="c-import" style="margin-top:8px">Import a backup' +
       '<input id="c-import" type="file" accept="application/json"></label>';
@@ -1385,6 +904,7 @@
       link.href = url; link.download = 'groundwork-' + today() + '.json';
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      Store.setConfig({ exported_at: new Date().toISOString() }).then(renderSettings);
     };
 
     el('c-import').onchange = e => {
@@ -1403,24 +923,13 @@
 
   /* ------------------------------------------------------------ editing */
 
-  const FIELD_DEFS = {
-    run: [
-      ['date', 'Date', 'date'], ['name', 'Name', 'text'],
-      ['distance_km', 'Distance (km)', 'number'], ['elapsed_s', 'Time (m:ss)', 'duration'],
-      ['gap_pace_s', 'GAP pace (m:ss)', 'duration'], ['avg_hr', 'Avg HR', 'number'],
-      ['resting_hr', 'Resting HR', 'number'], ['cadence_spm', 'Cadence', 'number'],
-      ['ascent_m', 'Ascent (m)', 'number'], ['temp_c', 'Temperature', 'number'],
-      ['rpe', 'RPE', 'number'], ['feel', 'Feel', 'text']
-    ],
-    hike: [
-      ['date', 'Date', 'date'], ['name', 'Name', 'text'],
-      ['distance_km', 'Distance (km)', 'number'], ['elapsed_s', 'Elapsed (h:mm:ss)', 'duration'],
-      ['moving_s', 'Moving (h:mm:ss)', 'duration'], ['ascent_m', 'Ascent (m)', 'number'],
-      ['descent_m', 'Descent (m)', 'number'], ['avg_hr', 'Avg HR', 'number'],
-      ['resting_hr', 'Resting HR', 'number'], ['temp_c', 'Temperature', 'number'],
-      ['rpe', 'RPE', 'number'], ['conditions', 'Conditions', 'text']
-    ]
-  };
+  const FIELD_DEFS = [
+    ['date', 'Date', 'date'], ['name', 'Name', 'text'],
+    ['distance_km', 'Distance (km)', 'number'], ['elapsed_s', 'Time (m:ss)', 'duration'],
+    ['gap_pace_s', 'GAP pace (m:ss)', 'duration'], ['avg_hr', 'Avg HR', 'number'],
+    ['cadence_spm', 'Cadence', 'number'], ['ascent_m', 'Ascent (m)', 'number'],
+    ['temp_c', 'Temperature', 'number'], ['rpe', 'RPE', 'number'], ['feel', 'Feel', 'text']
+  ];
 
   function fieldValue(a, key, kind) {
     const v = a[key];
@@ -1440,7 +949,7 @@
   function renderEdit(id) {
     const a = Store.byId(id);
     if (!a) { go('home'); return; }
-    const defs = FIELD_DEFS[a.type] || FIELD_DEFS.run;
+    const defs = FIELD_DEFS;
 
     let h = '<div class="back" data-back="1">\u2190 Cancel</div>';
     h += '<div class="ttl">Edit</div><div class="sub">' + esc(a.name.toUpperCase()) + '</div>';
@@ -1455,12 +964,6 @@
       '<option value="tracked"' + (a.source === 'tracked' ? ' selected' : '') + '>Tracked on the watch</option>' +
       '<option value="typed"' + (a.source === 'typed' ? ' selected' : '') + '>Not recorded \u2014 typed</option>' +
       '</select></label>';
-    if (a.type === 'hike') {
-      h += '<label><span>Pack</span><select data-f="pack" data-kind="text">' +
-        ['', 'day', 'overnight', 'multi'].map(v =>
-          '<option value="' + v + '"' + (a.pack === (v || null) ? ' selected' : '') + '>' +
-          (v ? v[0].toUpperCase() + v.slice(1) : '\u2014') + '</option>').join('') + '</select></label>';
-    }
     h += '<label><span>Note</span><input type="text" data-f="note" data-kind="text" value="' +
       esc(a.note || '') + '"></label>';
 
@@ -1626,19 +1129,10 @@
     if (setup) setup.onclick = () => go('settings');
   }
 
-  function setWorld(w) {
-    world = w;
-    scope = WORLD[w].scope;
-    periodKey = null;
-    document.querySelectorAll('#worlds button').forEach(b =>
-      b.setAttribute('aria-pressed', String(b.dataset.world === w)));
-  }
-
   const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace'];
 
   function go(view, param) {
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
-    el('worlds').hidden = (view !== 'home');
     el('fab').hidden = (view !== 'home' && view !== 'detail');
     window.scrollTo(0, 0);
     if (view === 'home') renderHome();
@@ -1649,9 +1143,6 @@
     if (view === 'replace') renderReplace(param);
   }
 
-  document.querySelectorAll('#worlds button').forEach(b => {
-    b.onclick = () => { setWorld(b.dataset.world); go('home'); };
-  });
   el('fab').onclick = () => go('import');
 
   /* The add button floats over whatever row happens to be beneath it. Tuck it
@@ -1672,8 +1163,15 @@
     }, { passive: true });
   })();
 
-  Store.init().then(() => { setWorld('run'); go('home'); });
+  /* Android evicts localStorage from sites that aren't installed. Asking for
+     persistence is usually granted once the app is on the home screen, and it
+     is what stopped this data disappearing. */
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(function () {});
+  }
 
-  window.Groundwork = { go: go, setWorld: setWorld };
+  Store.init().then(() => go('home'));
+
+  window.Groundwork = { go: go };
 
 })();
