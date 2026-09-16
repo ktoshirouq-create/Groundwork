@@ -338,15 +338,18 @@
     return a;
   }
 
-  /* same type + date + distance within 50 m */
+  /* Same day, near enough the same run. Distance alone was too strict — a
+     re-paste where the figure rounded differently slipped through and landed
+     as a second copy — so a matching duration counts as well. */
   function findDuplicate(act, all) {
-    return all.find(a =>
-      a.id !== act.id &&
-      a.type === act.type &&
-      a.date === act.date &&
-      a.distance_km != null && act.distance_km != null &&
-      Math.abs(a.distance_km - act.distance_km) <= 0.05
-    ) || null;
+    return all.find(a => {
+      if (a.id === act.id || a.type !== act.type || a.date !== act.date) return false;
+      const dOk = a.distance_km != null && act.distance_km != null &&
+        Math.abs(a.distance_km - act.distance_km) <= Math.max(0.05, act.distance_km * 0.02);
+      const tOk = a.elapsed_s != null && act.elapsed_s != null &&
+        Math.abs(a.elapsed_s - act.elapsed_s) <= 60;
+      return dOk || tOk;
+    }) || null;
   }
 
   function migrate(bundle) {

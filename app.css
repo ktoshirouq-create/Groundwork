@@ -464,3 +464,24 @@ label > span {
 
 /* the last row must clear the add button at rest, not just while scrolling */
 .rrow:last-of-type { margin-bottom: 34px; }
+
+/* ---------- confirmation ---------- */
+
+#toast {
+  position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 14px);
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-left: 3px solid var(--z2);
+  border-radius: 9px; padding: 11px 15px;
+  font-family: var(--f-body); font-size: 13px; font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  opacity: 0; pointer-events: none; z-index: 40;
+  transition: opacity .18s, transform .18s cubic-bezier(.22,1,.36,1);
+  max-width: calc(100vw - 40px);
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+#toast.bad { border-left-color: var(--z4); }
+#toast.ok { border-left-color: var(--good); }
+
+/* a button mid-action must look busy, not broken */
+.btn[disabled] { opacity: .75; }

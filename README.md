@@ -134,6 +134,29 @@ disagree with it.
 
 Checked against real history: fires on 17 Nov 2025, silent on 1 Dec.
 
+## Feedback
+
+Every action confirms. Buttons go busy mid-flight, and a second tap while one
+is running does nothing — disabling alone doesn't stop a fast double-tap, so
+there's an in-flight flag behind it. A run once got added twice because saving
+completed in silence.
+
+Navigation writes to browser history, so Android's back button and edge-swipe
+go back a screen rather than leaving the app.
+
+## Duplicates
+
+Same type and date, and either the distance within 2% or the duration within a
+minute. Distance alone was too strict — a re-paste where Garmin rounded
+differently slipped through and landed as a second copy.
+
+## Against runs this length
+
+On the detail screen: where a run ranks among others within 20% of its
+distance, the median of the rest, and the best at that length. A pace means
+nothing until you know what it's relative to, and a 3 km and a 12 km are not
+the same job.
+
 ## Editing
 
 **Edit** — every field plus a lap table, validated exactly as an import is.

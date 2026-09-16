@@ -272,6 +272,50 @@
 
 
 
+
+  /* ------------------------------------------------------- feedback ----- */
+
+  /* A confirmation you can't miss. Actions used to complete in silence, which
+     is how a run got added twice. */
+  function toast(msg, tone) {
+    let t = el('toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'toast';
+      document.body.appendChild(t);
+    }
+    t.className = 'show' + (tone ? ' ' + tone : '');
+    t.textContent = msg;
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => { t.className = ''; }, 2600);
+  }
+
+  /* Runs an async action once: the button goes busy, and a second tap while
+     it's in flight does nothing. Disabling alone doesn't stop a fast
+     double-tap, so the in-flight flag is the real guard. */
+  function once(btn, busyLabel, fn) {
+    if (!btn) return;
+    btn.onclick = function () {
+      if (btn._busy) return;
+      btn._busy = true;
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = busyLabel;
+      /* call straight away rather than on a microtask — validation messages
+         should appear on the same tap, not a frame later */
+      let result;
+      try { result = fn(); }
+      catch (err) { toast(String(err && err.message || err), 'bad'); }
+      Promise.resolve(result)
+        .catch(err => { toast(String(err && err.message || err), 'bad'); })
+        .then(() => {
+          btn._busy = false;
+          if (document.body.contains(btn)) { btn.disabled = false; btn.textContent = label; }
+        });
+    };
+  }
+
+
   /* ------------------------------------------------------------ week strip */
 
   /* Seven days, height is load, colour is the zone that day mostly sat in.
@@ -636,6 +680,46 @@
       '<div class="rmeta">' + meta.join(' \u00b7 ') + '</div></div>';
   }
 
+
+  /* --------------------------------------------- against runs this length */
+
+  /* A pace means nothing until you know what it's relative to. Grouped by
+     distance within 20%, because a 3 km and a 12 km are not the same job. */
+  function bandHTML(a) {
+    const cfg = Store.config();
+    const mine = Calc.aerobicPace(a, cfg);
+    if (mine == null) return '';
+    const lo = a.distance_km * 0.8, hi = a.distance_km * 1.2;
+    const peers = Store.all()
+      .filter(x => x.type === 'run' && x.id !== a.id && x.avg_hr != null &&
+                   x.distance_km >= lo && x.distance_km <= hi)
+      .map(x => ({ act: x, pace: Calc.aerobicPace(x, cfg) }))
+      .filter(x => x.pace != null)
+      .sort((p, q) => p.pace - q.pace);
+    if (!peers.length) return '';
+
+    const all = peers.concat([{ act: a, pace: mine }]).sort((p, q) => p.pace - q.pace);
+    const rank = all.findIndex(x => x.act.id === a.id) + 1;
+    const med = Calc.median(peers.map(p => p.pace));
+    const d = Calc.delta(mine, med, 'down');
+
+    const ordinal = n => n === 1 ? 'Fastest' :
+      n + (n === 2 ? 'nd' : n === 3 ? 'rd' : n % 10 === 1 && n !== 11 ? 'st' :
+           n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th') + ' fastest';
+
+    let h = '<div class="sec"><span>Against runs this length</span><span>' +
+      lo.toFixed(1) + '\u2013' + hi.toFixed(1) + ' km</span></div>';
+    h += '<div class="cmp"><span class="k">' + ordinal(rank) + ' of ' + all.length +
+      '</span><span class="v">' + Calc.fmtPace(mine) +
+      (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</span></div>';
+    h += '<div class="cmp"><span class="k">Median of the rest</span><span class="v">' +
+      Calc.fmtPace(med) + '</span></div>';
+    if (all[0].act.id !== a.id) h += '<div class="cmp"><span class="k">Best at this length</span>' +
+      '<span class="v">' + Calc.fmtPace(all[0].pace) + '<s>' + fmtDate(all[0].act.date) + '</s></span></div>';
+    return h;
+  }
+
+
   /* ---------------------------------------------------------------- detail */
 
   function renderDetail(id) {
@@ -676,6 +760,8 @@
         ' \u2014 the opening one is dropped, and three are needed after that.</div>';
     }
 
+    h += bandHTML(a);
+
     h += '<div class="rule"></div><div class="grid2">';
     const ap = Calc.aerobicPace(a, cfg);
     h += metric('Aerobic pace', ap != null ? Calc.fmtPace(ap) : '\u2014', ap != null ? '/km' : '',
@@ -713,10 +799,10 @@
     $('#view-detail [data-back]').onclick = () => go('home');
     $('#view-detail [data-edit]').onclick = () => go('edit', a.id);
     $('#view-detail [data-replace]').onclick = () => go('replace', a.id);
-    $('#view-detail [data-delete]').onclick = () => {
+    once($('#view-detail [data-delete]'), 'Deleting\u2026', () => {
       if (!confirm('Delete "' + a.name + '"? This cannot be undone.')) return;
-      Store.remove(a.id).then(() => go('home'));
-    };
+      return Store.remove(a.id).then(() => { go('home'); toast('Deleted', 'ok'); });
+    });
   }
 
   /* ---------------------------------------------------------------- import */
@@ -807,7 +893,7 @@
     el('preview').innerHTML = h;
 
     const save = el('save');
-    if (save && !errors.length) save.onclick = () => {
+    if (save && !errors.length) once(save, dup ? 'Replacing\u2026' : 'Saving\u2026', () => {
       draft.name = el('p-name').value.trim();
       draft.source = el('p-source').value;
       if (dup) {
@@ -820,11 +906,12 @@
         });
       }
       const act = Model.make(draft);
-      Store.put(act).then(() => {
+      return Store.put(act).then(() => {
         periodKey = Calc.periodKey(act.date, scope);
         go('detail', act.id);
+        toast(dup ? 'Replaced' : 'Saved', 'ok');
       });
-    };
+    });
   }
 
 
@@ -914,27 +1001,28 @@
     el('view-settings').innerHTML = h;
     $('#view-settings [data-back]').onclick = () => go('home');
 
-    el('s-save').onclick = () => {
-      Store.configureSheets(el('s-url').value, el('s-token').value);
-      Store.pull().then(renderSettings);
-      renderSettings();
-    };
-    const push = el('s-push');
-    if (push) push.onclick = () => {
-      push.disabled = true;
-      push.textContent = 'Pushing\u2026';
-      Store.pushAll()
-        .then(count => { alert(count + ' activities sent to Sheets.'); renderSettings(); })
-        .catch(err => { alert('Could not push: ' + err.message); renderSettings(); });
-    };
+    once(el('s-save'), 'Connecting\u2026', () => {
+      const url = el('s-url').value.trim();
+      if (!url) { toast('Paste the /exec URL first', 'bad'); return; }
+      Store.configureSheets(url, el('s-token').value);
+      return Store.pull().then(res => {
+        renderSettings();
+        if (res && res.error) toast('Could not reach the sheet', 'bad');
+        else if (res && res.pushed != null) toast(res.pushed + ' runs sent to Sheets', 'ok');
+        else toast('Connected and in sync', 'ok');
+      });
+    });
+    once(el('s-push'), 'Pushing\u2026', () =>
+      Store.pushAll().then(count => {
+        renderSettings();
+        toast(count + ' activities sent to Sheets', 'ok');
+      }));
 
-    el('c-save').onclick = () => Store.setConfig({
+    once(el('c-save'), 'Saving\u2026', () => Store.setConfig({
       max_hr: +el('c-max').value,
       resting_hr: +el('c-rest').value,
-      resting_hr_dated: today(),
-      FLAT_KMH: +el('c-flat').value,
-      ASCENT_MH: +el('c-asc').value
-    }).then(renderSettings);
+      resting_hr_dated: today()
+    }).then(() => { renderSettings(); toast('Zones updated', 'ok'); }));
 
     el('c-export').onclick = () => {
       const blob = new Blob([Store.exportJSON()], { type: 'application/json' });
@@ -943,7 +1031,8 @@
       link.href = url; link.download = 'groundwork-' + today() + '.json';
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      Store.setConfig({ exported_at: new Date().toISOString() }).then(renderSettings);
+      Store.setConfig({ exported_at: new Date().toISOString() })
+        .then(() => { renderSettings(); toast('Exported', 'ok'); });
     };
 
     el('c-import').onchange = e => {
@@ -953,7 +1042,7 @@
       r.onload = () => {
         try {
           Store.importJSON(r.result).then(count => { alert(count + ' activities restored.'); go('home'); });
-        } catch (err) { alert('Could not read that file: ' + err.message); }
+        } catch (err) { toast('Could not read that file', 'bad'); }
       };
       r.readAsText(f);
     };
@@ -1025,7 +1114,7 @@
     el('view-edit').innerHTML = h;
     document.querySelectorAll('#view-edit [data-back]').forEach(b => b.onclick = () => go('detail', id));
 
-    el('e-save').onclick = () => {
+    once(el('e-save'), 'Saving\u2026', () => {
       const next = Object.assign({}, a);
       document.querySelectorAll('#view-edit [data-f]').forEach(inp => {
         next[inp.dataset.f] = parseField(inp.value, inp.dataset.kind);
@@ -1052,11 +1141,11 @@
         '<div class="flag ' + (f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '') + '">' +
         '<i>' + (f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!') + '</i><div>' +
         esc(f.msg) + '</div></div>').join('');
-      if (errors.length) return;
+      if (errors.length) { toast('Fix the highlighted fields', 'bad'); return; }
 
       next.updated_at = new Date().toISOString();
-      Store.put(next).then(() => go('detail', next.id));
-    };
+      return Store.put(next).then(() => { go('detail', next.id); toast('Saved', 'ok'); });
+    });
   }
 
   /* Same checks as an import, applied to a hand-edited record. */
@@ -1143,8 +1232,12 @@
       el('r-preview').innerHTML = ph;
 
       const save = el('r-save');
-      if (save && !save.disabled) save.onclick = () =>
-        Store.put(merged.activity).then(() => go('detail', id));
+      if (save && !save.disabled) once(save, 'Applying\u2026', () =>
+        Store.put(merged.activity).then(() => {
+          go('detail', id);
+          toast(merged.changes.length + ' change' +
+            (merged.changes.length === 1 ? '' : 's') + ' applied', 'ok');
+        }));
     };
   }
 
@@ -1170,7 +1263,11 @@
 
   const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace'];
 
-  function go(view, param) {
+  /* Navigation writes to browser history, so Android's back button and its
+     edge-swipe both go back a screen instead of leaving the app. */
+  let popping = false;
+
+  function render(view, param) {
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
     el('fab').hidden = (view !== 'home' && view !== 'detail');
     window.scrollTo(0, 0);
@@ -1181,6 +1278,22 @@
     if (view === 'edit') renderEdit(param);
     if (view === 'replace') renderReplace(param);
   }
+
+  function go(view, param, replace) {
+    const state = { view: view, param: param || null };
+    if (!popping) {
+      if (replace || !history.state) history.replaceState(state, '');
+      else history.pushState(state, '');
+    }
+    render(view, param);
+  }
+
+  window.addEventListener('popstate', function (e) {
+    const s = e.state || { view: 'home', param: null };
+    popping = true;
+    render(s.view, s.param);
+    popping = false;
+  });
 
   el('fab').onclick = () => go('import');
 
@@ -1210,7 +1323,7 @@
   }
 
   Store.init().then(() => {
-    go('home');
+    go('home', null, true);
     /* pull in the background — the screen is already usable from the cache */
     if (Store.sheetsConfigured()) {
       Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
