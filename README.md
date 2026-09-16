@@ -169,21 +169,32 @@ node tests/load.js          39 assertions — load, the week strip, the importer
 node tests/body.js          49 assertions — day records, the weekly paste, the anchor
 ```
 
-## Moving to Sheets
+## Sheets
 
-1. New Google Sheet, Extensions > Apps Script, paste `Code.gs`
+Local is the working copy — instant, offline, always readable. Sheets is the
+durable copy, and the whole point of it is that a browser clearing its storage
+no longer loses anything.
+
+**The rule that matters: a fetch from Sheets never deletes local data.** An
+empty sheet gets pushed to rather than copied from; an unreachable one leaves
+the phone alone and records the error. Both are tested.
+
+Writes go to both. When the network isn't there the local write still lands and
+the remote one queues; the queue flushes on the next load.
+
+A row present in both is resolved by `updated_at`, newest wins.
+
+### Connecting it
+
+1. New Google Sheet → Extensions → Apps Script → paste `Code.gs`
 2. Run `setup()` — creates the Activities, Laps and Config tabs
-3. Run `makeToken()` — copy the token it logs
-4. Deploy > New deployment > Web app, execute as **Me**, access **Anyone**
-5. In `store.js`, one line in `Store.init`:
+3. Run `makeToken()` if you want one — leave it and the endpoint is open to
+   anyone holding the URL
+4. Deploy → New deployment → Web app, execute as **Me**, access **Anyone**
+5. In the app: Setup → Sheets → paste the `/exec` URL and the token → Save and sync
 
-```js
-this.adapter = new SheetsAdapter('https://script.google.com/.../exec', 'TOKEN');
-```
-
-Reads still come from the local cache, so the app stays instant offline. Writes
-go to both and queue when there's no connection. The URL and token are the only
-thing protecting the data — treat both as secrets.
+No code change needed. The URL and token live in localStorage, deliberately
+outside the synced config so they can't be overwritten by a pull.
 
 ## Settings that matter
 

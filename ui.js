@@ -868,6 +868,31 @@
       'variant. Changing it moves every terrain factor you have.</div>';
     h += '<button class="btn" id="c-save">Save settings</button>';
 
+    /* ---- Sheets ---- */
+    const sh = Store.sheetsSettings();
+    const sy = Store.sync;
+    h += '<div class="sec"><span>Sheets</span><span>' +
+      (Store.sheetsConfigured()
+        ? (sy.state === 'syncing' ? 'syncing'
+          : sy.state === 'error' ? 'last try failed'
+          : sy.at ? 'synced ' + sy.at.slice(11, 16) : 'connected')
+        : 'not connected') + '</span></div>';
+    h += '<label><span>Web app URL</span><input type="text" id="s-url" value="' +
+      esc(sh.url || '') + '" placeholder="https://script.google.com/.../exec"></label>';
+    h += '<label><span>Token (blank if you didn\u2019t set one)</span>' +
+      '<input type="text" id="s-token" value="' + esc(sh.token || '') + '"></label>';
+    h += '<button class="btn" id="s-save">Save and sync</button>';
+    if (Store.sheetsConfigured()) {
+      h += '<button class="btn ghost" id="s-push">Push everything up</button>';
+    }
+    if (sy.pending) h += '<div class="flag"><i>!</i><div>' + sy.pending +
+      ' change' + (sy.pending === 1 ? '' : 's') + ' waiting to go up.</div></div>';
+    if (sy.error) h += '<div class="flag error"><i>\u2715</i><div>' + esc(sy.error) + '</div></div>';
+    if (Store.sheetsConfigured() && !sy.error && sy.state === 'ok')
+      h += '<div class="flag ok"><i>\u2713</i><div>Your runs are in the spreadsheet as well as on this phone.</div></div>';
+    h += '<div class="est">A fetch from Sheets never deletes what is on this phone. ' +
+      'An empty or unreachable sheet is pushed to, not copied from.</div>';
+
     const n = Store.all().length;
     const last = Store.config().exported_at || null;
     const days = last ? Calc.daysBetween(last.slice(0, 10), today()) : null;
@@ -888,6 +913,20 @@
 
     el('view-settings').innerHTML = h;
     $('#view-settings [data-back]').onclick = () => go('home');
+
+    el('s-save').onclick = () => {
+      Store.configureSheets(el('s-url').value, el('s-token').value);
+      Store.pull().then(renderSettings);
+      renderSettings();
+    };
+    const push = el('s-push');
+    if (push) push.onclick = () => {
+      push.disabled = true;
+      push.textContent = 'Pushing\u2026';
+      Store.pushAll()
+        .then(count => { alert(count + ' activities sent to Sheets.'); renderSettings(); })
+        .catch(err => { alert('Could not push: ' + err.message); renderSettings(); });
+    };
 
     el('c-save').onclick = () => Store.setConfig({
       max_hr: +el('c-max').value,
@@ -1170,7 +1209,16 @@
     navigator.storage.persist().catch(function () {});
   }
 
-  Store.init().then(() => go('home'));
+  Store.init().then(() => {
+    go('home');
+    /* pull in the background — the screen is already usable from the cache */
+    if (Store.sheetsConfigured()) {
+      Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
+      Store.flush().then(() => Store.pull()).then(() => {
+        if (!el('view-home').hidden) renderHome();
+      });
+    }
+  });
 
   window.Groundwork = { go: go };
 
