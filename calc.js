@@ -163,6 +163,13 @@
     return Math.round(mean(m.slice(-n)) - mean(m.slice(0, n)));
   }
 
+  /* Terrain alone can move drift by a couple of beats on a rolling loop — a
+     hill in the first or last third shifts it, one in the middle doesn't. So
+     anything inside this is reported as flat rather than as a figure. */
+  const DRIFT_FLAT = 3;
+
+  function driftIsFlat(d) { return d != null && Math.abs(d) <= DRIFT_FLAT; }
+
   /* How many more full laps a run needs before drift can be computed. */
   function driftNeeds(laps) {
     const tagged = (laps || []).some(l => l.role && l.role !== 'main');
@@ -842,7 +849,7 @@
     ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
-    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds,
+    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

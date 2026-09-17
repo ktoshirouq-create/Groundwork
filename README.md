@@ -68,6 +68,11 @@ four-kilometre run. Shorter runs say how many more they need.
 Laps tagged with explicit warm-up / main / cool-down roles are trusted as
 tagged, and nothing extra is dropped.
 
+**Anything within 3 bpm reads as "flat" rather than as a number.** A hill in
+the first or last third of a run moves drift about that much on its own, so a
+figure inside that range is terrain, not physiology. Only ±4 and beyond is
+reported as a value.
+
 ## Form
 
 Each dimension sits on a track running from your worst to your best over the
@@ -149,6 +154,13 @@ go back a screen rather than leaving the app.
 Same type and date, and either the distance within 2% or the duration within a
 minute. Distance alone was too strict — a re-paste where Garmin rounded
 differently slipped through and landed as a second copy.
+
+## Comparing like with like
+
+The hero's delta compares against runs within 20% of the same distance, and
+only once there are three of them. A 7.5 km against a 3 km is mostly a
+distance effect — colouring that red would be a lie. With too few peers it says
+so rather than inventing a comparison.
 
 ## Against runs this length
 

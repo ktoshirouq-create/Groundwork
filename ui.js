@@ -224,9 +224,19 @@
 
     paths.forEach((p, i) => {
       const col = p.last ? 'var(--z2)' : 'var(--mute)';
-      if (!p.single) svg += '<polyline class="draw" fill="none" stroke="' + col +
-        '" stroke-width="' + (p.last ? 2.2 : 1.6) +
-        '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      if (!p.single) {
+        svg += '<polyline class="draw" fill="none" stroke="' + col +
+          '" stroke-width="' + (p.last ? 2.2 : 1.6) +
+          '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      } else {
+        /* One run in a block has no line to draw. A bare endpoint dot read as
+           a stray mark floating off the trend, so give it a short rule to sit
+           on and make it clear it is a block of its own. */
+        const x0 = Math.max(0, p.cx - 5), x1 = Math.min(100, p.cx + 5);
+        svg += '<line x1="' + x0.toFixed(2) + '" y1="' + p.cy.toFixed(2) +
+          '" x2="' + x1.toFixed(2) + '" y2="' + p.cy.toFixed(2) + '" stroke="' + col +
+          '" stroke-width="' + (p.last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke"/>';
+      }
       if (p.last) svg += '<circle class="tip" cx="' + p.cx.toFixed(2) + '" cy="' +
         p.cy.toFixed(2) + '" r="2.4" fill="var(--z2)"/>';
     });
@@ -573,13 +583,27 @@
 
     let h = '<div class="eyebrow">Aerobic pace \u00b7 at ' + Calc.refHr(cfg) + ' bpm</div>';
     if (pace != null) {
-      const d = Calc.delta(pace, prevPace, 'down');
+      /* Compare against runs of a similar length. A 7.5 km against a 3 km is
+         mostly a distance effect, and colouring that red is a lie. */
+      const lo = last.distance_km * 0.8, hi = last.distance_km * 1.2;
+      const peers = withHr.slice(1)
+        .filter(a => a.distance_km >= lo && a.distance_km <= hi)
+        .map(a => Calc.aerobicPace(a, cfg)).filter(v => v != null);
+      const banded = peers.length >= 3;
+      const ref = banded ? Calc.median(peers) : prevPace;
+      const d = banded ? Calc.delta(pace, ref, 'down') : null;
+
       h += '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
         '<div class="hunit">/km</div>' +
-        deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') + '</div>';
-      h += '<div class="hsub">' + (prevPace != null
-        ? 'What you would hold at ' + Calc.refHr(cfg) + ' bpm. Last run: ' + Calc.fmtPace(prevPace) + '.'
-        : 'What you would hold at ' + Calc.refHr(cfg) + ' bpm \u2014 nothing to compare it to yet.') + '</div>';
+        (d ? deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div>';
+      h += '<div class="hsub">' + 'What you would hold at ' + Calc.refHr(cfg) + ' bpm. ' +
+        (banded
+          ? 'Your ' + peers.length + ' other runs around ' + last.distance_km.toFixed(1) +
+            ' km sit at ' + Calc.fmtPace(ref) + '.'
+          : prevPace != null
+            ? 'Last run: ' + Calc.fmtPace(prevPace) + ', over ' + withHr[1].distance_km.toFixed(1) +
+              ' km \u2014 too different a distance to compare.'
+            : 'Nothing to compare it to yet.') + '</div>';
     } else {
       h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
         '<div class="hsub">Needs a run with average heart rate.</div>';
@@ -662,7 +686,9 @@
     const pace = a.gap_pace_s != null ? a.gap_pace_s : Calc.paceSecPerKm(a.distance_km, a.elapsed_s);
     meta.push(Calc.fmtPace(pace) + (a.gap_pace_s != null ? ' GAP' : ''));
     if (a.avg_hr != null) meta.push(a.avg_hr + ' bpm');
-    if (d != null) meta.push('<b>drift ' + (d >= 0 ? '+' : '') + d + '</b>');
+    if (d != null) meta.push(Calc.driftIsFlat(d)
+      ? '<b class="ok">drift flat</b>'
+      : '<b>drift ' + (d >= 0 ? '+' : '') + d + '</b>');
     if (a.temp_c != null) meta.push(a.temp_c + '\u00b0');
 
     /* magnitude shows in the type: a long run reads as a long run */
@@ -749,11 +775,16 @@
     }
 
     if (d != null) {
-      h += '<div class="callout' + (d > 8 ? ' warn' : '') + '">' +
-        'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> across the run' +
-        (d > 8 ? '. A base effort should hold closer to flat.' : '.') +
-        '</div><div class="est">Measured after the opening kilometre \u2014 heart rate ' +
-        'climbing from rest at the start is not drift.</div>';
+      const flat = Calc.driftIsFlat(d);
+      h += '<div class="callout' + (flat ? '' : d > 8 ? ' warn' : '') + '">' +
+        (flat
+          ? 'Heart rate <b>held flat</b> across the run' +
+            (d === 0 ? '.' : ' \u2014 ' + (d > 0 ? '+' : '') + d + ' bpm, inside what terrain alone can shift.')
+          : 'Heart rate moved <b>' + (d >= 0 ? '+' : '') + d + ' bpm</b> across the run' +
+            (d > 8 ? '. A base effort should hold closer to flat.' : '.')) +
+        '</div><div class="est">Measured after the opening kilometre, and read as flat ' +
+        'within ' + Calc.DRIFT_FLAT + ' bpm \u2014 a hill in the first or last third moves it ' +
+        'about that much on its own.</div>';
     } else if (Calc.hasLapHr(a.laps)) {
       const need = Calc.driftNeeds(a.laps);
       h += '<div class="est">Drift needs ' + need + ' more full kilometre' + (need === 1 ? '' : 's') +
@@ -862,7 +893,8 @@
         stripHTML(a, bounds, true) + '</div>';
       h += '<div class="rmeta" style="margin-left:0">' + Calc.fullLaps(a.laps).length + ' laps' +
         ((a.laps || []).length > Calc.fullLaps(a.laps).length ? ' + partial' : '') +
-        (d != null ? ' \u00b7 <b>drift ' + (d >= 0 ? '+' : '') + d + ' bpm</b>' : '') + '</div>';
+        (d != null ? ' \u00b7 <b>' + (Calc.driftIsFlat(d) ? 'drift flat'
+          : 'drift ' + (d >= 0 ? '+' : '') + d + ' bpm') + '</b>' : '') + '</div>';
     }
 
     h += '<div class="rule"></div><div class="grid2">';
