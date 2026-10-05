@@ -7,7 +7,7 @@
    Where two things need to differ but sit at the same step, they differ by
    weight, colour or case instead of by a fractional point size. */
 :root {
-  --t-display: 48px;   /* the one number on the screen that matters */
+  --t-display: 40px;   /* the two numbers at the top; they share the width */
   --t-title:   24px;   /* page title */
   --t-lead:    19px;   /* detail title, large metric values */
   --t-strong:  16px;   /* row values */
@@ -593,3 +593,33 @@ label > span {
   flex: 1; min-width: 0; text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- the paired hero ----------
+   Aerobic pace is the evidence; Z2 share is the method. Neither outranks the
+   other, so they sit at the same size side by side. */
+
+.heropair { display: flex; gap: 14px; margin-top: 10px; }
+.hcol { flex: 1; min-width: 0; }
+.hcol .hero { margin: 4px 0 0; }
+.hfoot {
+  font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim);
+  margin-top: 5px; letter-spacing: .04em;
+}
+
+/* the share carries the verdict — green at or above target, amber below.
+   never red: a tempo session is sometimes exactly the point */
+.hcol.t-good .z2num  { color: var(--z2); }
+.hcol.t-good .hfoot  { color: var(--z2); }
+.hcol.t-near .z2num  { color: var(--z3); }
+.hcol.t-near .hfoot  { color: var(--z3); }
+.hcol.t-under .z2num { color: var(--z3); }
+.hcol.t-under .hfoot { color: var(--z3); }
+
+.z2rec {
+  font-size: var(--t-label); color: var(--mute); line-height: 1.5;
+  margin-top: 12px; padding-left: 11px; border-left: 2px solid var(--line);
+}
+.z2rec b { color: var(--ink); font-weight: 600; }
+
+.hnote.good { border-left-color: var(--z2); }
+.hnote.good b { color: var(--z2); }

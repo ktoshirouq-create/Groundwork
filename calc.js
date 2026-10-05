@@ -14,6 +14,9 @@
     resting_hr_dated: '2026-08-14',
     lthr_dated: '2025-11-20',
     /* pinned when the metric was introduced; see refHr */
+    /* The share of time you're aiming to spend in Z2. 70% is the usual
+       base-building convention, not a law — it's yours to move. */
+    z2_target: 70,
     pace_ref_hr: 145,
     pace_ref_dated: '2026-08-16',
     FLAT_KMH: 5,
@@ -871,6 +874,54 @@
     return vals.length >= 3 ? Math.round(median(vals)) : null;
   }
 
+  /* ---------- Z2 discipline ----------
+     Z2 share is a choice, not an adaptation: you could hit 100% by walking.
+     So it is reported next to aerobic pace, never instead of it — the share is
+     the method, the pace is the evidence it is working. */
+
+  function z2Share(acts, cfg) {
+    const b = zoneBounds(cfg);
+    const laps = [];
+    (acts || []).forEach(a => {
+      if (ACTIVITY_TYPES.indexOf(a.type) < 0) return;
+      (a.laps || []).forEach(l => laps.push(l));
+    });
+    const tz = timeInZone(laps, b);
+    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    return total > 0 ? { pct: Math.round(tz[2] / total * 100), seconds: tz[2], total: total } : null;
+  }
+
+  /* How many of the last n periods cleared the target. A count, not a streak —
+     a chain that resets on one bad week is a punishment, and a week disrupted
+     by work is not a training failure. */
+  function z2Record(acts, cfg, scope, endKey, n) {
+    const want = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
+    const periods = [];
+    let k = endKey;
+    for (let i = 0; i < (n || 10); i++) {
+      const inK = (acts || []).filter(a =>
+        ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
+      const s = z2Share(inK, cfg);
+      if (s) periods.push({ key: k, pct: s.pct, cleared: s.pct >= want });
+      k = shiftKey(k, scope, -1);
+    }
+    if (periods.length < 3) return null;
+    return {
+      cleared: periods.filter(p => p.cleared).length,
+      of: periods.length,
+      target: want,
+      periods: periods
+    };
+  }
+
+  /* Green when the share is at or above target, amber below. Never red — a
+     tempo session is sometimes exactly the point. */
+  function z2Tone(pct, cfg) {
+    const want = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
+    if (pct == null) return 'none';
+    return pct >= want ? 'good' : pct >= want - 15 ? 'near' : 'under';
+  }
+
   /* ---------- load ----------
      Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
      short hard effort can cost the same as a long easy one. Needs only average
@@ -947,7 +998,7 @@
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
-    load, sessionRpe, z2Typical, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
+    load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };

@@ -155,8 +155,17 @@
         '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>'
       : '';
 
+    /* A count, not a chain. A streak that resets on one disrupted week is a
+       punishment, and a bad week at work is not a training failure. */
+    const rec = Calc.z2Record(real(), cfg, scope, key(), 10);
+    const recLine = rec
+      ? '<div class="z2rec"><b>' + rec.cleared + ' of your last ' + rec.of + '</b> ' +
+        (scope === 'week' ? 'weeks' : scope === 'month' ? 'months' : 'years') +
+        ' cleared ' + rec.target + '% in Z2.</div>'
+      : '';
+
     return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' +
-      gapLine + rampLine;
+      gapLine + recLine + rampLine;
   }
 
   /* ------------------------------------------------------------- charts */
@@ -591,7 +600,15 @@
     const prevPace = withHr[1] ? Calc.aerobicPace(withHr[1], cfg) : null;
     const s = Calc.summarize(inP);
 
-    let h = '<div class="eyebrow">Aerobic pace \u00b7 at ' + Calc.refHr(cfg) + ' bpm</div>';
+    /* Two heroes, not one. Aerobic pace alone rewards speed — and because it is
+       measured at 145 bpm it improves fastest when you train above Z2, which is
+       the opposite of base work. The share sits beside it at the same size so
+       the screen answers "am I building base" before "am I fast". */
+    const share = Calc.z2Share(inP, cfg);
+    const tone = share ? Calc.z2Tone(share.pct, cfg) : 'none';
+    const target = cfg.z2_target;
+
+    let h = '';
     if (pace != null) {
       /* Compare against runs of a similar length. A 7.5 km against a 3 km is
          mostly a distance effect, and colouring that red is a lie. */
@@ -603,10 +620,23 @@
       const ref = banded ? Calc.median(peers) : prevPace;
       const d = banded ? Calc.delta(pace, ref, 'down') : null;
 
-      h += '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
-        '<div class="hunit">/km</div>' +
-        (d ? deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div>';
-      h += '<div class="hsub">' + 'What you would hold at ' + Calc.refHr(cfg) + ' bpm. ' +
+      h += '<div class="heropair">';
+      h += '<div class="hcol">' +
+        '<div class="eyebrow">Aerobic pace</div>' +
+        '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
+        '<div class="hunit">/km</div></div>' +
+        '<div class="hfoot">at ' + Calc.refHr(cfg) + ' bpm' +
+        (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div></div>';
+      h += '<div class="hcol' + (share ? ' t-' + tone : '') + '">' +
+        '<div class="eyebrow">In Z2</div>' +
+        '<div class="hero"><div class="hnum z2num">' +
+        (share ? share.pct : '\u2014') + '</div><div class="hunit">%</div></div>' +
+        '<div class="hfoot">' + (share
+          ? (share.pct >= target ? 'at your ' + target + '% target'
+             : (target - share.pct) + ' under ' + target + '%')
+          : 'needs lap heart rate') + '</div></div>';
+      h += '</div>';
+      h += '<div class="hsub">' + '' +
         (banded
           ? 'Your ' + peers.length + ' other runs around ' + last.distance_km.toFixed(1) +
             ' km sit at ' + Calc.fmtPace(ref) + '.'
@@ -623,7 +653,11 @@
         const inZ2 = Math.round(lastTz[2] / lastTotal * 100);
         const above = Math.round((lastTz[3] + lastTz[4] + lastTz[5]) / lastTotal * 100);
         const best = Calc.median(peers) != null && pace <= Math.min.apply(null, peers);
-        if (above >= 50) h += '<div class="hnote">' +
+        if (inZ2 >= target) h += '<div class="hnote good">Mostly <b>base work</b>' +
+          (pace != null && banded && pace > ref
+            ? ', and slower than your usual at this length \u2014 which is what base work is.'
+            : '.') + '</div>';
+        else if (above >= 50) h += '<div class="hnote">' +
           (best ? 'Fastest at this length, but <b>' : '<b>') + above +
           '% above Z2</b> \u2014 a tempo run, not base work.</div>';
       }
@@ -1009,6 +1043,11 @@
     h += '<div class="small muted" style="margin-top:10px">Resting heart rate wants to be a 90-day median, ' +
       'nudged every few weeks. The zones follow it.</div>';
 
+    h += '<div class="sec"><span>Base work</span><span>Z2 target</span></div>';
+    h += '<label><span>Share of time in Z2 you are aiming for</span>' +
+      '<input type="number" id="c-z2" min="0" max="100" value="' + cfg.z2_target + '"></label>';
+    h += '<div class="est">70% is the usual base-building convention, not a law. ' +
+      'It sets the colour on the home screen and the count under the chart.</div>';
     h += '<button class="btn" id="c-save">Save settings</button>';
 
     /* ---- Sheets ---- */
@@ -1092,7 +1131,8 @@
     once(el('c-save'), 'Saving\u2026', () => Store.setConfig({
       max_hr: +el('c-max').value,
       resting_hr: +el('c-rest').value,
-      resting_hr_dated: today()
+      resting_hr_dated: today(),
+      z2_target: Math.max(0, Math.min(100, +el('c-z2').value || 70))
     }).then(() => { renderSettings(); toast('Zones updated', 'ok'); }));
 
     el('c-export').onclick = () => {

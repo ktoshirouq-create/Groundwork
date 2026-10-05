@@ -73,6 +73,34 @@ the first or last third of a run moves drift about that much on its own, so a
 figure inside that range is terrain, not physiology. Only ±4 and beyond is
 reported as a value.
 
+## Two heroes
+
+Aerobic pace alone rewards speed. Worse, it is measured at a fixed 145 bpm, so
+it improves fastest when you train **above** Z2 — the opposite of base work.
+An app with that as its single largest number quietly coaches against the
+thing it is meant to support.
+
+So the top of the screen is a pair at equal size: **aerobic pace** on the left,
+**share of time in Z2** on the right. The share is the method; the pace is the
+evidence the method is working. Neither is useful alone — Z2 share is a choice
+you could satisfy by walking, and pace with no zone context is just effort.
+
+The share carries the colour, and it genuinely inverts: a slow run with a high
+Z2 share reads green and says so (*"slower than your usual at this length —
+which is what base work is"*), while a personal best spent above Z2 reads amber
+and is named a tempo run. Never red; sometimes a tempo session is the point.
+
+The target lives in Setup and defaults to 70%. That is a base-building
+convention, not a law.
+
+## A count, not a streak
+
+Under the weekly chart: *"7 of your last 10 weeks cleared 70% in Z2."*
+
+Deliberately not a streak. A chain that resets on one disrupted week is a
+punishment, and a week broken by work is not a training failure. A count dents;
+it doesn't collapse.
+
 ## Time in zone
 
 The bar shows **share**, with the exact duration beneath it. "23:18 in Z2"
