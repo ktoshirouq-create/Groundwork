@@ -31,7 +31,9 @@
     return (+y === new Date().getFullYear()) ? base : base + ' ' + y;
   }
 
-  function real() { return Store.all().filter(a => a.type === 'run'); }
+  /* Only records the screens can actually draw. A damaged one used to throw
+     mid-render and leave a blank page with no route back to Setup. */
+  function real() { return Store.all().filter(a => a.type === 'run' && Calc.isUsable(a)); }
   function key() { return periodKey || Calc.periodKey(today(), scope); }
 
   /* ---------------------------------------------------------------- pieces */
@@ -1012,6 +1014,18 @@
     h += '<div class="est">A fetch from Sheets never deletes what is on this phone. ' +
       'An empty or unreachable sheet is pushed to, not copied from.</div>';
 
+    const broken = Calc.damaged(Store.all());
+    if (broken.length) {
+      h += '<div class="sec"><span>Incomplete records</span><span>' + broken.length + '</span></div>';
+      h += '<div class="small muted">These are missing something the screens need, so they are ' +
+        'held back rather than drawn. Nothing has been deleted.</div>';
+      broken.slice(0, 8).forEach(a => {
+        h += '<div class="cmp"><span class="k">' + esc(a.name || a.id) +
+          '</span><span class="v">no ' + Calc.whatsMissing(a).join(', ') + '</span></div>';
+      });
+      h += '<button class="btn ghost" id="c-fixfirst">Edit the first one</button>';
+    }
+
     const n = Store.all().length;
     const last = Store.config().exported_at || null;
     const days = last ? Calc.daysBetween(last.slice(0, 10), today()) : null;
@@ -1032,6 +1046,9 @@
 
     el('view-settings').innerHTML = h;
     $('#view-settings [data-back]').onclick = () => go('home');
+
+    const fix = el('c-fixfirst');
+    if (fix) fix.onclick = () => go('edit', Calc.damaged(Store.all())[0].id);
 
     once(el('s-save'), 'Connecting\u2026', () => {
       const url = el('s-url').value.trim();
@@ -1303,12 +1320,30 @@
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
     el('fab').hidden = (view !== 'home' && view !== 'detail');
     window.scrollTo(0, 0);
-    if (view === 'home') renderHome();
-    if (view === 'detail') renderDetail(param);
-    if (view === 'import') renderImport();
-    if (view === 'settings') renderSettings();
-    if (view === 'edit') renderEdit(param);
-    if (view === 'replace') renderReplace(param);
+    try {
+      if (view === 'home') renderHome();
+      if (view === 'detail') renderDetail(param);
+      if (view === 'import') renderImport();
+      if (view === 'settings') renderSettings();
+      if (view === 'edit') renderEdit(param);
+      if (view === 'replace') renderReplace(param);
+    } catch (err) {
+      /* Whatever went wrong, there must still be a way to Setup, an export,
+         and the error itself. A blank screen tells you nothing and traps you. */
+      el('view-' + view).innerHTML =
+        '<div class="ttl">Something broke</div>' +
+        '<div class="sub">' + esc(view.toUpperCase()) + ' COULD NOT BE DRAWN</div>' +
+        '<div class="flag error"><i>\u2715</i><div>' + esc(String(err && err.message || err)) +
+        '</div></div>' +
+        '<div class="small muted" style="margin-top:12px">Your data is untouched. ' +
+        'Export it from Setup, then tell me what this says.</div>' +
+        '<button class="btn" data-recover="settings">Open Setup</button>' +
+        '<button class="btn ghost" data-recover="home">Try the main screen</button>';
+      document.querySelectorAll('#view-' + view + ' [data-recover]').forEach(b => {
+        b.onclick = () => go(b.dataset.recover);
+      });
+      if (window.console) console.error('Groundwork render failed:', err);
+    }
   }
 
   function go(view, param, replace) {

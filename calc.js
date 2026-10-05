@@ -74,7 +74,8 @@
   const PARTIAL_KM = 0.5;
 
   function fullLaps(laps) {
-    return (laps || []).filter(l => l.distance_km >= PARTIAL_KM);
+    return (Array.isArray(laps) ? laps : [])
+      .filter(l => l && typeof l.distance_km === 'number' && l.distance_km >= PARTIAL_KM);
   }
 
   function mainLaps(laps) {
@@ -215,6 +216,7 @@
 
   function isoWeek(dateStr) {
     const d = new Date(dateStr + 'T12:00:00');
+    if (isNaN(d.getTime())) return '----W--';
     const day = (d.getDay() + 6) % 7;          // Mon = 0
     d.setDate(d.getDate() - day + 3);          // Thursday of this week
     const firstThu = new Date(d.getFullYear(), 0, 4);
@@ -226,13 +228,16 @@
 
   function weekStart(dateStr) {
     const d = new Date(dateStr + 'T12:00:00');
+    if (isNaN(d.getTime())) return null;
     const day = (d.getDay() + 6) % 7;
     d.setDate(d.getDate() - day);
     return d.toISOString().slice(0, 10);
   }
 
   function dayIndex(dateStr) {            // Mon = 0 .. Sun = 6
-    return (new Date(dateStr + 'T12:00:00').getDay() + 6) % 7;
+    const d = new Date(dateStr + 'T12:00:00');
+    if (isNaN(d.getTime())) return 0;
+    return (d.getDay() + 6) % 7;
   }
 
   function daysBetween(a, b) {
@@ -563,6 +568,27 @@
     return segs;
   }
 
+  /* ---------- damaged records ----------
+     A row coming back from Sheets can have blanks where the app expects
+     values. One of those used to throw inside the first render and leave a
+     blank screen with no way to reach Setup. They are set aside instead. */
+
+  function isUsable(a) {
+    return !!a && typeof a.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.date) &&
+      typeof a.distance_km === 'number' && isFinite(a.distance_km) && a.distance_km > 0 &&
+      typeof a.elapsed_s === 'number' && isFinite(a.elapsed_s) && a.elapsed_s > 0;
+  }
+
+  function damaged(acts) { return (acts || []).filter(a => a && a.type !== 'test' && !isUsable(a)); }
+
+  function whatsMissing(a) {
+    const gaps = [];
+    if (!a || typeof a.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) gaps.push('date');
+    if (!a || typeof a.distance_km !== 'number' || !(a.distance_km > 0)) gaps.push('distance');
+    if (!a || typeof a.elapsed_s !== 'number' || !(a.elapsed_s > 0)) gaps.push('time');
+    return gaps;
+  }
+
   /* ---------- records ---------- */
 
   function records(acts, cfg) {
@@ -850,6 +876,7 @@
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
+    isUsable, damaged, whatsMissing,
     load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
