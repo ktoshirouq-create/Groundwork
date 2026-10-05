@@ -472,15 +472,19 @@
   }
 
   /** Bars for the period ribbon. metric: 'distance' | 'ascent'. */
-  function ribbon(acts, scope, selectedKey, n, metric) {
+  function ribbon(acts, scope, selectedKey, n, metric, cfg) {
+    const cfgFor = () => cfg;
     const out = [];
     let key = selectedKey;
     for (let i = 0; i < n; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
     return out.map(k => {
       const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
       const s = summarize(inK);
-      const v = metric === 'ascent' ? (s.ascent_m || 0) : s.distance_km;
-      return { key: k, value: v, count: s.count, selected: k === selectedKey };
+      const v = metric === 'load'
+        ? inK.reduce((t, a) => t + (load(a, cfgFor(metric)) || 0), 0)
+        : s.distance_km;
+      return { key: k, value: v, count: s.count, distance_km: s.distance_km,
+               selected: k === selectedKey };
     });
   }
 

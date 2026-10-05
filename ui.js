@@ -87,7 +87,7 @@
     if (scope === 'all') return '';
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'distance');
+    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'load', cfg);
     const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
 
     const label = b => {
@@ -96,8 +96,10 @@
       return b.key.slice(2);
     };
 
-    /* each bar's height is volume; its make-up is time in zone, so twelve
-       periods of zone balance read at a glance */
+    /* Height is load — minutes weighted by effort — and the fill is time in
+       zone. One chart carries how much, how hard and the balance between them;
+       it used to be two nearly identical bar charts at opposite ends of the
+       screen. */
     const cells = bars.map(b => {
       if (!b.value) return '<div class="rp none" data-period="' + b.key + '"><div class="seg"></div></div>';
       const h = Math.max(6, Math.round(b.value / max * 100));
@@ -131,7 +133,16 @@
     const gapLine = gap >= 2
       ? '<div class="gapmark">\u2191 nothing for ' + gap + ' ' + unit + ' before this</div>' : '';
 
-    return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' + gapLine;
+    /* the ramp warning lived under the old Load chart */
+    const withData = bars.filter(b => b.value > 0);
+    const ramp = Calc.rampFlag(withData);
+    const rampLine = ramp
+      ? '<div class="callout warn">Load went <b>' + ramp.from + ' \u2192 ' + ramp.to +
+        '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>'
+      : '';
+
+    return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' +
+      gapLine + rampLine;
   }
 
   /* ------------------------------------------------------------- charts */
@@ -330,6 +341,8 @@
 
   /* ------------------------------------------------------------ week strip */
 
+  /* ------------------------------------------------------------ week strip */
+
   /* Seven days, height is load, colour is the zone that day mostly sat in.
      Answers "am I being consistent" and "how hard was it" in one row. */
   function weekStripHTML() {
@@ -355,8 +368,7 @@
 
     const total = days.reduce((t, d) => t + d.load, 0);
     const out = days.filter(d => d.count).length;
-    h += '<div class="est">' + out + ' of 7 days' + (total ? ', load ' + total : '') +
-      '. Height is load \u2014 minutes weighted by how hard your heart was working.</div>';
+    h += '<div class="est">' + out + ' of 7 days, load ' + total + '.</div>';
     return h;
   }
 
@@ -418,10 +430,23 @@
     const live = rows.filter(r => r.range && r.now != null);
     const waiting = rows.filter(r => !(r.range && r.now != null));
 
+    const filling = live.filter(r => r.need > 0).length;
     let h = '<div class="sec"><span>Form</span><span>' +
-      (live.length ? 'last 3 vs 3 before' : '') + '</span></div>';
+      (filling ? filling + ' still filling' : live.length ? 'last 3 vs 3 before' : '') +
+      '</span></div>';
 
     live.forEach(r => {
+      /* A drift range of +2 to -2 sits entirely inside what the app itself
+         calls flat. Drawing a scale across it claims a resolution that isn't
+         there, so it reports flat and draws nothing until the spread is real. */
+      if (r.key === 'drift' && Math.abs(r.range.max) <= Calc.DRIFT_FLAT &&
+          Math.abs(r.range.min) <= Calc.DRIFT_FLAT) {
+        h += '<div class="rd"><div class="rd-top"><div class="rd-name">' + esc(r.label) +
+          '</div><div class="rd-val">flat<s>on all ' + r.n + '</s></div></div>' +
+          '<div class="rd-note">Every measurement is inside ' + Calc.DRIFT_FLAT +
+          ' bpm. A scale across that would be noise.</div></div>';
+        return;
+      }
       const d = r.need === 0 ? Calc.delta(r.now, r.prev, r.betterWhen) : null;
       const pos = trackPos(r.now, r.range, r.betterWhen);
       const bandFrom = r.band ? trackPos(r.betterWhen === 'down' ? r.band.max : r.band.min, r.range, r.betterWhen) : null;
@@ -443,7 +468,6 @@
       h += '<div class="rd-ends"><span>' + fmtRead(worst, r.kind) +
         (r.worstLabel ? ' ' + esc(r.worstLabel) : '') + '</span><span>' +
         fmtRead(best, r.kind) + (r.bestLabel ? ' ' + esc(r.bestLabel) : '') + '</span></div>';
-      if (r.need > 0) h += '<div class="rd-note">' + r.need + ' more before the arrow opens.</div>';
       if (r.note) h += '<div class="rd-note">' + esc(r.note) + '</div>';
       h += '</div>';
     });
@@ -490,37 +514,6 @@
       '<div class="cap" style="right:0">' + n.ratio.toFixed(1) + '\u00d7</div></div></div>';
   }
 
-  /* --------------------------------------------- zone share, by week */
-
-  function zoneShareHTML() {
-    const cfg = Store.config();
-    const all = Calc.zoneShareSeries(real(), cfg, 12, scope === 'week' ? key() : null);
-    const withData = all.filter(w => w.total > 0);
-    /* one bar among eleven empty slots is a chart of nothing */
-    if (withData.length < 3) return '';
-    /* show from the first week that has data, not a fixed twelve */
-    const firstIdx = all.findIndex(w => w.total > 0);
-    const weeks = all.slice(Math.max(0, firstIdx - 1));
-
-    let h = '<div class="sec"><span>Zone share</span><span>12 weeks</span></div>';
-    h += '<div class="zchart">' + weeks.map(w => {
-      if (!w.total) return '<div class="zc none"><div class="s"></div></div>';
-      const order = [5, 4, 3, 2, 1];
-      let inner = order.filter(z => w.zones[z] > 0).map(z =>
-        '<div class="s" style="background:' + ZCOL[z] + '; height:' +
-        (w.zones[z] / w.total * 100).toFixed(1) + '%"></div>').join('');
-      if (w.zones.unknown > 0) inner = '<div class="s" style="background:var(--stop); height:' +
-        (w.zones.unknown / w.total * 100).toFixed(1) + '%"></div>' + inner;
-      return '<div class="zc">' + inner + '</div>';
-    }).join('') + '</div>';
-    h += '<div class="zclbl">' + weeks.map((w, i) =>
-      '<div>' + (i % 2 === 0 ? Calc.isoWeek(w.key).split('-W')[1].replace(/^0/, '') : '') + '</div>'
-    ).join('') + '</div>';
-    h += '<div class="est">One bar per week, scaled to 100%.</div>';
-    return h;
-  }
-
-
   /* ------------------------------------------------------------------ home */
 
   function renderHome() {
@@ -548,7 +541,7 @@
     }
 
     h += ribbonHTML();
-    h += weekStripHTML();
+    if (scope === 'week') h += weekStripHTML();
     h += '<div class="rule"></div>';
     h += runHero(inP, mine, bounds);
 
@@ -556,7 +549,8 @@
     const sorted = inP.slice().sort((a, b) => b.date.localeCompare(a.date));
     const isNow = Calc.periodKey(today(), scope) === k;
     h += '<div class="sec"><span>' + (isNow ? 'This ' + scope : esc(Calc.periodLabel(k, scope, today()))) +
-      '</span><span>' + (sorted.length ? sorted.length + ' runs' : '') + '</span></div>';
+      '</span><span>' + (sorted.length ? sorted.length + (sorted.length === 1 ? ' run' : ' runs') : '') +
+      '</span></div>';
 
     if (!sorted.length) {
       const noun = 'run';
@@ -606,6 +600,19 @@
             ? 'Last run: ' + Calc.fmtPace(prevPace) + ', over ' + withHr[1].distance_km.toFixed(1) +
               ' km \u2014 too different a distance to compare.'
             : 'Nothing to compare it to yet.') + '</div>';
+
+      /* A fast run and a hard run are the same fact. Saying so here beats
+         leaving the zone split 400px further down to make the point. */
+      const lastTz = Calc.timeInZone(last.laps, bounds);
+      const lastTotal = [1,2,3,4,5].reduce((t, z) => t + lastTz[z], 0);
+      if (lastTotal) {
+        const inZ2 = Math.round(lastTz[2] / lastTotal * 100);
+        const above = Math.round((lastTz[3] + lastTz[4] + lastTz[5]) / lastTotal * 100);
+        const best = Calc.median(peers) != null && pace <= Math.min.apply(null, peers);
+        if (above >= 50) h += '<div class="hnote">' +
+          (best ? 'Fastest at this length, but <b>' : '<b>') + above +
+          '% above Z2</b> \u2014 a tempo run, not base work.</div>';
+      }
     } else {
       h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
         '<div class="hsub">Needs a run with average heart rate.</div>';
@@ -676,8 +683,6 @@
     h += '</div>';
 
     h += readHTML();
-    h += loadHTML();
-    h += zoneShareHTML();
     return h;
   }
 
@@ -697,7 +702,8 @@
     const all = Store.all().filter(x => x.type === a.type).map(x => x.distance_km);
     const top = all.length ? Math.max.apply(null, all) : a.distance_km;
     const scale = top ? Math.min(1, a.distance_km / top) : 0;
-    const size = (12 + scale * 3.4).toFixed(1);
+    /* body up to strong, so magnitude reads without leaving the scale */
+    const size = (13 + scale * 3).toFixed(0);
 
     return '<div class="rrow" data-id="' + esc(a.id) + '">' +
       '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) + '</div>' +
@@ -963,14 +969,14 @@
       '<label><span>Max HR</span><input type="number" id="c-max" value="' + cfg.max_hr + '"></label>' +
       '<label><span>Resting HR</span><input type="number" id="c-rest" value="' + cfg.resting_hr + '"></label></div>';
 
-    const seg = (from, to, col, label) =>
-      '<div class="zseg" style="background:' + col + '; flex:' + (to - from) + '">' + label + '</div>';
+    /* Equal segments, not proportional to beats. Z1 spans 79 bpm and Z2 only
+       13, so a proportional bar gave three quarters of its width to the zone
+       you never train in and squashed the ones you do. */
+    const seg = (col, label) =>
+      '<div class="zseg" style="background:' + col + '; flex:1">' + label + '</div>';
     h += '<div class="zbar" style="margin-top:14px">' +
-      seg(cfg.resting_hr, b.z2, 'var(--z1)', 'Z1') +
-      seg(b.z2, b.z3, 'var(--z2)', 'Z2') +
-      seg(b.z3, b.z4, 'var(--z3)', 'Z3') +
-      seg(b.z4, b.z5, 'var(--z4)', 'Z4') +
-      seg(b.z5, cfg.max_hr, 'var(--z5)', 'Z5') + '</div>';
+      seg('var(--z1)', 'Z1') + seg('var(--z2)', 'Z2') + seg('var(--z3)', 'Z3') +
+      seg('var(--z4)', 'Z4') + seg('var(--z5)', 'Z5') + '</div>';
     h += '<div class="zkey">' +
       '<span>' + cfg.resting_hr + '</span><span>' + b.z2 + '</span><span>' + b.z3 +
       '</span><span>' + b.z4 + '</span><span>' + b.z5 + '</span><span>' + cfg.max_hr + '</span></div>';
@@ -981,12 +987,6 @@
     h += '<div class="small muted" style="margin-top:10px">Resting heart rate wants to be a 90-day median, ' +
       'nudged every few weeks. The zones follow it.</div>';
 
-    h += '<div class="sec"><span>Hiking constants</span></div>';
-    h += '<div class="field-row">' +
-      '<label><span>Flat km/h</span><input type="number" step="0.1" id="c-flat" value="' + cfg.FLAT_KMH + '"></label>' +
-      '<label><span>Ascent m/h</span><input type="number" id="c-asc" value="' + cfg.ASCENT_MH + '"></label></div>';
-    h += '<div class="est">Naismith. 5 km/h is the classic value; 4 is the conservative rough-terrain ' +
-      'variant. Changing it moves every terrain factor you have.</div>';
     h += '<button class="btn" id="c-save">Save settings</button>';
 
     /* ---- Sheets ---- */
@@ -1389,15 +1389,19 @@
     navigator.storage.persist().catch(function () {});
   }
 
+  /* Boot can fail before any screen renders — bad stored JSON, a failed
+     migration. The render boundary doesn't cover that, so this does. */
   Store.init().then(() => {
     go('home', null, true);
     /* pull in the background — the screen is already usable from the cache */
     if (Store.sheetsConfigured()) {
       Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
       Store.flush().then(() => Store.pull()).then(() => {
-        if (!el('view-home').hidden) renderHome();
-      });
+        if (!el('view-home').hidden) render('home');
+      }).catch(err => { toast('Sync failed: ' + (err.message || err), 'bad'); });
     }
+  }).catch(err => {
+    if (window.__gwFail) window.__gwFail('startup', String(err && err.message || err));
   });
 
   window.Groundwork = { go: go };

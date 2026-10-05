@@ -73,6 +73,37 @@ the first or last third of a run moves drift about that much on its own, so a
 figure inside that range is terrain, not physiology. Only ±4 and beyond is
 reported as a value.
 
+## The type scale
+
+Seven steps, declared once in `:root`, and nothing off them:
+
+```
+--t-display 48   the one number that matters
+--t-title   24   page title
+--t-lead    19   detail title, large metric values
+--t-strong  16   row values
+--t-body    13   prose, rows, section heads
+--t-label   11   secondary labels, deltas, chips, captions
+--t-micro    9   mono axis, meta, lap figures
+```
+
+There were eighteen sizes before, ten of them between 9 and 13px. That is not a
+scale, it is accumulated decisions. Where two things sit at the same step they
+differ by weight, colour or case — never by a fractional point size. A test
+fails if a literal `font-size` in px appears anywhere in the stylesheet.
+
+No italics. At these sizes on a dark ground they cost legibility and buy
+nothing; emphasis is colour and weight.
+
+## The weekly chart
+
+One chart, not two. Bar height is **load**, the fill is **time in zone**, and
+tapping a bar selects that period. It used to be two nearly identical weekly
+bar charts at opposite ends of the screen — volume at the top, load at the
+bottom — saying overlapping things. The ramp warning moved here with it.
+
+The seven-day strip beneath it only appears in week scope.
+
 ## Form
 
 Each dimension sits on a track running from your worst to your best over the
