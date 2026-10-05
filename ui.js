@@ -986,9 +986,13 @@
     h += '<div class="zbar" style="margin-top:14px">' +
       seg('var(--z1)', 'Z1') + seg('var(--z2)', 'Z2') + seg('var(--z3)', 'Z3') +
       seg('var(--z4)', 'Z4') + seg('var(--z5)', 'Z5') + '</div>';
-    h += '<div class="zkey">' +
-      '<span>' + cfg.resting_hr + '</span><span>' + b.z2 + '</span><span>' + b.z3 +
-      '</span><span>' + b.z4 + '</span><span>' + b.z5 + '</span><span>' + cfg.max_hr + '</span></div>';
+    /* Six numbers describe five boundaries, so they belong ON the edges, not
+       evenly spaced underneath. Laid out as a row of equal cells with the
+       figure sitting on each cell's leading edge, and the last pinned right. */
+    const bounds = [cfg.resting_hr, b.z2, b.z3, b.z4, b.z5, cfg.max_hr];
+    h += '<div class="zbnd">' + bounds.map((v, i) =>
+      '<span' + (i === bounds.length - 1 ? ' class="last"' : '') + '>' + v + '</span>'
+    ).join('') + '</div>';
     h += '<div class="est">Reserve ' + b.hrr + ' beats. Base work lives in Z2, ' + b.z2 + '\u2013' + (b.z3 - 1) + '.</div>';
 
     if (ageDays(cfg.max_hr_dated) > 365) h += '<div class="flag"><i>!</i><div>Max HR was set ' +

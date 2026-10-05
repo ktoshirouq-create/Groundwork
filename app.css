@@ -564,3 +564,21 @@ label > span {
 /* the zone the base work lives in, called out where it matters */
 .z2mark { color: var(--z2); font-weight: 600; }
 .zkey .key-z2 { color: var(--ink); }
+
+/* ---------- zone boundaries, sitting on the edges they describe ---------- */
+
+.zbnd {
+  position: relative; display: block; height: 14px; margin-top: 6px;
+  font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim);
+}
+.zbnd span {
+  position: absolute; top: 0; transform: translateX(-50%);
+  font-variant-numeric: tabular-nums;
+}
+/* five equal segments put the boundaries at 0, 20, 40, 60, 80, 100 per cent */
+.zbnd span:nth-child(1) { left: 0; transform: none; }
+.zbnd span:nth-child(2) { left: 20%; }
+.zbnd span:nth-child(3) { left: 40%; }
+.zbnd span:nth-child(4) { left: 60%; }
+.zbnd span:nth-child(5) { left: 80%; }
+.zbnd span.last { left: auto; right: 0; transform: none; }
