@@ -44,8 +44,18 @@
     return '<div class="strip' + (tall ? ' tall' : '') + '">' + laps.map(l => {
       const z = Calc.zoneOf(l.avg_hr, bounds);
       return '<div class="blk' + (z ? '' : ' unknown') + '" style="background:' +
-        (z ? ZCOL[z] : 'var(--stop)') + '"></div>';
+        (z ? ZCOL[z] : 'var(--stop)') + '" title="km ' + l.n + ' \u00b7 ' +
+        (l.avg_hr == null ? 'no HR' : l.avg_hr + ' bpm') + '"></div>';
     }).join('') + '</div>';
+  }
+
+  /* The heart rates sit under the blocks they belong to. As a run-on list they
+     drifted out of register with the strip and stopped meaning anything. */
+  function stripLabelsHTML(a) {
+    const laps = Calc.fullLaps(a.laps);
+    if (!laps.length) return '';
+    return '<div class="striplbl">' + laps.map(l =>
+      '<span>' + (l.avg_hr == null ? '\u2014' : l.avg_hr) + '</span>').join('') + '</div>';
   }
 
   function zoneBarHTML(tz) {
@@ -787,8 +797,7 @@
     if (Calc.fullLaps(a.laps).length) {
       h += '<div class="sec"><span>Per kilometre</span></div>';
       h += stripHTML(a, bounds, true);
-      h += '<div class="rmeta" style="margin-left:0">' +
-        Calc.fullLaps(a.laps).map(l => l.avg_hr == null ? '\u2014' : l.avg_hr).join(' \u00b7 ') + '</div>';
+      h += stripLabelsHTML(a);
     }
 
     if (d != null) {

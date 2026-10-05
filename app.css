@@ -582,3 +582,14 @@ label > span {
 .zbnd span:nth-child(4) { left: 60%; }
 .zbnd span:nth-child(5) { left: 80%; }
 .zbnd span.last { left: auto; right: 0; transform: none; }
+
+/* ---------- per-kilometre labels, in register with the blocks ---------- */
+
+.striplbl {
+  display: flex; gap: 3px; margin-top: 6px;
+  font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute);
+}
+.striplbl span {
+  flex: 1; min-width: 0; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
