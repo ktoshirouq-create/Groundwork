@@ -179,7 +179,9 @@
 
       return Sheets.get('list').then(data => {
         if (!data || data.error) throw new Error((data && data.error) || 'no response');
-        const remote = data.activities || [];
+        /* Repair the shapes Sheets hands back before anything touches them —
+           a date column that lost its text format arrives as a timestamp. */
+        const remote = (data.activities || []).map(r => Calc.normalise(r) || r);
         const local = self.all();
 
         if (!remote.length && local.length) {

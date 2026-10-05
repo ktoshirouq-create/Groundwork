@@ -106,7 +106,13 @@ function readAll(sh, cols) {
       if (!(c in m)) { o[c] = null; return; }
       var v = r[m[c]];
       if (v === '' || v == null) { o[c] = null; return; }
-      o[c] = NUM_KEYS[c] ? Number(v) : String(v);
+      /* A date column that lost its plain-text format comes back as a Date.
+         Hand it over as YYYY-MM-DD so the client never has to guess. */
+      if (v instanceof Date) {
+        o[c] = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      } else {
+        o[c] = NUM_KEYS[c] ? Number(v) : String(v);
+      }
     });
     return o;
   });
@@ -210,7 +216,14 @@ function putActivity(act) {
   var row = objToRow(ash, ACT_COLS, act);
   var at = findRowById(ash, 'id', act.id);
   if (at > 0) ash.getRange(at, 1, 1, row.length).setValues([row]);
-  else ash.appendRow(row);
+  else { ash.appendRow(row); at = ash.getLastRow(); }
+  /* force the text columns back to plain text on this row — a format set on
+     empty rows at setup() does not survive an append */
+  var hm = headerMap(ash);
+  TEXT_COLS.forEach(function (c) {
+    if (hm[c] == null) return;
+    ash.getRange(at, hm[c] + 1).setNumberFormat('@');
+  });
 
   clearLaps(lsh, act.id);
   var laps = act.laps || [];

@@ -367,8 +367,13 @@
   function migrate(bundle) {
     const b = bundle || {};
     if (!b.schema) b.schema = SCHEMA;
-    b.activities = b.activities || [];
-    b.config = b.config || {};
+    /* stored JSON can be anything — a non-array here used to throw on the
+       first forEach and take the whole boot down */
+    if (!Array.isArray(b.activities)) b.activities = [];
+    b.activities = b.activities
+      .filter(a => a && typeof a === 'object')
+      .map(a => normalise(a) || a);
+    if (!b.config || typeof b.config !== 'object') b.config = {};
     /* names written as "Run, 2026-08-11" predate the readable format */
     if (b.schema < 2) {
       const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -566,6 +571,48 @@
     segs.total = total;
     segs.shown = runs.length;
     return segs;
+  }
+
+  /* ---------- normalising what comes back from Sheets ----------
+     A date column that didn't take the plain-text format comes back as a real
+     date, and Oslo midnight serialises as the previous day in UTC. So a naive
+     slice of the ISO string loses a day. Round to the nearest day instead. */
+
+  function normaliseDate(v) {
+    if (v == null || v === '') return null;
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    const t = (v instanceof Date) ? v.getTime() : Date.parse(v);
+    if (isNaN(t)) return null;
+    /* nearest midnight: 23:00 UTC is the next day somewhere east of Greenwich,
+       01:00 UTC is the same day somewhere west of it */
+    const d = new Date(Math.round(t / 86400000) * 86400000);
+    return d.toISOString().slice(0, 10);
+  }
+
+  function toNumber(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    if (v == null || v === '') return null;
+    const n = parseFloat(String(v).replace(',', '.'));
+    return isNaN(n) ? null : n;
+  }
+
+  const NUMERIC = ['distance_km', 'elapsed_s', 'moving_s', 'ascent_m', 'temp_c',
+                   'avg_hr', 'gap_pace_s', 'cadence_spm', 'rpe'];
+
+  /* Make one record safe to render whatever shape it arrived in. */
+  function normalise(a) {
+    if (!a || typeof a !== 'object') return null;
+    const out = Object.assign({}, a);
+    out.date = normaliseDate(a.date);
+    NUMERIC.forEach(k => { if (k in out) out[k] = toNumber(out[k]); });
+    out.laps = (Array.isArray(a.laps) ? a.laps : []).map(l => ({
+      n: toNumber(l && l.n),
+      distance_km: toNumber(l && l.distance_km),
+      time_s: toNumber(l && l.time_s),
+      avg_hr: toNumber(l && l.avg_hr),
+      role: (l && l.role) || 'main'
+    })).filter(l => l.distance_km != null && l.time_s != null);
+    return out;
   }
 
   /* ---------- damaged records ----------
@@ -876,7 +923,7 @@
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
-    isUsable, damaged, whatsMissing,
+    isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
     load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
