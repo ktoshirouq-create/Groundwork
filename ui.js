@@ -51,22 +51,26 @@
   function zoneBarHTML(tz) {
     const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
     if (!total) return '';
-    /* exact m:ss per zone — the parts add up to the whole */
-    /* a seven-second sliver can't hold "0:07" — it clipped to "0:" */
-    const MIN_SHARE = 0.09;
-    const label = v => (v / total >= MIN_SHARE) ? Calc.fmtDuration(v) : '';
-    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z =>
-      '<div class="zseg" style="background:' + ZCOL[z] + '; flex:' + tz[z] + '" title="' +
-      Calc.fmtDuration(tz[z]) + '">' + label(tz[z]) + '</div>');
-    if (tz.unknown > 0) parts.push('<div class="zseg" style="background:var(--stop); flex:' +
-      tz.unknown + '" title="' + Calc.fmtDuration(tz.unknown) + '">' + label(tz.unknown) + '</div>');
-    return '<div class="zbar">' + parts.join('') + '</div>';
+    /* Percentage in the bar, exact duration beneath it. Base work is judged as
+       a share of the session, not in minutes — "23:18 in Z2" means nothing
+       until you know what it was 23:18 out of. */
+    const MIN_SHARE = 0.07;
+    const cell = (v, bg, z) => {
+      const pct = Math.round(v / total * 100);
+      const wide = v / total >= MIN_SHARE;
+      return '<div class="zseg' + (z === 2 ? ' z2' : '') + '" style="background:' + bg +
+        '; flex:' + v + '" title="' + Calc.fmtDuration(v) + ' \u00b7 ' + pct + '%">' +
+        (wide ? '<b>' + pct + '%</b><s>' + Calc.fmtDuration(v) + '</s>' : '') + '</div>';
+    };
+    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z => cell(tz[z], ZCOL[z], z));
+    if (tz.unknown > 0) parts.push(cell(tz.unknown, 'var(--stop)', 0));
+    return '<div class="zbar tall">' + parts.join('') + '</div>';
   }
 
   function zoneKeyHTML(b) {
     return '<div class="zkey">' +
       '<span><i style="background:var(--z1)"></i>Z1 &lt;' + b.z2 + '</span>' +
-      '<span><i style="background:var(--z2)"></i>Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) + '</span>' +
+      '<span class="key-z2"><i style="background:var(--z2)"></i>Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) + '</span>' +
       '<span><i style="background:var(--z3)"></i>Z3 ' + b.z3 + '\u2013' + (b.z4 - 1) + '</span>' +
       '<span><i style="background:var(--z4)"></i>Z4 ' + b.z4 + '+</span></div>';
   }
@@ -663,8 +667,13 @@
       h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
       const missing = whole - covered;
-      h += '<div class="est">' + Math.round(tz[2] / covered * 100) + '% in Z2' +
-        (missing > 30 ? ', from ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
+      const z2pct = Math.round(tz[2] / covered * 100);
+      const typical = Calc.z2Typical(real(), cfg, scope, key());
+      h += '<div class="est"><b class="z2mark">' + z2pct + '% in Z2</b>' +
+        (typical != null && Math.abs(z2pct - typical) >= 4
+          ? ' \u2014 your recent typical is ' + typical + '%'
+          : typical != null ? ' \u2014 about your usual' : '') +
+        (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
         '.</div>';
     }
 

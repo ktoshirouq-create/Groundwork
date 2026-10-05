@@ -73,6 +73,18 @@ the first or last third of a run moves drift about that much on its own, so a
 figure inside that range is terrain, not physiology. Only ±4 and beyond is
 reported as a value.
 
+## Time in zone
+
+The bar shows **share**, with the exact duration beneath it. "23:18 in Z2"
+means nothing until you know what it was 23:18 out of, and base work is judged
+as a proportion of the session.
+
+Z2 is set larger than the others, because that's the zone being trained for.
+Underneath, the Z2 share is compared against the median of the last eight
+periods that carried lap heart rate — so a session reads against your own
+habit, not against a number someone else picked. Fewer than three such periods
+and it says nothing.
+
 ## The type scale
 
 Seven steps, declared once in `:root`, and nothing off them:

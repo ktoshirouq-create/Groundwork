@@ -852,6 +852,25 @@
     return rows;
   }
 
+  /* The Z2 share of the periods before this one, so a single session reads
+     against your own habit rather than against nothing. Median of up to the
+     last 8 periods that carried lap heart rate. */
+  function z2Typical(acts, cfg, scope, selectedKey) {
+    const b = zoneBounds(cfg);
+    const vals = [];
+    let k = shiftKey(selectedKey, scope, -1);
+    for (let i = 0; i < 12 && vals.length < 8; i++) {
+      const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
+      const laps = [];
+      inK.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
+      const tz = timeInZone(laps, b);
+      const tot = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+      if (tot > 0) vals.push(tz[2] / tot * 100);
+      k = shiftKey(k, scope, -1);
+    }
+    return vals.length >= 3 ? Math.round(median(vals)) : null;
+  }
+
   /* ---------- load ----------
      Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
      short hard effort can cost the same as a long easy one. Needs only average
@@ -928,7 +947,7 @@
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
-    load, sessionRpe, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
+    load, sessionRpe, z2Typical, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };

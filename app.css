@@ -194,11 +194,27 @@ body {
 
 /* ---------- zone bar ---------- */
 
-.zbar { display: flex; height: 28px; border-radius: 5px; overflow: hidden; margin: 9px 0 7px; }
-.zseg {
-  display: flex; align-items: center; justify-content: center; min-width: 0;
-  font-family: var(--f-data); font-size: var(--t-micro); color: rgba(0,0,0,.62); font-weight: 500;
+.zbar {
+  display: flex; height: 30px; border-radius: 7px; overflow: hidden;
+  margin-top: 12px;
 }
+/* taller, because each segment now carries two lines */
+.zbar.tall { height: 46px; }
+.zseg {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: #10181A; min-width: 0; overflow: hidden; line-height: 1.15;
+}
+.zseg b {
+  font-family: var(--f-display); font-size: var(--t-strong); font-weight: 700;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.zseg s {
+  text-decoration: none; font-family: var(--f-data); font-size: var(--t-micro);
+  opacity: .72; margin-top: 1px;
+}
+/* Z2 is the one being trained for, so it is the one that reads first */
+.zseg.z2 b { font-size: var(--t-lead); }
+
 .zkey { display: flex; flex-wrap: wrap; gap: 3px 13px; font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); }
 .zkey i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 
@@ -543,3 +559,8 @@ label > span {
   #view-home > *:nth-child(n+6) { animation-delay: 85ms; }
 }
 @keyframes gw-rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+
+/* the zone the base work lives in, called out where it matters */
+.z2mark { color: var(--z2); font-weight: 600; }
+.zkey .key-z2 { color: var(--ink); }
