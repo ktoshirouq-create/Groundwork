@@ -1,9 +1,9 @@
 /* Bump CACHE on every JS or CSS change. */
-const CACHE = 'groundwork-v27';
+const CACHE = 'groundwork-v28';
 const ASSETS = [
   './', './index.html', './app.css',
   './calc.js', './store.js', './parse.js', './ui.js',
-  './manifest.json',
+  './manifest.json', './sheets.json',
   './icon-192.png', './icon-512.png',
   './icon-maskable-192.png', './icon-maskable-512.png'
 ];

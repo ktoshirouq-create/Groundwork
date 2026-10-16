@@ -1059,6 +1059,9 @@
           : sy.state === 'error' ? 'last try failed'
           : sy.at ? 'synced ' + sy.at.slice(11, 16) : 'connected')
         : 'not connected') + '</span></div>';
+    if (Store.sheetsConfigured())
+      h += '<div class="small muted">Connection came from <b>' +
+        esc(Store.sheetsOrigin()) + '</b>.</div>';
     h += '<label><span>Web app URL</span><input type="text" id="s-url" value="' +
       esc(sh.url || '') + '" placeholder="https://script.google.com/.../exec"></label>';
     h += '<label><span>Token (blank if you didn\u2019t set one)</span>' +
@@ -1074,6 +1077,18 @@
       h += '<div class="flag ok"><i>\u2713</i><div>Your runs are in the spreadsheet as well as on this phone.</div></div>';
     h += '<div class="est">A fetch from Sheets never deletes what is on this phone. ' +
       'An empty or unreachable sheet is pushed to, not copied from.</div>';
+
+    if (Store.sheetsOrigin() !== 'sheets.json in the repo') {
+      h += '<div class="flag"><i>i</i><div>To stop retyping this after a storage clear, ' +
+        'put the same URL and token in <b>sheets.json</b> in your repo. The app reads it ' +
+        'on load, and a deployed file cannot be evicted. Anyone who knows your Pages ' +
+        'address could read it, so only do this if that is an acceptable trade for ' +
+        'run data.</div></div>';
+    }
+
+    /* whether the browser has actually promised to keep the data */
+    h += '<div class="sec"><span>Storage</span><span id="persist-state">checking</span></div>';
+    h += '<div class="small muted" id="persist-note">\u00a0</div>';
 
     const broken = Calc.damaged(Store.all());
     if (broken.length) {
@@ -1107,6 +1122,19 @@
 
     el('view-settings').innerHTML = h;
     $('#view-settings [data-back]').onclick = () => go('home');
+
+    Store.persisted().then(function (ok) {
+      const st = el('persist-state'), note = el('persist-note');
+      if (!st) return;
+      st.textContent = ok === null ? 'unknown' : ok ? 'persistent' : 'evictable';
+      note.innerHTML = ok
+        ? 'The browser has agreed not to clear this app\u2019s data to free space.'
+        : ok === null
+          ? 'This browser does not report whether storage is protected.'
+          : '<b>The browser may clear this app\u2019s data without warning.</b> ' +
+            'Your runs are in the sheet, and the connection is recoverable, so a clear ' +
+            'costs you nothing but a reload.';
+    });
 
     const fix = el('c-fixfirst');
     if (fix) fix.onclick = () => go('edit', Calc.damaged(Store.all())[0].id);

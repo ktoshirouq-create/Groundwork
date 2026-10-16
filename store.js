@@ -55,15 +55,97 @@
 
   /* ------------------------------------------------------------ sheets ---- */
 
+  /* A tiny IndexedDB box for the things that must outlive a storage clear.
+     localStorage is evicted first and hardest; IndexedDB survives more. */
+  const IDB = {
+    db: null,
+    open: function () {
+      if (IDB.db) return Promise.resolve(IDB.db);
+      return new Promise(function (res, rej) {
+        if (!self.indexedDB) return rej(new Error('no indexedDB'));
+        const r = self.indexedDB.open('groundwork', 1);
+        r.onupgradeneeded = function () {
+          if (!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv');
+        };
+        r.onsuccess = function () { IDB.db = r.result; res(IDB.db); };
+        r.onerror = function () { rej(r.error); };
+      });
+    },
+    get: function (k) {
+      return IDB.open().then(db => new Promise(function (res, rej) {
+        const t = db.transaction('kv', 'readonly').objectStore('kv').get(k);
+        t.onsuccess = function () { res(t.result); };
+        t.onerror = function () { rej(t.error); };
+      })).catch(() => null);
+    },
+    set: function (k, v) {
+      return IDB.open().then(db => new Promise(function (res, rej) {
+        const t = db.transaction('kv', 'readwrite').objectStore('kv').put(v, k);
+        t.onsuccess = function () { res(true); };
+        t.onerror = function () { rej(t.error); };
+      })).catch(() => false);
+    }
+  };
+
+  /* Where the connection details came from, so Setup can say. */
+  let sheetsOrigin = 'none';
+
   const Sheets = {
     settings: function () { return readJSON(KEY.sheets, {}); },
 
     configured: function () { return !!(Sheets.settings().url || '').length; },
 
+    origin: function () { return sheetsOrigin; },
+
+    /* Three places, in order of how well they survive:
+         1. a sheets.json deployed with the site — cannot be evicted at all
+         2. IndexedDB — survives most clears
+         3. localStorage — the working copy, evicted first
+       Whichever answers first wins, and the answer is written back to the
+       other two. This is why the URL and token no longer have to be retyped
+       after the browser clears its storage. */
+    restore: function () {
+      /* This runs before the first render, so it must never reject. A boot
+         that fails here shows nothing at all. */
+      const local = readJSON(KEY.sheets, {});
+      if (local.url) {
+        sheetsOrigin = 'this device';
+        /* mirror it into IndexedDB every boot — a copy only written at setup
+           time is no copy at all once localStorage is cleared */
+        IDB.set('sheets', local);
+        return Promise.resolve(local);
+      }
+
+      const fromFile = function () {
+        if (typeof fetch !== 'function') return Promise.resolve({});
+        return Promise.resolve()
+          .then(() => fetch('./sheets.json', { cache: 'no-store' }))
+          .then(r => (r && r.ok ? r.json() : null))
+          .then(function (file) {
+            if (!file || !file.url) return {};
+            sheetsOrigin = 'sheets.json in the repo';
+            Sheets.save(file.url, file.token || '');
+            return file;
+          })
+          .catch(() => ({}));
+      };
+
+      return IDB.get('sheets').then(function (fromIdb) {
+        if (fromIdb && fromIdb.url) {
+          sheetsOrigin = 'recovered from this device';
+          localStorage.setItem(KEY.sheets, JSON.stringify(fromIdb));
+          return fromIdb;
+        }
+        return fromFile();
+      }).catch(fromFile).catch(() => ({}));
+    },
+
     save: function (url, token) {
-      localStorage.setItem(KEY.sheets, JSON.stringify({
-        url: (url || '').trim(), token: (token || '').trim()
-      }));
+      const cfg = { url: (url || '').trim(), token: (token || '').trim() };
+      localStorage.setItem(KEY.sheets, JSON.stringify(cfg));
+      IDB.set('sheets', cfg);
+      if (sheetsOrigin === 'none') sheetsOrigin = 'this device';
+      return cfg;
     },
 
     get: function (action) {
@@ -107,14 +189,26 @@
     onsync: null,
 
     init: function () {
-      this.adapter = new LocalAdapter();
-      return this.adapter.load().then(b => {
-        this.bundle = b;
-        this.sync.pending = queued().length;
-        this.sync.state = Sheets.configured() ? 'idle' : 'off';
-        return b;
+      const self = this;
+      self.adapter = new LocalAdapter();
+      return self.adapter.load().then(function (b) {
+        self.bundle = b;
+        self.sync.pending = queued().length;
+        /* find the connection wherever it survived */
+        return Sheets.restore().then(function () {
+          self.sync.state = Sheets.configured() ? 'idle' : 'off';
+          return b;
+        });
       });
     },
+
+    /* Whether the browser has promised not to evict this app's storage. */
+    persisted: function () {
+      if (!navigator.storage || !navigator.storage.persisted) return Promise.resolve(null);
+      return navigator.storage.persisted().catch(() => null);
+    },
+
+    sheetsOrigin: function () { return Sheets.origin(); },
 
     all: function () { return (this.bundle && this.bundle.activities) || []; },
 

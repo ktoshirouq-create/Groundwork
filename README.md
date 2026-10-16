@@ -290,6 +290,32 @@ the remote one queues; the queue flushes on the next load.
 
 A row present in both is resolved by `updated_at`, newest wins.
 
+### The connection survives a storage clear
+
+Android cleared this app's storage four times, twice after it was installed to
+the home screen, so `navigator.storage.persist()` is not a guarantee. The fix
+is not to depend on browser storage for the one thing that makes recovery
+possible.
+
+The web-app URL and token are looked for in three places, best survival first:
+
+1. **`sheets.json`, deployed with the site.** Cannot be evicted, works on a
+   device that has never seen the app. Fill it in and commit it and you never
+   retype anything again. The trade: it is served publicly, so anyone who knows
+   your Pages address can read it. For run data that is usually an acceptable
+   swap; rotate the token with `makeToken()` if you change your mind.
+2. **IndexedDB.** Survives most clears. Written on every boot, not just at
+   setup — a copy only written once is no copy at all.
+3. **localStorage.** The working copy, and the first thing evicted.
+
+Whichever answers first wins and is written back to the others. Setup says
+which one it came from, and whether the browser has agreed to keep this app's
+storage.
+
+`restore()` can never reject. It runs before the first render, so a failure
+there would show a blank screen; with no `fetch` and no IndexedDB the app still
+boots and simply reports sync as off.
+
 ### Connecting it
 
 1. New Google Sheet → Extensions → Apps Script → paste `Code.gs`

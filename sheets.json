@@ -1,0 +1,5 @@
+{
+  "_comment": "Put your Apps Script web-app URL and token here, commit it, and the app will configure itself on every device and after every storage clear. This file is served with the site, so anyone who knows your Pages URL can read it — see the Sheets section of README.md before filling it in.",
+  "url": "",
+  "token": ""
+}
