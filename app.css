@@ -623,3 +623,8 @@ label > span {
 
 .hnote.good { border-left-color: var(--z2); }
 .hnote.good b { color: var(--z2); }
+
+/* session chips wrap onto a second line rather than scrolling off */
+.bar.wrap { flex-wrap: wrap; gap: 6px 6px; margin-top: 6px; margin-bottom: 4px; }
+.callout.ok { border-left-color: var(--z2); }
+.callout.ok b { color: var(--z2); }

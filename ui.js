@@ -821,7 +821,9 @@
 
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
     h += '<div class="ttl">' + esc(a.name) + '</div>';
-    const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase(), a.source.toUpperCase()];
+    const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase()];
+    if (a.session) sub.push(Calc.sessionLabel(a.session).toUpperCase());
+    sub.push(a.source.toUpperCase());
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
@@ -850,6 +852,14 @@
       h += '<div class="est">Drift needs ' + need + ' more full kilometre' + (need === 1 ? '' : 's') +
         ' \u2014 the opening one is dropped, and three are needed after that.</div>';
     }
+
+    const intent = Calc.intentCheck(a, cfg);
+    if (intent && !intent.ok) h += '<div class="callout warn">You called this a <b>' +
+      esc(intent.session.label.toLowerCase()) + ' run</b>, and <b>' + intent.above +
+      '% of it was above Z2</b>.</div>';
+    else if (intent && intent.ok && !intent.hard)
+      h += '<div class="callout ok">A ' + esc(intent.session.label.toLowerCase()) +
+        ' run, run like one \u2014 <b>' + intent.pct + '% in Z2</b>.</div>';
 
     h += bandHTML(a);
 
@@ -908,6 +918,7 @@
       '<textarea id="paste" placeholder="Paste straight from Gemini. Pipes, commas and tabs all work."></textarea>' +
       '<button class="clear" id="paste-clear" type="button" aria-label="Clear">\u2715</button>' +
       '</div></label>';
+    h += '<button class="btn ghost" id="paste-from" hidden>Paste from clipboard</button>';
     h += '<button class="btn" id="read">Read it</button>';
     h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
     h += '<div id="preview"></div>';
@@ -926,6 +937,18 @@
       el('paste').focus();
     };
 
+    const pasteBtn = el('paste-from');
+    if (pasteBtn && navigator.clipboard && navigator.clipboard.readText) {
+      pasteBtn.hidden = false;
+      once(pasteBtn, 'Reading\u2026', () =>
+        navigator.clipboard.readText().then(text => {
+          if (!text || !text.trim()) { toast('Clipboard is empty', 'bad'); return; }
+          el('paste').value = text;
+          syncClear();
+          el('read').click();
+        }).catch(() => { toast('Could not read the clipboard', 'bad'); }));
+    }
+
     el('read').onclick = () => {
       const text = el('paste').value;
       if (!text.trim()) return;
@@ -943,7 +966,15 @@
     const dup = a.date && a.distance_km ? Model.findDuplicate(a, Store.all()) : null;
 
     let h = '<div class="rule"></div><div class="eyebrow">Check it</div>';
-    h += '<label><span>Name</span><input type="text" id="p-name" value="' + esc(a.name || '') + '" placeholder="Where was it?"></label>';
+    /* What the session was meant to be. More useful than a place name: it lets
+       the run be judged against its own intent rather than a general rule. */
+    h += '<label><span>What was it</span></label>';
+    h += '<div class="bar wrap" id="p-session">' + Calc.SESSIONS.map(s =>
+      '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
+      (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
+    h += '<label><span>Call it something else (optional)</span>' +
+      '<input type="text" id="p-name" value="' + esc(a.name || '') +
+      '" placeholder="Furuset loop"></label>';
     h += '<label><span>Source</span><select id="p-source">' +
       '<option value="tracked">Tracked on the watch</option>' +
       '<option value="typed">Not recorded \u2014 typed from memory</option></select></label>';
@@ -983,6 +1014,16 @@
     if (errors.length) h += '<div class="small muted" style="margin-top:9px">Fix the paste and read it again.</div>';
 
     el('preview').innerHTML = h;
+
+    document.querySelectorAll('#p-session [data-sess]').forEach(b => {
+      b.onclick = () => {
+        const on = b.getAttribute('aria-pressed') === 'true';
+        document.querySelectorAll('#p-session [data-sess]').forEach(x =>
+          x.setAttribute('aria-pressed', 'false'));
+        b.setAttribute('aria-pressed', String(!on));
+        if (draft) draft.session = on ? null : b.dataset.sess;
+      };
+    });
 
     const save = el('save');
     if (save && !errors.length) once(save, dup ? 'Replacing\u2026' : 'Saving\u2026', () => {
@@ -1231,6 +1272,10 @@
       '<option value="tracked"' + (a.source === 'tracked' ? ' selected' : '') + '>Tracked on the watch</option>' +
       '<option value="typed"' + (a.source === 'typed' ? ' selected' : '') + '>Not recorded \u2014 typed</option>' +
       '</select></label>';
+    h += '<label><span>What was it</span></label>';
+    h += '<div class="bar wrap" id="e-session">' + Calc.SESSIONS.map(s =>
+      '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
+      (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
     h += '<label><span>Note</span><input type="text" data-f="note" data-kind="text" value="' +
       esc(a.note || '') + '"></label>';
 
@@ -1252,6 +1297,17 @@
 
     el('view-edit').innerHTML = h;
     document.querySelectorAll('#view-edit [data-back]').forEach(b => b.onclick = () => go('detail', id));
+
+    let editSession = a.session || null;
+    document.querySelectorAll('#e-session [data-sess]').forEach(b => {
+      b.onclick = () => {
+        const on = b.getAttribute('aria-pressed') === 'true';
+        document.querySelectorAll('#e-session [data-sess]').forEach(x =>
+          x.setAttribute('aria-pressed', 'false'));
+        b.setAttribute('aria-pressed', String(!on));
+        editSession = on ? null : b.dataset.sess;
+      };
+    });
 
     once(el('e-save'), 'Saving\u2026', () => {
       const next = Object.assign({}, a);
@@ -1282,6 +1338,7 @@
         esc(f.msg) + '</div></div>').join('');
       if (errors.length) { toast('Fix the highlighted fields', 'bad'); return; }
 
+      next.session = editSession;
       next.updated_at = new Date().toISOString();
       return Store.put(next).then(() => { go('detail', next.id); toast('Saved', 'ok'); });
     });

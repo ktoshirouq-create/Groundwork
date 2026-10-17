@@ -73,6 +73,24 @@ the first or last third of a run moves drift about that much on its own, so a
 figure inside that range is terrain, not physiology. Only ±4 and beyond is
 reported as a value.
 
+## What the session was meant to be
+
+Every run can be tagged: easy, long, recovery, steady, tempo, intervals, race.
+Chips in the preview and on the edit screen, and the name defaults from the tag
+("Recovery · 12 Oct") so there is nothing to type. A name you type yourself
+wins, and a paste never overwrites either.
+
+The tag is worth more than a place name, because it lets a run be judged
+against **its own intent** rather than a general rule:
+
+- a recovery run spent in Z2 → *"A recovery run, run like one — 100% in Z2."*
+- a recovery run spent above it → *"You called this a recovery run, and 73% of
+  it was above Z2."*
+- a tempo run spent above it → nothing. That was the point.
+
+No verdict at all without a tag or without lap heart rate. The app doesn't
+guess what you meant.
+
 ## Two heroes
 
 Aerobic pace alone rewards speed. Worse, it is measured at a fixed 145 bpm, so

@@ -295,7 +295,8 @@
      "—" clears it. Typed fields are never touched by a paste — they came from
      you, not from a screenshot. */
 
-  const TYPED = ['name', 'source', 'note'];
+  /* typed by hand, never overwritten by a paste */
+  const TYPED = ['name', 'source', 'note', 'session'];
 
   function mergeInto(existing, p, opts) {
     opts = opts || {};

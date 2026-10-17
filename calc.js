@@ -333,7 +333,7 @@
     distance_km: null, elapsed_s: null, moving_s: null,
     ascent_m: null, descent_m: null, ele_min_m: null, ele_max_m: null,
     temp_c: null, avg_hr: null, resting_hr: null, gap_pace_s: null, cadence_spm: null,
-    rpe: null, feel: null, conditions: null, pack: null, note: null,
+    rpe: null, feel: null, session: null, note: null,
     sleep_s: null, sleep_score: null, hrv_ms: null,
     laps: [], created_at: null, updated_at: null
   };
@@ -345,6 +345,11 @@
     a.created_at = a.created_at || now;
     a.updated_at = now;
     if (a.type === 'day') a.name = a.date || '';
+    if (!a.name && a.session) {
+      const L = sessionLabel(a.session);
+      if (L) a.name = L + ' \u00b7 ' + (+a.date.slice(8)) +
+        ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+a.date.slice(5,7)-1];
+    }
     if (!a.name) {
       const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       const d = a.date ? (+a.date.slice(8)) + ' ' + M[+a.date.slice(5, 7) - 1] : 'undated';
@@ -922,6 +927,56 @@
     return pct >= want ? 'good' : pct >= want - 15 ? 'near' : 'under';
   }
 
+  /* ---------- what the session was meant to be ----------
+     Tagging intent is worth more than a place name: it lets the app compare
+     what you meant to run against what you actually ran. A recovery run spent
+     above Z2 is a miss; a tempo run spent above Z2 is the point. */
+
+  const SESSIONS = [
+    { key: 'easy',      label: 'Easy',      z2: 'high' },
+    { key: 'long',      label: 'Long',      z2: 'high' },
+    { key: 'recovery',  label: 'Recovery',  z2: 'high' },
+    { key: 'steady',    label: 'Steady',    z2: 'mid'  },
+    { key: 'tempo',     label: 'Tempo',     z2: 'low'  },
+    { key: 'intervals', label: 'Intervals', z2: 'low'  },
+    { key: 'race',      label: 'Race',      z2: 'low'  }
+  ];
+
+  function sessionOf(key) {
+    return SESSIONS.find(s => s.key === key) || null;
+  }
+
+  function sessionLabel(key) {
+    const s = sessionOf(key);
+    return s ? s.label : null;
+  }
+
+  /* Did the run match what it was called? Only answers where the intent is
+     clear and lap heart rate exists. */
+  function intentCheck(act, cfg) {
+    const s = sessionOf(act && act.session);
+    if (!s) return null;
+    /* straight off this run's laps — z2Share filters by activity type, which a
+       bare record passed in here would fail */
+    const tz = timeInZone((act.laps || []), zoneBounds(cfg));
+    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    if (!total) return null;
+    const share = { pct: Math.round(tz[2] / total * 100) };
+    const target = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
+    const above = 100 - share.pct;
+
+    if (s.z2 === 'high') {
+      return share.pct >= target
+        ? { ok: true, session: s, pct: share.pct }
+        : { ok: false, session: s, pct: share.pct, above: above };
+    }
+    if (s.z2 === 'low') {
+      /* a hard session is supposed to be hard — nothing to report */
+      return { ok: true, session: s, pct: share.pct, hard: true };
+    }
+    return { ok: share.pct >= target - 20, session: s, pct: share.pct, above: above };
+  }
+
   /* ---------- load ----------
      Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
      short hard effort can cost the same as a long easy one. Needs only average
@@ -998,7 +1053,8 @@
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
-    load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
+    load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone,
+    SESSIONS, sessionOf, sessionLabel, intentCheck, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };
