@@ -125,7 +125,9 @@
 
       let inner;
       if (!zTotal) {
-        inner = '<div class="seg" style="background:var(--dim); height:100%"></div>';
+        /* ran, but no lap heart rate — unknown composition, not an empty week.
+           A flat grey block read as broken data. */
+        inner = '<div class="seg nohr" title="no lap heart rate"></div>';
       } else {
         const order = [5, 4, 3, 2, 1];
         inner = order.filter(z => tz[z] > 0).map(z =>
@@ -425,6 +427,12 @@
 
   /* ---------------------------------------------------------- the read */
 
+  /* "1 days / week" is the kind of thing that makes an app feel unfinished. */
+  function unitFor(r) {
+    if (r.unit === 'days / week' && Math.round(r.now) === 1) return 'day / week';
+    return r.unit;
+  }
+
   function fmtRead(v, kind) {
     if (v == null) return '\u2014';
     if (kind === 'pace') return Calc.fmtPace(v);
@@ -470,7 +478,7 @@
           ' bpm. A scale across that would be noise.</div></div>';
         return;
       }
-      const d = r.need === 0 ? Calc.delta(r.now, r.prev, r.betterWhen) : null;
+      const d = r.need === 0 ? Calc.delta(r.now, r.prev, r.betterWhen, r.neverBad) : null;
       const pos = trackPos(r.now, r.range, r.betterWhen);
       const bandFrom = r.band ? trackPos(r.betterWhen === 'down' ? r.band.max : r.band.min, r.range, r.betterWhen) : null;
       const bandTo = r.band ? trackPos(r.betterWhen === 'down' ? r.band.min : r.band.max, r.range, r.betterWhen) : null;
@@ -488,7 +496,8 @@
           ? '<div class="band" style="left:' + Math.min(bandFrom, bandTo).toFixed(1) +
             '%; width:' + Math.abs(bandTo - bandFrom).toFixed(1) + '%"></div>' : '') +
         '<div class="dot' + (r.need ? ' off' : '') + '" style="left:' + pos.toFixed(1) + '%"></div></div>';
-      h += '<div class="rd-ends"><span>' + fmtRead(worst, r.kind) +
+      h += '<div class="rd-ends"><span>' + (r.window ? esc(r.window) + ' \u00b7 ' : '') +
+        fmtRead(worst, r.kind) +
         (r.worstLabel ? ' ' + esc(r.worstLabel) : '') + '</span><span>' +
         fmtRead(best, r.kind) + (r.bestLabel ? ' ' + esc(r.bestLabel) : '') + '</span></div>';
       if (r.note) h += '<div class="rd-note">' + esc(r.note) + '</div>';
@@ -592,6 +601,15 @@
     bind();
   }
 
+  /* The word for whatever period the screen is showing, so a figure can never
+     be mistaken for a different window's. */
+  function periodWord() {
+    const now = Calc.periodKey(today(), scope) === key();
+    if (scope === 'week') return now ? 'this week' : 'that week';
+    if (scope === 'month') return now ? 'this month' : 'that month';
+    return now ? 'this year' : 'that year';
+  }
+
   function runHero(inP, mine, bounds) {
     const cfg = Store.config();
     const withHr = mine.filter(a => a.avg_hr != null).sort((a, b) => b.date.localeCompare(a.date));
@@ -622,13 +640,13 @@
 
       h += '<div class="heropair">';
       h += '<div class="hcol">' +
-        '<div class="eyebrow">Aerobic pace</div>' +
+        '<div class="eyebrow">Aerobic pace \u00b7 last run</div>' +
         '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
         '<div class="hunit">/km</div></div>' +
         '<div class="hfoot">at ' + Calc.refHr(cfg) + ' bpm' +
         (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div></div>';
       h += '<div class="hcol' + (share ? ' t-' + tone : '') + '">' +
-        '<div class="eyebrow">In Z2</div>' +
+        '<div class="eyebrow">In Z2 \u00b7 ' + esc(periodWord()) + '</div>' +
         '<div class="hero"><div class="hnum z2num">' +
         (share ? share.pct : '\u2014') + '</div><div class="hunit">%</div></div>' +
         '<div class="hfoot">' + (share
@@ -647,20 +665,12 @@
 
       /* A fast run and a hard run are the same fact. Saying so here beats
          leaving the zone split 400px further down to make the point. */
-      const lastTz = Calc.timeInZone(last.laps, bounds);
-      const lastTotal = [1,2,3,4,5].reduce((t, z) => t + lastTz[z], 0);
-      if (lastTotal) {
-        const inZ2 = Math.round(lastTz[2] / lastTotal * 100);
-        const above = Math.round((lastTz[3] + lastTz[4] + lastTz[5]) / lastTotal * 100);
-        const best = Calc.median(peers) != null && pace <= Math.min.apply(null, peers);
-        if (inZ2 >= target) h += '<div class="hnote good">Mostly <b>base work</b>' +
-          (pace != null && banded && pace > ref
-            ? ', and slower than your usual at this length \u2014 which is what base work is.'
-            : '.') + '</div>';
-        else if (above >= 50) h += '<div class="hnote">' +
-          (best ? 'Fastest at this length, but <b>' : '<b>') + above +
-          '% above Z2</b> \u2014 a tempo run, not base work.</div>';
-      }
+      /* One implementation, shared with the detail screen, and it knows what
+         the session was tagged as. The note is about the last run, so it says
+         so — the numbers above it describe the whole period. */
+      const note = Calc.sessionNote(last, cfg);
+      if (note) h += '<div class="hnote' + (note.tone === 'ok' ? ' good' : '') + '">' +
+        '<em>Last run</em> ' + note.text + '</div>';
     } else {
       h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
         '<div class="hsub">Needs a run with average heart rate.</div>';
@@ -711,9 +721,9 @@
       h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
       const missing = whole - covered;
-      const z2pct = Math.round(tz[2] / covered * 100);
+      const z2pct = Calc.z2Of(laps, cfg).pct;
       const typical = Calc.z2Typical(real(), cfg, scope, key());
-      h += '<div class="est"><b class="z2mark">' + z2pct + '% in Z2</b>' +
+      h += '<div class="est"><b class="z2mark">' + z2pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
         (typical != null && Math.abs(z2pct - typical) >= 4
           ? ' \u2014 your recent typical is ' + typical + '%'
           : typical != null ? ' \u2014 about your usual' : '') +

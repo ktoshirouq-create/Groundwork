@@ -91,6 +91,33 @@ against **its own intent** rather than a general rule:
 No verdict at all without a tag or without lap heart rate. The app doesn't
 guess what you meant.
 
+## One number, one window
+
+The same screen once showed 29%, 33% and 29% for what any reader would take to
+be a single figure. They were three correct answers over three different
+windows — the period, the last three runs, the period again — computed in five
+separate places, none of them labelled.
+
+The fix was structural rather than cosmetic:
+
+- **`z2Of(laps, cfg)` is the only place Z2 share is worked out.** `z2Share`,
+  `z2Typical`, `intentCheck`, `sessionNote` and the zone caption all call it.
+  There is no second implementation to drift.
+- **Every figure names its window** — "In Z2 · this week", "last 3 runs · 29".
+  A number without a window is a number that will eventually contradict
+  another one.
+- **Tone is a property of the metric, not of the render site.** `neverBad` is
+  declared once on the Z2 row and `delta()` honours it everywhere. Z2 falling
+  is a choice, not a failure — it used to go red in Form while the hero
+  correctly stayed amber.
+- **`sessionNote()` is shared by the home screen and the detail screen**, so
+  they cannot disagree. The home note used to call a run tagged *Tempo* "a
+  tempo run, not base work" — telling you off for following your own plan.
+
+`tests/coherence.js` asserts this at the level the bug lived at: it renders the
+whole screen, extracts every Z2 figure, and fails if any lacks a window or
+contradicts another.
+
 ## Two heroes
 
 Aerobic pace alone rewards speed. Worse, it is measured at a fixed 145 bpm, so

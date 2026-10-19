@@ -680,7 +680,11 @@
 
   /* betterWhen: 'down' | 'up' | null. Null means direction is shown without a
      verdict — a shorter week may be a recovery week, and the app doesn't know. */
-  function delta(value, baseline, betterWhen) {
+  /* `neverBad` is for metrics where a fall is a legitimate choice rather than a
+     failure. Z2 share is the case that matters: a tempo week is lower by
+     design, and colouring that red tells you off for following your own plan.
+     Declared on the metric, so every render site inherits it. */
+  function delta(value, baseline, betterWhen, neverBad) {
     if (value == null || baseline == null || !baseline) return null;
     const diff = value - baseline;
     const pct = diff / baseline * 100;
@@ -688,6 +692,7 @@
     let tone = 'flat';
     if (dir !== 'flat' && betterWhen) tone = (dir === betterWhen) ? 'good' : 'bad';
     else if (dir !== 'flat') tone = 'neutral';
+    if (neverBad && tone === 'bad') tone = 'neutral';
     return { diff: diff, pct: pct, dir: dir, tone: tone };
   }
 
@@ -804,6 +809,7 @@
       const paces = mine.filter(a => a.avg_hr != null).map(a => aerobicPace(a, c)).filter(v => v != null);
       const w = windowStats(paces);
       push({ n: count(paces), key: 'pace', label: 'Aerobic pace', unit: '/km', kind: 'pace',
+             window: 'last 3 runs',
              now: w.now, prev: w.prev, need: w.need, betterWhen: 'down',
              range: rangeOf(paces), band: paces.length >= 3 ? rangeOf(paces.slice(-3)) : null,
              bestLabel: 'best', worstLabel: '' });
@@ -811,6 +817,7 @@
       const drifts = mine.map(a => drift(a.laps)).filter(v => v != null);
       const dw = windowStats(drifts);
       push({ n: count(drifts), key: 'drift', label: 'Drift', unit: 'bpm', kind: 'bpm',
+             window: 'last 3 measured',
              now: dw.now, prev: dw.prev, need: dw.need, betterWhen: 'down',
              range: rangeOf(drifts), band: drifts.length >= 3 ? rangeOf(drifts.slice(-3)) : null,
              bestLabel: 'lowest', missingNote: 'needs runs of 4 km or more with lap HR' });
@@ -819,6 +826,7 @@
         .filter(x => x.total > 0).map(x => x.zones[2] / x.total * 100);
       const zw = windowStats(zs);
       push({ n: count(zs), key: 'z2', label: 'Time in Z2', unit: '%', kind: 'pct',
+             window: 'last 3 runs', neverBad: true,
              now: zw.now, prev: zw.prev, need: zw.need, betterWhen: 'up',
              range: rangeOf(zs), band: zs.length >= 3 ? rangeOf(zs.slice(-3)) : null,
              bestLabel: 'most' });
@@ -833,6 +841,7 @@
         .map(x => x.value);
       const cw = windowStats(days);
       push({ n: count(days), key: 'days', label: 'Consistency', unit: 'days / week', kind: 'int',
+             window: 'last 3 weeks',
              now: cw.now, prev: cw.prev, need: cw.need, betterWhen: 'up',
              range: rangeOf(days), band: null, bestLabel: 'most' });
 
@@ -841,6 +850,7 @@
         .map(x => x.value).filter(v => v > 0);
       const lw = windowStats(loads);
       push({ n: loads.length, key: 'load', label: 'Weekly load', unit: '', kind: 'int',
+             window: 'last 3 weeks',
              now: lw.now, prev: lw.prev, need: lw.need, betterWhen: null,
              range: rangeOf(loads), band: loads.length >= 3 ? rangeOf(loads.slice(-3)) : null,
              worstLabel: 'least', bestLabel: 'most',
@@ -851,6 +861,7 @@
         .map(x => x.value).filter(v => v > 0);
       const vw = windowStats(vols);
       push({ n: count(vols), key: 'volume', label: 'Weekly volume', unit: 'km', kind: 'km',
+             window: 'last 3 weeks',
              now: vw.now, prev: vw.prev, need: vw.need, betterWhen: null,
              range: rangeOf(vols), band: vols.length >= 3 ? rangeOf(vols.slice(-3)) : null,
              worstLabel: 'least', bestLabel: 'most',
@@ -871,9 +882,8 @@
       const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
       const laps = [];
       inK.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
-      const tz = timeInZone(laps, b);
-      const tot = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
-      if (tot > 0) vals.push(tz[2] / tot * 100);
+      const s = z2Of(laps, cfg);
+      if (s) vals.push(s.pct);
       k = shiftKey(k, scope, -1);
     }
     return vals.length >= 3 ? Math.round(median(vals)) : null;
@@ -884,17 +894,32 @@
      So it is reported next to aerobic pace, never instead of it — the share is
      the method, the pace is the evidence it is working. */
 
-  function z2Share(acts, cfg) {
-    const b = zoneBounds(cfg);
+  /* The only place Z2 share is ever worked out. It used to be computed in five
+     different places over three different windows, which is how the same screen
+     came to show 29%, 33% and 29% for what a reader would take to be one
+     number. Everything now goes through here, and every caller has to say
+     which window it is asking about. */
+  function z2Of(laps, cfg) {
+    const tz = timeInZone(laps || [], zoneBounds(cfg));
+    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    if (!total) return null;
+    return {
+      pct: Math.round(tz[2] / total * 100),
+      above: Math.round((tz[3] + tz[4] + tz[5]) / total * 100),
+      seconds: tz[2], total: total, tz: tz
+    };
+  }
+
+  function lapsOf(acts) {
     const laps = [];
     (acts || []).forEach(a => {
       if (ACTIVITY_TYPES.indexOf(a.type) < 0) return;
       (a.laps || []).forEach(l => laps.push(l));
     });
-    const tz = timeInZone(laps, b);
-    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
-    return total > 0 ? { pct: Math.round(tz[2] / total * 100), seconds: tz[2], total: total } : null;
+    return laps;
   }
+
+  function z2Share(acts, cfg) { return z2Of(lapsOf(acts), cfg); }
 
   /* How many of the last n periods cleared the target. A count, not a streak —
      a chain that resets on one bad week is a punishment, and a week disrupted
@@ -956,14 +981,10 @@
   function intentCheck(act, cfg) {
     const s = sessionOf(act && act.session);
     if (!s) return null;
-    /* straight off this run's laps — z2Share filters by activity type, which a
-       bare record passed in here would fail */
-    const tz = timeInZone((act.laps || []), zoneBounds(cfg));
-    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
-    if (!total) return null;
-    const share = { pct: Math.round(tz[2] / total * 100) };
+    const share = z2Of(act.laps, cfg);
+    if (!share) return null;
     const target = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
-    const above = 100 - share.pct;
+    const above = share.above;
 
     if (s.z2 === 'high') {
       return share.pct >= target
@@ -975,6 +996,44 @@
       return { ok: true, session: s, pct: share.pct, hard: true };
     }
     return { ok: share.pct >= target - 20, session: s, pct: share.pct, above: above };
+  }
+
+  /* What to say about a single run's zone split. One implementation, so the
+     home screen and the detail screen can never disagree — the home note used
+     to call a run tagged Tempo "a tempo run, not base work", scolding you for
+     doing exactly what you had planned. */
+  function sessionNote(act, cfg) {
+    const share = z2Of(act && act.laps, cfg);
+    if (!share) return null;
+    const target = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
+    const s = sessionOf(act && act.session);
+
+    if (s) {
+      if (s.z2 === 'low') {
+        /* a hard session run hard needs no comment at all */
+        return share.above >= 40
+          ? { tone: 'ok', text: 'A ' + s.label.toLowerCase() + ' session, run like one \u2014 ' +
+              '<b>' + share.above + '% above Z2</b>.' }
+          : { tone: 'ok', text: 'Tagged ' + s.label.toLowerCase() + ', but <b>' + share.pct +
+              '% of it sat in Z2</b>.' };
+      }
+      if (share.pct >= target) {
+        return { tone: 'ok', text: 'A ' + s.label.toLowerCase() + ' run, run like one \u2014 ' +
+          '<b>' + share.pct + '% in Z2</b>.' };
+      }
+      return { tone: 'warn', text: 'You called this a <b>' + s.label.toLowerCase() +
+        ' run</b>, and <b>' + share.above + '% of it was above Z2</b>.' };
+    }
+
+    /* untagged: no intent to measure against, so only the plain fact */
+    if (share.above >= 50) {
+      return { tone: 'warn', text: '<b>' + share.above + '% above Z2</b> \u2014 ' +
+        'tag it so the app knows whether that was the plan.' };
+    }
+    if (share.pct >= target) {
+      return { tone: 'ok', text: 'Mostly <b>base work</b> \u2014 ' + share.pct + '% in Z2.' };
+    }
+    return null;
   }
 
   /* ---------- load ----------
@@ -1054,7 +1113,7 @@
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
     load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone,
-    SESSIONS, sessionOf, sessionLabel, intentCheck, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
+    SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };
