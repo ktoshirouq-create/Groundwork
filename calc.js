@@ -501,9 +501,11 @@
       span = Math.max(3, Math.min(n, steps + 1));
     }
     if (selectedKey && selectedKey < endKey) {
+      /* reach back far enough to show the selection, but never further than
+         the trim above — selecting 2025 used to redraw a decade of empty years */
       let k = endKey, steps = 0;
-      while (k > selectedKey && steps < 60) { k = shiftKey(k, scope, -1); steps++; }
-      span = Math.max(n, steps + 1);
+      while (k > selectedKey && steps < 200) { k = shiftKey(k, scope, -1); steps++; }
+      span = Math.max(span, steps + 1);
     }
     const out = [];
     let key = last;
@@ -540,14 +542,24 @@
   }
 
   /** How many periods of empty sit immediately before `key`. */
+  /* How many consecutive empty periods sit immediately before this one.
+     Counted only back to the first activity — before that there is no gap,
+     there is simply no history, and the old cap produced "nothing for 400
+     years before this". */
   function emptyRunBefore(acts, scope, key) {
-    let k = shiftKey(key, scope, -1), n = 0;
-    for (let i = 0; i < 400; i++) {
-      if (acts.some(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k))) return n;
-      n++; k = shiftKey(k, scope, -1);
+    const mine = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
+    if (!mine.length) return 0;
+    const firstKey = periodKey(mine.map(a => a.date).sort()[0], scope);
+    let k = shiftKey(key, scope, -1);
+    let n = 0;
+    while (k >= firstKey && n < 500) {
+      if (mine.some(a => inPeriod(a, scope, k))) break;
+      n++;
+      k = shiftKey(k, scope, -1);
     }
     return n;
   }
+
 
   function medianCost(acts, costFn) {
     return median(acts.filter(a => a.type !== 'test').map(a => {

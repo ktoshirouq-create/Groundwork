@@ -672,8 +672,9 @@
         (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div></div>';
       h += '<div class="hcol' + (share ? ' t-' + tone : '') + '">' +
         '<div class="eyebrow">In Z2 \u00b7 ' + esc(z2Window) + '</div>' +
-        '<div class="hero"><div class="hnum z2num">' +
-        (share ? share.pct : '\u2014') + '</div><div class="hunit">%</div></div>' +
+        '<div class="hero"><div class="hnum z2num' + (share ? '' : ' pending') + '">' +
+        (share ? share.pct : '\u2014') + '</div>' +
+        (share ? '<div class="hunit">%</div>' : '') + '</div>' +
         '<div class="hfoot">' + (share
           ? (thin
               ? 'only ' + share.runs + (share.runs === 1 ? ' run' : ' runs') + ' so far'
@@ -742,12 +743,16 @@
     const laps = [];
     inP.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
     const tz = Calc.timeInZone(laps, bounds);
-    const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
-    if (zTotal) {
+    /* Only laps whose zone is known make a split. Counting the unknown ones
+       into the total drew a bar that was 100% grey directly above a caption
+       saying there was no zone split to show. */
+    const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    const zTotal = zoned + tz.unknown;
+    if (zoned) {
       /* Lap durations and elapsed time can differ by a few seconds. Show the
          activity total, and note the shortfall rather than printing two
          different figures for the same week. */
-      const covered = zTotal, whole = s.elapsed_s;
+      const covered = zoned, whole = s.elapsed_s;
       h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
       const missing = whole - covered;
@@ -757,17 +762,19 @@
          boundary it looked like the year simply would not open. */
       const z2 = Calc.z2Of(laps, cfg);
       const typical = Calc.z2Typical(real(), cfg, scope, key());
-      if (z2) {
-        h += '<div class="est"><b class="z2mark">' + z2.pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
-          (typical != null && Math.abs(z2.pct - typical) >= 4
-            ? ' \u2014 your recent typical is ' + typical + '%'
-            : typical != null ? ' \u2014 about your usual' : '') +
-          (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
-          '.</div>';
-      } else {
-        h += '<div class="est">No lap heart rate in ' + esc(periodWord()) +
-          ', so there is no zone split to show.</div>';
-      }
+      h += '<div class="est"><b class="z2mark">' + z2.pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
+        (typical != null && Math.abs(z2.pct - typical) >= 4
+          ? ' \u2014 your recent typical is ' + typical + '%'
+          : typical != null ? ' \u2014 about your usual' : '') +
+        (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' of ' +
+          Calc.fmtDuration(whole) + ' with lap heart rate' : '') +
+        '.</div>';
+    } else if (s.elapsed_s) {
+      /* ran, but nothing with lap heart rate — say so once, with no bar */
+      h += '<div class="sec"><span>Time in zone</span><span>' +
+        Calc.fmtDuration(s.elapsed_s) + '</span></div>';
+      h += '<div class="est">None of these runs carried lap heart rate, so there is ' +
+        'no zone split for ' + esc(periodWord()) + '.</div>';
     }
 
     /* facts before analysis: you should never scroll past a trend to reach a total */

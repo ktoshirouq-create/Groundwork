@@ -136,6 +136,27 @@ The hero takes its run from **the period on screen**. Built from every run, it
 showed October's pace and October's session note under a title that said
 September.
 
+## Nothing is drawn that cannot be read
+
+A period can contain runs and still contain no zone information, and that case
+produced four separate absurdities at once in the 2025 view:
+
+- a zone bar **100% grey**, directly above a caption saying there was no zone
+  split — because unknown-zone laps were counted into the total that decided
+  whether to draw the bar at all
+- a Z2 hero reading **"— %"**, a unit with nothing in front of it
+- **"nothing for 400 years before this"**, the gap counter running to its cap
+  because there was no history to stop it
+- selecting 2025 **redrawing a decade of empty years**, because reaching back
+  to the selection overrode the trim meant to prevent exactly that
+
+The rules now: only laps with a known zone decide whether a split exists, a
+hero with no value carries no unit, a gap is counted only back to your first
+run, and reaching for an older selection never widens the chart past the trim.
+
+Where lap coverage is partial the caption says so with both figures — *"45% in
+Z2 this year. From 1:02:13 of 1:44:01 with lap heart rate."*
+
 ## One number, one window
 
 The same screen once showed 29%, 33% and 29% for what any reader would take to
