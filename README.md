@@ -107,9 +107,27 @@ anchored to today would be meaningless on a month you are scrolling back to.
 The weekly figure stays in Time in Zone, because that one is supposed to be
 sensitive.
 
+## What belongs to the period, and what doesn't
+
+Scoping the hero to the period on screen fixed one bug and introduced three,
+all of the same shape: things that are facts about **your history** were being
+recomputed inside the selected period.
+
+- **Comparable runs** are runs of a similar length across everything you have
+  logged. Scoped to the week, the same run said "3 other runs around 5.8 km"
+  in Year view and "nothing to compare it to yet" in Week view.
+- **The previous run** is the run before this one, full stop — not the previous
+  run inside the week.
+- **Which run the hero shows** *is* a property of the period, and stays scoped.
+
+The rule: a period selects **which run you are looking at**, never **what it is
+measured against**.
+
 ## Looking back
 
-The ribbon always ends at **now**, whatever period is selected. Selecting
+The ribbon starts no earlier than your first run, so the Year view no longer
+draws a decade of empty bars, and it always ends at **now**, whatever period is
+selected. Selecting
 September used to make October vanish, which read as lost data rather than as
 scrolling back. If the selection is older than the twelve periods shown, the
 window extends to reach it.

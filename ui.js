@@ -487,7 +487,7 @@
 
       h += '<div class="rd">';
       h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val">' +
-        fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '') +
+        fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(unitFor(r)) + '</s>' : '') +
         (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's')
              : r.kind === 'sleep' ? (x => Math.abs(Math.round(x.diff / 60)) + 'm') : null) : '') +
         '</div></div>';
@@ -621,7 +621,12 @@
     const withHr = fromPeriod ? inPeriodHr : byDate(mine);
     const last = withHr[0];
     const pace = last ? Calc.aerobicPace(last, cfg) : null;
-    const prevPace = withHr[1] ? Calc.aerobicPace(withHr[1], cfg) : null;
+    /* "the run before this one" is a fact about your history, not about the
+       period on screen — scoped to the week it said there was nothing to
+       compare against while the month view compared happily */
+    const everyHr = byDate(mine);
+    const prevRun = last ? everyHr.find(a => a.date < last.date || (a.date === last.date && a.id !== last.id)) : null;
+    const prevPace = prevRun ? Calc.aerobicPace(prevRun, cfg) : null;
     const s = Calc.summarize(inP);
 
     /* Two heroes, not one. Aerobic pace alone rewards speed — and because it is
@@ -645,9 +650,13 @@
     if (pace != null) {
       /* Compare against runs of a similar length. A 7.5 km against a 3 km is
          mostly a distance effect, and colouring that red is a lie. */
+      /* Comparable runs come from the whole history, not the period. Scoped to
+         the period, the same run said "3 other runs around 5.8 km" in Year
+         view and "nothing to compare it to yet" in Week view. */
       const lo = last.distance_km * 0.8, hi = last.distance_km * 1.2;
-      const peers = withHr.slice(1)
-        .filter(a => a.distance_km >= lo && a.distance_km <= hi)
+      const allHr = mine.filter(a => a.avg_hr != null);
+      const peers = allHr
+        .filter(a => a.id !== last.id && a.distance_km >= lo && a.distance_km <= hi)
         .map(a => Calc.aerobicPace(a, cfg)).filter(v => v != null);
       const banded = peers.length >= 3;
       const ref = banded ? Calc.median(peers) : prevPace;
@@ -677,9 +686,9 @@
           ? 'Your ' + peers.length + ' other runs around ' + last.distance_km.toFixed(1) +
             ' km sit at ' + Calc.fmtPace(ref) + '.'
           : prevPace != null
-            ? 'Last run: ' + Calc.fmtPace(prevPace) + ', over ' + withHr[1].distance_km.toFixed(1) +
-              ' km \u2014 too different a distance to compare.'
-            : 'Nothing to compare it to yet.') + '</div>';
+            ? (isNow ? 'Last run: ' : 'Before it: ') + Calc.fmtPace(prevPace) + ', over ' +
+              prevRun.distance_km.toFixed(1) + ' km \u2014 too different a distance to compare.'
+            : 'No other runs near this distance yet.') + '</div>';
 
       /* A fast run and a hard run are the same fact. Saying so here beats
          leaving the zone split 400px further down to make the point. */
@@ -742,14 +751,23 @@
       h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
       h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
       const missing = whole - covered;
-      const z2pct = Calc.z2Of(laps, cfg).pct;
+      /* zTotal includes laps whose zone is unknown, so a period made entirely
+         of those passes the guard above and still has no Z2 figure. Opening
+         2025 threw here, and because a ribbon tap renders outside the error
+         boundary it looked like the year simply would not open. */
+      const z2 = Calc.z2Of(laps, cfg);
       const typical = Calc.z2Typical(real(), cfg, scope, key());
-      h += '<div class="est"><b class="z2mark">' + z2pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
-        (typical != null && Math.abs(z2pct - typical) >= 4
-          ? ' \u2014 your recent typical is ' + typical + '%'
-          : typical != null ? ' \u2014 about your usual' : '') +
-        (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
-        '.</div>';
+      if (z2) {
+        h += '<div class="est"><b class="z2mark">' + z2.pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
+          (typical != null && Math.abs(z2.pct - typical) >= 4
+            ? ' \u2014 your recent typical is ' + typical + '%'
+            : typical != null ? ' \u2014 about your usual' : '') +
+          (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' with lap heart rate' : '') +
+          '.</div>';
+      } else {
+        h += '<div class="est">No lap heart rate in ' + esc(periodWord()) +
+          ', so there is no zone split to show.</div>';
+      }
     }
 
     /* facts before analysis: you should never scroll past a trend to reach a total */
@@ -1472,11 +1490,14 @@
   /* --------------------------------------------------------------- wiring */
 
   function bind() {
+    /* Both go through render(), so a failure shows the error screen instead of
+       looking like a tap that did nothing. Opening 2025 threw inside
+       renderHome and, called directly, the exception escaped the boundary. */
     document.querySelectorAll('#view-home [data-scope]').forEach(b => {
-      b.onclick = () => { scope = b.dataset.scope; periodKey = null; renderHome(); };
+      b.onclick = () => { scope = b.dataset.scope; periodKey = null; render('home'); };
     });
     document.querySelectorAll('#view-home [data-period]').forEach(b => {
-      b.onclick = () => { periodKey = b.dataset.period; renderHome(); };
+      b.onclick = () => { periodKey = b.dataset.period; render('home'); };
     });
     document.querySelectorAll('#view-home [data-id]').forEach(r => {
       r.onclick = () => go('detail', r.dataset.id);

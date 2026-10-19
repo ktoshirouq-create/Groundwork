@@ -488,8 +488,18 @@
     const endKey = periodKey(asOf || new Date().toISOString().slice(0, 10), scope);
     /* window ends at now; if the selection is older than that, extend back far
        enough to include it so you can always see where you are */
+    /* Don't draw a decade of empty years. Start no earlier than the first
+       activity, but always keep at least four periods so the chart has shape. */
+    const dates = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0)
+      .map(a => a.date).sort();
+    const firstKey = dates.length ? periodKey(dates[0], scope) : null;
     let last = endKey;
     let span = n;
+    if (firstKey) {
+      let k = endKey, steps = 0;
+      while (k > firstKey && steps < 200) { k = shiftKey(k, scope, -1); steps++; }
+      span = Math.max(3, Math.min(n, steps + 1));
+    }
     if (selectedKey && selectedKey < endKey) {
       let k = endKey, steps = 0;
       while (k > selectedKey && steps < 60) { k = shiftKey(k, scope, -1); steps++; }
