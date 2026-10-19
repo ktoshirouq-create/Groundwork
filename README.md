@@ -136,6 +136,83 @@ The hero takes its run from **the period on screen**. Built from every run, it
 showed October's pace and October's session note under a title that said
 September.
 
+## The period selector means one thing
+
+Selecting a period used to change the title, the ribbon, the heroes, the zone
+bar and the list — while **Form and the trend chart stayed in the present**.
+Two thirds of the screen ignored the selector, so a 2025 view showed today's
+form and plotted 2026 runs under an x-axis labelled "19 OCT".
+
+Now every section answers the same question. `readRows` takes the period's own
+start and end, so Form reads that period and names itself *Form · 2025*. The
+trend ends at the period, showing history as it stood then. And a period with
+no runs shows nothing rather than borrowing the most recent run from outside
+it — the empty path had the same cross-period leak as the full one.
+
+The totals agree with each other too: either all three rows carry a comparison
+or none does, with one line saying why.
+
+## A component exists once
+
+The clipboard button was built on the import screen and not on Replace. Same
+mistake, different corner: a thing made at one call site instead of made once.
+
+`pasteBoxHTML` and `bindPasteBox` are now the only paste box in the app, and
+`tests/architecture.js` checks that no screen draws its own, that every box
+drawn is also wired, and that `navigator.clipboard` is touched in exactly one
+function.
+
+## Impossible values are derived, not listed
+
+Garmin writes **0 spm** for a run with no cadence sensor. Stored as a value
+rather than an absence, it failed its own range check and made the record
+impossible to save: *"cadence_spm would become 0"*, with no way to clear it.
+
+`impossibleZero(key, value)` asks whether zero falls outside that field's own
+range in `RANGES`. Nothing new to maintain, and no way for a field to be in one
+list and not the other. Zero ascent and zero degrees stay, because zero is a
+real reading for both.
+
+And a change where both sides are empty is not a change — `null` and
+`undefined` are one absence now, so the diff stopped listing `resting_hr — → —`.
+
+## One model
+
+Ten rounds of coherence fixes all had the same cause, and it was architectural
+rather than any particular mistake.
+
+Values were computed in `calc.js` but **scoped in `ui.js`**, at twenty-one
+separate sites. Each render function decided for itself which activities to
+look at, over what window, and whether there was anything worth showing — and
+they disagreed. That is the whole explanation for three Z2 figures on one
+screen, for Form showing today under a title that said 2025, for a zone bar
+above a caption denying it existed, and for a comparison that existed in Year
+view and not in Week view.
+
+Fixing them one at a time never finished, because each fix touched one site
+while the same mistake sat untouched at the others.
+
+`Calc.homeModel(all, cfg, scope, key, today)` now makes every one of those
+decisions **once**, and returns everything the home screen needs:
+
+- which runs are in the period, and which run the heroes describe
+- what that run is measured against — always the whole history, never the
+  period
+- Z2 rolling over 28 days on the current period, the period itself otherwise
+- the zone split, the trend, Form, the ribbon, the week strip
+- each value wrapped in `stat()`, which carries its own **window label** and is
+  either present with a value or absent with a reason, never both
+
+`renderHome` builds the model and passes it down. Below that, nothing can see
+raw activities — so nothing can invent a window, because it is never given the
+data to scope.
+
+`tests/architecture.js` enforces this by reading the source: every renderer is
+checked for `Store.all()`, `real()`, `inPeriod`, `readRows`, `paceSeries` and
+the rest. It fails the moment anyone reaches past the model, and it found a
+modelling flaw the hour it was written — `stat()` was keeping an absence reason
+alongside a present value.
+
 ## Invariants
 
 Every bug in the last few rounds was the same bug: **the app failing to notice

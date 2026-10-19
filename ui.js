@@ -102,11 +102,12 @@
       (aside ? '<s>' + esc(aside) + '</s>' : '') + '</span></div>';
   }
 
-  function ribbonHTML() {
+  /* Reads the model. The zone split per bar arrives with it, so this function
+     has no way to disagree with the rest of the screen about what a period
+     contains. */
+  function ribbonHTML(m, bounds) {
     if (scope === 'all') return '';
-    const cfg = Store.config();
-    const bounds = Calc.zoneBounds(cfg);
-    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'load', cfg, today());
+    const bars = m.ribbon;
     const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
 
     const label = b => {
@@ -115,65 +116,52 @@
       return b.key.slice(2);
     };
 
-    /* Height is load — minutes weighted by effort — and the fill is time in
-       zone. One chart carries how much, how hard and the balance between them;
-       it used to be two nearly identical bar charts at opposite ends of the
-       screen. */
     const cells = bars.map(b => {
       if (!b.value) return '<div class="rp none" data-period="' + b.key + '"><div class="seg"></div></div>';
-      const h = Math.max(6, Math.round(b.value / max * 100));
-      const inP = real().filter(a => Calc.inPeriod(a, scope, b.key));
-      const laps = [];
-      inP.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
-      const tz = Calc.timeInZone(laps, bounds);
-      const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
+      const ht = Math.max(6, Math.round(b.value / max * 100));
+      const tz = b.zones || {};
+      const zoned = [1,2,3,4,5].reduce((t, z) => t + (tz[z] || 0), 0);
+      const zTotal = zoned + (tz.unknown || 0);
 
       let inner;
-      if (!zTotal) {
-        /* ran, but no lap heart rate — unknown composition, not an empty week.
-           A flat grey block read as broken data. */
+      if (!zoned) {
         inner = '<div class="seg nohr" title="no lap heart rate"></div>';
       } else {
-        const order = [5, 4, 3, 2, 1];
-        inner = order.filter(z => tz[z] > 0).map(z =>
+        inner = [5,4,3,2,1].filter(z => tz[z] > 0).map(z =>
           '<div class="seg" style="background:' + ZCOL[z] + '; height:' +
           (tz[z] / zTotal * 100).toFixed(1) + '%"></div>').join('');
-        if (tz.unknown > 0) inner = '<div class="seg" style="background:var(--stop); height:' +
+        if (tz.unknown > 0) inner = '<div class="seg nohr" style="height:' +
           (tz.unknown / zTotal * 100).toFixed(1) + '%"></div>' + inner;
       }
       return '<div class="rp' + (b.selected ? ' on' : '') + '" data-period="' + b.key +
-        '" style="height:100%"><div class="stackwrap" style="height:' + h + '%">' + inner + '</div></div>';
+        '" style="height:100%"><div class="stackwrap" style="height:' + ht + '%">' +
+        inner + '</div></div>';
     }).join('');
 
     const labels = bars.map((b, i) =>
       '<div>' + (scope === 'week' ? (i % 2 === 0 || b.selected ? label(b) : '') : label(b)) + '</div>'
     ).join('');
 
-    const gap = Calc.emptyRunBefore(real(), scope, key());
     const unit = scope === 'week' ? 'weeks' : scope === 'month' ? 'months' : 'years';
-    const gapLine = gap >= 2
-      ? '<div class="gapmark">\u2191 nothing for ' + gap + ' ' + unit + ' before this</div>' : '';
+    const gapLine = m.gapBefore >= 2
+      ? '<div class="gapmark">\u2191 nothing for ' + m.gapBefore + ' ' + unit + ' before this</div>' : '';
 
-    /* the ramp warning lived under the old Load chart */
-    const withData = bars.filter(b => b.value > 0);
-    const ramp = Calc.rampFlag(withData);
+    const rec = m.record;
+    const recLine = rec
+      ? '<div class="z2rec"><b>' + rec.cleared + ' of your last ' + rec.of + '</b> ' +
+        unit + ' cleared ' + rec.target + '% in Z2.</div>' : '';
+
+    const ramp = Calc.rampFlag(bars.filter(b => b.value > 0));
     const rampLine = ramp
       ? '<div class="callout warn">Load went <b>' + ramp.from + ' \u2192 ' + ramp.to +
         '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>'
       : '';
 
-    /* A count, not a chain. A streak that resets on one disrupted week is a
-       punishment, and a bad week at work is not a training failure. */
-    const rec = Calc.z2Record(real(), cfg, scope, key(), 10);
-    const recLine = rec
-      ? '<div class="z2rec"><b>' + rec.cleared + ' of your last ' + rec.of + '</b> ' +
-        (scope === 'week' ? 'weeks' : scope === 'month' ? 'months' : 'years') +
-        ' cleared ' + rec.target + '% in Z2.</div>'
-      : '';
-
     return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' +
       gapLine + recLine + rampLine;
   }
+
+
 
   /* ------------------------------------------------------------- charts */
 
@@ -326,6 +314,51 @@
 
 
 
+
+  /* ------------------------------------------------------- the paste box ---
+
+     One component, two screens. The clipboard button existed on the import
+     screen and not on Replace, which is the same mistake this app keeps
+     making: a thing built once at one call site. A paste box is now a paste
+     box wherever it appears. */
+
+  function pasteBoxHTML(id, label, placeholder) {
+    return '<label><span>' + esc(label) + '</span><div class="pastewrap">' +
+      '<textarea id="' + id + '" placeholder="' + esc(placeholder) + '"></textarea>' +
+      '<button class="clear" id="' + id + '-clear" type="button" aria-label="Clear">\u2715</button>' +
+      '</div></label>' +
+      '<button class="btn ghost" id="' + id + '-from" hidden>Paste from clipboard</button>';
+  }
+
+  /* Wires both buttons. `onRead` runs after a successful clipboard paste, so a
+     tap reads and parses in one go. */
+  function bindPasteBox(id, onClear, onRead) {
+    const box = el(id), clear = el(id + '-clear'), from = el(id + '-from');
+    if (!box) return;
+
+    const sync = () => { if (clear) clear.hidden = !box.value.length; };
+    box.addEventListener('input', sync);
+    sync();
+
+    if (clear) clear.onclick = () => {
+      box.value = '';
+      sync();
+      if (onClear) onClear();
+      box.focus();
+    };
+
+    if (from && navigator.clipboard && navigator.clipboard.readText) {
+      from.hidden = false;
+      once(from, 'Reading\u2026', () =>
+        navigator.clipboard.readText().then(text => {
+          if (!text || !text.trim()) { toast('Clipboard is empty', 'bad'); return; }
+          box.value = text;
+          sync();
+          if (onRead) onRead();
+        }).catch(() => { toast('Could not read the clipboard', 'bad'); }));
+    }
+  }
+
   /* ------------------------------------------------------- feedback ----- */
 
   /* A confirmation you can't miss. Actions used to complete in silence, which
@@ -375,12 +408,9 @@
 
   /* Seven days, height is load, colour is the zone that day mostly sat in.
      Answers "am I being consistent" and "how hard was it" in one row. */
-  function weekStripHTML() {
-    const cfg = Store.config();
-    const wk = scope === 'week' ? key() : Calc.weekStart(today());
-    const days = Calc.weekDays(real(), cfg, wk);
-    if (!days.some(d => d.count)) return '';
-
+  function weekStripHTML(m) {
+    const days = m.days;
+    if (!days || !days.some(d => d.count)) return '';
     const max = Math.max.apply(null, days.map(d => d.load).concat([1]));
     const L = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     const now = today();
@@ -402,32 +432,7 @@
     return h;
   }
 
-  /* Weekly load, with a flag when a week jumps by half again. */
-  function loadHTML() {
-    const cfg = Store.config();
-    const series = Calc.loadSeries(real(), cfg, 12, scope === 'week' ? key() : null);
-    const withData = series.filter(s => s.value > 0);
-    if (withData.length < 3) return '';
 
-    const max = Math.max.apply(null, series.map(s => s.value).concat([1]));
-    let h = '<div class="sec"><span>Load</span><span>12 weeks</span></div>';
-    h += '<div class="loadbars">' + series.map((s, i) => {
-      if (!s.value) return '<div class="lb none"><div class="v"></div></div>';
-      const prev = i > 0 ? series[i - 1].value : 0;
-      const spike = prev && (s.value - prev) / prev >= Calc.RAMP_LIMIT;
-      return '<div class="lb' + (spike ? ' spike' : '') + '" title="' + s.key + ' \u00b7 ' +
-        s.value + '"><div class="v" style="height:' +
-        Math.max(4, Math.round(s.value / max * 100)) + '%"></div></div>';
-    }).join('') + '</div>';
-    h += '<div class="wslbl" style="font-size:8px">' + series.map((s, i) =>
-      '<div>' + (i % 2 === 0 ? Calc.isoWeek(s.key).split('-W')[1].replace(/^0/, '') : '') +
-      '</div>').join('') + '</div>';
-
-    const ramp = Calc.rampFlag(series.filter(s => s.value > 0));
-    if (ramp) h += '<div class="callout warn">Load went <b>' + ramp.from + ' \u2192 ' + ramp.to +
-      '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>';
-    return h;
-  }
 
 
   /* ---------------------------------------------------------- the read */
@@ -458,16 +463,18 @@
     return betterWhen === 'down' ? (1 - t) * 100 : t * 100;
   }
 
-  function readHTML() {
+  function readHTML(m) {
     const cfg = Store.config();
-    const rows = Calc.readRows(Store.all(), cfg, today());
+    const rows = m.form.rows;
+    const isNow = m.period.isCurrent;
     if (!rows.length) return '';
 
     const live = rows.filter(r => r.range && r.now != null);
     const waiting = rows.filter(r => !(r.range && r.now != null));
 
     const filling = live.filter(r => r.need > 0).length;
-    let h = '<div class="sec"><span>Form</span><span>' +
+    let h = '<div class="sec"><span>Form' + (m.form.label ? ' \u00b7 ' + esc(m.form.label) : '') +
+      '</span><span>' +
       (filling ? filling + ' still filling' : live.length ? 'last 3 vs 3 before' : '') +
       '</span></div>';
 
@@ -553,23 +560,25 @@
 
   /* ------------------------------------------------------------------ home */
 
+  /* The only place the home screen touches raw activities. Everything below
+     reads the model, so no render function can invent its own idea of which
+     runs, which window, or whether there is anything to show. That disagreement
+     was the single cause of every coherence bug in this app's history. */
   function renderHome() {
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const k = key();
-    const mine = real();
-    const inP = mine.filter(a => Calc.inPeriod(a, scope, k));
+    const m = Calc.homeModel(Store.all(), cfg, scope, key(), today());
 
     let h = '<div class="top"><div>' +
-      '<div class="ttl">' + esc(Calc.periodLabel(k, scope, today())) + '</div>' +
-      '<div class="sub">' + esc(Calc.periodSpan(k, scope, today())) + '</div>' +
+      '<div class="ttl">' + esc(m.period.label) + '</div>' +
+      '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
       '</div><button class="corner" data-go="settings">SETUP</button></div>';
 
     h += '<div class="bar">' + SCOPES.map(s =>
       '<button class="chip" data-scope="' + s + '" aria-pressed="' + (s === scope) + '">' +
-      (s === 'all' ? 'All time' : s[0].toUpperCase() + s.slice(1)) + '</button>').join('') + '</div>';
+      s[0].toUpperCase() + s.slice(1) + '</button>').join('') + '</div>';
 
-    if (!mine.length) {
+    if (!Store.all().some(a => a.type === 'run')) {
       h += '<div class="empty-state">No runs logged yet.<br>' +
         'Tap + to paste your first one.</div>';
       el('view-home').innerHTML = h;
@@ -577,34 +586,31 @@
       return;
     }
 
-    h += ribbonHTML();
-    if (scope === 'week') h += weekStripHTML();
+    h += ribbonHTML(m, bounds);
+    if (m.days) h += weekStripHTML(m);
     h += '<div class="rule"></div>';
-    h += runHero(inP, mine, bounds);
+    h += runHero(m, bounds, cfg);
 
-    /* the list */
-    const sorted = inP.slice().sort((a, b) => b.date.localeCompare(a.date));
-    const isNow = Calc.periodKey(today(), scope) === k;
-    h += '<div class="sec"><span>' + (isNow ? 'This ' + scope : esc(Calc.periodLabel(k, scope, today()))) +
-      '</span><span>' + (sorted.length ? sorted.length + (sorted.length === 1 ? ' run' : ' runs') : '') +
-      '</span></div>';
+    h += '<div class="sec"><span>' +
+      (m.period.isCurrent ? 'This ' + scope : esc(m.period.label)) + '</span><span>' +
+      (m.count ? m.count + (m.count === 1 ? ' run' : ' runs') : '') + '</span></div>';
 
-    if (!sorted.length) {
-      const noun = 'run';
-      const prev = Calc.previousWithData(mine, scope, k);
-      const next = prev ? null : Calc.nextWithData(mine, scope, k);
+    if (!m.count) {
+      const prevK = Calc.previousWithData(Store.all().filter(a => a.type === 'run'), scope, m.period.key);
+      const nextK = prevK ? null : Calc.nextWithData(Store.all().filter(a => a.type === 'run'), scope, m.period.key);
       let line = '';
-      if (prev) line = '<br>Last ' + noun + ' before this: ' + esc(Calc.periodLabel(prev, scope, today())) + '.';
-      else if (next) line = '<br>Nothing this early \u2014 your first ' + noun +
-        ' lands in ' + esc(Calc.periodLabel(next, scope, today())) + '.';
+      if (prevK) line = '<br>Last run before this: ' + esc(Calc.periodLabel(prevK, scope, today())) + '.';
+      else if (nextK) line = '<br>Nothing this early \u2014 your first run lands in ' +
+        esc(Calc.periodLabel(nextK, scope, today())) + '.';
       h += '<div class="empty-state">Nothing here.' + line + '</div>';
     } else {
-      h += sorted.map(a => runRow(a, bounds)).join('');
+      h += m.runs.map(a => runRow(a, bounds)).join('');
     }
 
     el('view-home').innerHTML = h;
     bind();
   }
+
 
   /* The word for whatever period the screen is showing, so a figure can never
      be mistaken for a different window's. */
@@ -629,200 +635,120 @@
       '<div class="hfoot">' + (has ? (opts.foot || '') : esc(opts.needs || '')) + '</div></div>';
   }
 
-  function runHero(inP, mine, bounds) {
-    const cfg = Store.config();
-    /* Prefer a run from the period on screen. Built from every run, the hero
-       showed October's run while the title said September. */
-    const byDate = arr => arr.filter(a => a.avg_hr != null)
-      .sort((a, b) => b.date.localeCompare(a.date));
-    const inPeriodHr = byDate(inP);
-    const fromPeriod = inPeriodHr.length > 0;
-    const withHr = fromPeriod ? inPeriodHr : byDate(mine);
-    const last = withHr[0];
-    const pace = last ? Calc.aerobicPace(last, cfg) : null;
-    /* "the run before this one" is a fact about your history, not about the
-       period on screen — scoped to the week it said there was nothing to
-       compare against while the month view compared happily */
-    const everyHr = byDate(mine);
-    const prevRun = last ? everyHr.find(a => a.date < last.date || (a.date === last.date && a.id !== last.id)) : null;
-    const prevPace = prevRun ? Calc.aerobicPace(prevRun, cfg) : null;
-    const s = Calc.summarize(inP);
-
-    /* Two heroes, not one. Aerobic pace alone rewards speed — and because it is
-       measured at 145 bpm it improves fastest when you train above Z2, which is
-       the opposite of base work. The share sits beside it at the same size so
-       the screen answers "am I building base" before "am I fast". */
-    /* On the current period the figure rolls over 28 days — at two runs a week
-       a calendar week is two sessions, so one tempo run swings it by 60 points
-       and every Monday starts from nothing. On an older period it describes
-       that period, and says so. */
-    const isNow = Calc.periodKey(today(), scope) === key() && fromPeriod;
-    const share = isNow
-      ? Calc.z2Rolling(real(), cfg, today())
-      : Calc.z2Share(inP, cfg);
-    const z2Window = isNow ? 'last ' + Calc.ROLLING_DAYS + ' days' : periodWord();
-    const thin = isNow && share && share.runs < 4;
-    const tone = share ? Calc.z2Tone(share.pct, cfg) : 'none';
-    const target = cfg.z2_target;
-
+  /* Pure presentation. Every value arrives already scoped and already labelled
+     with the window it describes; this function cannot choose a different one
+     because it is never handed the activities to choose from. */
+  function runHero(m, bounds, cfg) {
+    const H = m.hero;
     let h = '';
-    if (pace != null) {
-      /* Compare against runs of a similar length. A 7.5 km against a 3 km is
-         mostly a distance effect, and colouring that red is a lie. */
-      /* Comparable runs come from the whole history, not the period. Scoped to
-         the period, the same run said "3 other runs around 5.8 km" in Year
-         view and "nothing to compare it to yet" in Week view. */
-      const lo = last.distance_km * 0.8, hi = last.distance_km * 1.2;
-      const allHr = mine.filter(a => a.avg_hr != null);
-      const peers = allHr
-        .filter(a => a.id !== last.id && a.distance_km >= lo && a.distance_km <= hi)
-        .map(a => Calc.aerobicPace(a, cfg)).filter(v => v != null);
-      const banded = peers.length >= 3;
-      const ref = banded ? Calc.median(peers) : prevPace;
-      const d = banded ? Calc.delta(pace, ref, 'down') : null;
 
-      h += '<div class="heropair">';
-      h += heroHTML({
-        label: 'Aerobic pace \u00b7 ' + (isNow ? 'last run' : fmtDate(last.date)),
-        value: pace != null ? Calc.fmtPace(pace) : null,
-        unit: '/km',
-        foot: 'at ' + Calc.refHr(cfg) + ' bpm' +
-          (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : ''),
-        needs: 'needs average heart rate'
-      });
-      h += heroHTML({
-        label: 'In Z2 \u00b7 ' + z2Window,
-        value: share ? share.pct : null,
-        unit: '%',
-        numClass: 'z2num',
-        tone: share ? tone : null,
-        foot: share
-          ? (thin
-              ? 'only ' + share.runs + (share.runs === 1 ? ' run' : ' runs') + ' so far'
-              : share.pct >= target ? 'at your ' + target + '% target'
-                : (target - share.pct) + ' under ' + target + '%')
-          : '',
-        needs: 'needs lap heart rate'
-      });
-      h += '</div>';
-      h += '<div class="hsub">' + '' +
-        (banded
-          ? 'Your ' + peers.length + ' other runs around ' + last.distance_km.toFixed(1) +
-            ' km sit at ' + Calc.fmtPace(ref) + '.'
-          : prevPace != null
-            ? (isNow ? 'Last run: ' : 'Before it: ') + Calc.fmtPace(prevPace) + ', over ' +
-              prevRun.distance_km.toFixed(1) + ' km \u2014 too different a distance to compare.'
-            : 'No other runs near this distance yet.') + '</div>';
+    h += '<div class="heropair">';
+    h += heroHTML({
+      label: 'Aerobic pace' + (H.pace.window ? ' \u00b7 ' + H.pace.window
+        : H.lastRun ? ' \u00b7 ' + fmtDate(H.lastRun.date) : ''),
+      value: H.pace.present ? Calc.fmtPace(H.pace.value) : null,
+      unit: H.pace.unit,
+      foot: 'at ' + Calc.refHr(cfg) + ' bpm' + (H.band
+        ? ' ' + deltaHTML(Calc.delta(H.pace.value, H.band.median, 'down'),
+            x => Math.abs(Math.round(x.diff)) + 's') : ''),
+      needs: H.pace.absent
+    });
+    h += heroHTML({
+      label: 'In Z2 \u00b7 ' + (H.z2.window || m.period.word),
+      value: H.z2.present ? H.z2.value : null,
+      unit: H.z2.unit,
+      numClass: 'z2num',
+      tone: H.z2.present ? H.z2.tone : null,
+      foot: H.z2.present
+        ? (m.hero.thin
+            ? 'only ' + H.z2.n + (H.z2.n === 1 ? ' run' : ' runs') + ' so far'
+            : H.z2.value >= H.target ? 'at your ' + H.target + '% target'
+              : (H.target - H.z2.value) + ' under ' + H.target + '%')
+        : '',
+      needs: H.z2.absent
+    });
+    h += '</div>';
 
-      /* A fast run and a hard run are the same fact. Saying so here beats
-         leaving the zone split 400px further down to make the point. */
-      /* One implementation, shared with the detail screen, and it knows what
-         the session was tagged as. The note is about the last run, so it says
-         so — the numbers above it describe the whole period. */
-      /* the note describes a run inside the period on screen, never the most
-         recent run overall — looking at September used to show a comment about
-         a run from October */
-      const note = Calc.sessionNote(last, cfg);
-      if (note) h += '<div class="hnote' + (note.tone === 'ok' ? ' good' : '') + '">' +
-        '<em>' + esc(isNow ? 'Last run' : fmtDate(last.date)) + '</em> ' + note.text + '</div>';
-    } else {
-      /* the empty case goes through the same renderer as the full one, so it
-         cannot drift back into showing a unit with nothing in front of it */
-      h += '<div class="heropair">' +
-        heroHTML({ label: 'Aerobic pace', value: null, unit: '/km',
-                   needs: 'needs average heart rate' }) +
-        heroHTML({ label: 'In Z2', value: null, unit: '%', numClass: 'z2num',
-                   needs: 'needs lap heart rate' }) +
-        '</div>';
+    if (H.pace.present) {
+      h += '<div class="hsub">' + (H.band
+        ? 'Your ' + H.band.n + ' other runs around ' + H.lastRun.distance_km.toFixed(1) +
+          ' km sit at ' + Calc.fmtPace(H.band.median) + '.'
+        : H.previousRun
+          ? (m.period.isCurrent ? 'Last run: ' : 'Before it: ') +
+            Calc.fmtPace(H.previousRun.pace) + ', over ' +
+            H.previousRun.run.distance_km.toFixed(1) +
+            ' km \u2014 too different a distance to compare.'
+          : 'No other runs near this distance yet.') + '</div>';
+
+      if (H.note) h += '<div class="hnote' + (H.note.tone === 'ok' ? ' good' : '') + '">' +
+        '<em>' + esc(m.period.isCurrent ? 'Last run' : fmtDate(H.lastRun.date)) + '</em> ' +
+        H.note.text + '</div>';
     }
 
-    const newest = mine.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-    if (newest) h += noticedHTML(newest);
+    if (H.lastRun) h += noticedHTML(H.lastRun);
 
-    /* Year scope shows the whole history; otherwise the recent window, so the
-       scale tracks where you actually are. */
-    const showAll = scope === 'year';
-    const segs = Calc.paceSeries(mine, cfg, showAll ? 0 : Calc.PACE_WINDOW);
-    const flat = [].concat.apply([], segs);
-    if (flat.length >= 2) {
-      const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
-      const mark = prevSeg && prevSeg.length >= 3
-        ? Math.min.apply(null, prevSeg.map(p => p.value))
-        : null;
+    /* the trend */
+    if (!m.trend.absent) {
+      const segs = m.trend.segments;
+      const flat = [].concat.apply([], segs);
       const first = flat[0].date, lastD = flat[flat.length - 1].date;
       h += lineChart(segs, {
-        invert: true, mark: mark, height: 150,
+        invert: true, mark: m.trend.mark, height: 150,
         format: v => Calc.fmtPace(v),
         anchorLabels: ['best', 'slowest'],
         label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
-        xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '', fmtDate(lastD).toUpperCase()],
+        xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '',
+              fmtDate(lastD).toUpperCase()],
         legend: '<span><i class="sw now"></i>this block</span>' +
                 (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '')
       });
-      const hidden = segs.total - segs.shown;
+      const hidden = m.trend.total - m.trend.shown;
       h += '<div class="est">Faster is higher' +
-        (mark != null ? '. Dashed rule is your previous best, ' + Calc.fmtPace(mark) : '') +
-        (hidden > 0 ? '. Last ' + segs.shown + ' runs \u2014 switch to Year for all ' +
-          segs.total : '') + '.</div>';
-    } else {
-      h += '<div class="est">The trend line opens once you have two runs with heart rate.</div>';
+        (m.trend.mark != null ? '. Dashed rule is your previous best, ' +
+          Calc.fmtPace(m.trend.mark) : '') +
+        (hidden > 0 ? '. Last ' + m.trend.shown + ' runs \u2014 switch to Year for all ' +
+          m.trend.total : '') + '.</div>';
     }
 
-    /* zone split across the period */
-    const laps = [];
-    inP.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
-    const tz = Calc.timeInZone(laps, bounds);
-    /* Only laps whose zone is known make a split. Counting the unknown ones
-       into the total drew a bar that was 100% grey directly above a caption
-       saying there was no zone split to show. */
-    const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
-    const zTotal = zoned + tz.unknown;
-    if (zoned) {
-      /* Lap durations and elapsed time can differ by a few seconds. Show the
-         activity total, and note the shortfall rather than printing two
-         different figures for the same week. */
-      const covered = zoned, whole = s.elapsed_s;
-      h += '<div class="sec"><span>Time in zone</span><span>' + Calc.fmtDuration(whole) + '</span></div>';
-      h += zoneBarHTML(tz) + zoneKeyHTML(bounds);
-      const missing = whole - covered;
-      /* zTotal includes laps whose zone is unknown, so a period made entirely
-         of those passes the guard above and still has no Z2 figure. Opening
-         2025 threw here, and because a ribbon tap renders outside the error
-         boundary it looked like the year simply would not open. */
-      const z2 = Calc.z2Of(laps, cfg);
-      const typical = Calc.z2Typical(real(), cfg, scope, key());
-      h += '<div class="est"><b class="z2mark">' + z2.pct + '% in Z2 ' + esc(periodWord()) + '</b>' +
-        (typical != null && Math.abs(z2.pct - typical) >= 4
-          ? ' \u2014 your recent typical is ' + typical + '%'
-          : typical != null ? ' \u2014 about your usual' : '') +
-        (missing > 30 ? '. From ' + Calc.fmtDuration(covered) + ' of ' +
-          Calc.fmtDuration(whole) + ' with lap heart rate' : '') +
-        '.</div>';
-    } else if (s.elapsed_s) {
-      /* ran, but nothing with lap heart rate — say so once, with no bar */
+    /* time in zone */
+    const Z = m.zones;
+    if (!Z.absent) {
       h += '<div class="sec"><span>Time in zone</span><span>' +
-        Calc.fmtDuration(s.elapsed_s) + '</span></div>';
+        Calc.fmtDuration(Z.elapsed) + '</span></div>';
+      h += zoneBarHTML(Z.tz) + zoneKeyHTML(bounds);
+      const missing = Z.elapsed - Z.zoned;
+      h += '<div class="est"><b class="z2mark">' + Z.share.pct + '% in Z2 ' + esc(Z.window) +
+        '</b>' +
+        (Z.typical != null && Math.abs(Z.share.pct - Z.typical) >= 4
+          ? ' \u2014 your recent typical is ' + Z.typical + '%'
+          : Z.typical != null ? ' \u2014 about your usual' : '') +
+        (missing > 30 ? '. From ' + Calc.fmtDuration(Z.zoned) + ' of ' +
+          Calc.fmtDuration(Z.elapsed) + ' with lap heart rate' : '') + '.</div>';
+    } else if (Z.elapsed) {
+      h += '<div class="sec"><span>Time in zone</span><span>' +
+        Calc.fmtDuration(Z.elapsed) + '</span></div>';
       h += '<div class="est">None of these runs carried lap heart rate, so there is ' +
-        'no zone split for ' + esc(periodWord()) + '.</div>';
+        'no zone split for ' + esc(Z.window) + '.</div>';
     }
 
-    /* facts before analysis: you should never scroll past a trend to reach a total */
-    const prevKey = Calc.previousWithData(real(), scope, key());
-    const prev = prevKey ? Calc.summarize(real().filter(a => Calc.inPeriod(a, scope, prevKey))) : null;
-    const vs = prevKey ? Calc.periodLabel(prevKey, scope, today()) : null;
-    const dd = (v, p, better) => deltaHTML(Calc.delta(v, p, better));
-
+    /* totals */
+    const s = m.summary, P = m.previous;
+    const dd = (v, p) => deltaHTML(Calc.delta(v, p, null));
     h += '<div class="totals">';
-    h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' + (prev ? dd(s.distance_km, prev.distance_km, null) : ''),
-      prev ? vs + ' ' + prev.distance_km.toFixed(2) : 'nothing before this');
-    h += cmp('Time', Calc.fmtDuration(s.elapsed_s) + ' ' + (prev ? dd(s.elapsed_s, prev.elapsed_s, null) : ''),
-      prev ? vs + ' ' + Calc.fmtDuration(prev.elapsed_s) : '');
-    h += cmp('Runs', String(s.count), prev ? vs + ' ' + prev.count : '');
+    h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' +
+      (P ? dd(s.distance_km, P.summary.distance_km) : ''),
+      P ? P.label + ' ' + P.summary.distance_km.toFixed(2) : '');
+    h += cmp('Time', Calc.fmtDuration(s.elapsed_s) + ' ' +
+      (P ? dd(s.elapsed_s, P.summary.elapsed_s) : ''),
+      P ? P.label + ' ' + Calc.fmtDuration(P.summary.elapsed_s) : '');
+    h += cmp('Runs', String(s.count), P ? P.label + ' ' + P.summary.count : '');
+    if (!P) h += '<div class="est">Nothing logged before this to compare against.</div>';
     h += '</div>';
 
-    h += readHTML();
+    h += readHTML(m);
     return h;
   }
+
 
   function runRow(a, bounds) {
     const c = Calc.aerobicCost(a);
@@ -999,11 +925,8 @@
        override, not the norm. */
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
     h += '<div class="ttl">Add a run</div>';
-    h += '<label><span>Paste the table</span><div class="pastewrap">' +
-      '<textarea id="paste" placeholder="Paste straight from Gemini. Pipes, commas and tabs all work."></textarea>' +
-      '<button class="clear" id="paste-clear" type="button" aria-label="Clear">\u2715</button>' +
-      '</div></label>';
-    h += '<button class="btn ghost" id="paste-from" hidden>Paste from clipboard</button>';
+    h += pasteBoxHTML('paste', 'Paste the table',
+      'Paste straight from Gemini. Pipes, commas and tabs all work.');
     h += '<button class="btn" id="read">Read it</button>';
     h += '<div class="small muted" style="margin-top:11px">Nothing is saved until you have seen the preview.</div>';
     h += '<div id="preview"></div>';
@@ -1011,28 +934,9 @@
 
     $('#view-import [data-back]').onclick = () => go('home');
 
-    const syncClear = () => { el('paste-clear').hidden = !el('paste').value.length; };
-    el('paste').addEventListener('input', syncClear);
-    syncClear();
-    el('paste-clear').onclick = () => {
-      el('paste').value = '';
-      el('preview').innerHTML = '';
-      draft = null;
-      syncClear();
-      el('paste').focus();
-    };
-
-    const pasteBtn = el('paste-from');
-    if (pasteBtn && navigator.clipboard && navigator.clipboard.readText) {
-      pasteBtn.hidden = false;
-      once(pasteBtn, 'Reading\u2026', () =>
-        navigator.clipboard.readText().then(text => {
-          if (!text || !text.trim()) { toast('Clipboard is empty', 'bad'); return; }
-          el('paste').value = text;
-          syncClear();
-          el('read').click();
-        }).catch(() => { toast('Could not read the clipboard', 'bad'); }));
-    }
+    bindPasteBox('paste',
+      () => { el('preview').innerHTML = ''; draft = null; },
+      () => el('read').click());
 
     el('read').onclick = () => {
       const text = el('paste').value;
@@ -1467,25 +1371,16 @@
     h += '<div class="small muted" style="margin-top:12px">Paste a full table or just the lap ' +
       'rows. Anything the paste leaves out keeps its current value; a field written as ' +
       '\u2014 is cleared. Your name, source and notes are never touched.</div>';
-    h += '<label><span>Paste</span><div class="pastewrap">' +
-      '<textarea id="r-paste" placeholder="Paste the table, or only the lap rows."></textarea>' +
-      '<button class="clear" id="r-clear" type="button" aria-label="Clear">\u2715</button>' +
-      '</div></label>';
+    h += pasteBoxHTML('r-paste', 'Paste', 'Paste the table, or only the lap rows.');
     h += '<button class="btn" id="r-read">Read it</button>';
     h += '<div id="r-preview"></div>';
 
     el('view-replace').innerHTML = h;
     document.querySelectorAll('#view-replace [data-back]').forEach(b => b.onclick = () => go('detail', id));
 
-    const rSync = () => { el('r-clear').hidden = !el('r-paste').value.length; };
-    el('r-paste').addEventListener('input', rSync);
-    rSync();
-    el('r-clear').onclick = () => {
-      el('r-paste').value = '';
-      el('r-preview').innerHTML = '';
-      rSync();
-      el('r-paste').focus();
-    };
+    bindPasteBox('r-paste',
+      () => { el('r-preview').innerHTML = ''; },
+      () => el('r-read').click());
 
     el('r-read').onclick = () => {
       const text = el('r-paste').value;

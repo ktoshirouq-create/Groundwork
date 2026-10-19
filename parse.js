@@ -263,7 +263,7 @@
   }
 
   function toActivity(p, extra) {
-    const f = p.fields;
+    const f = dropImpossibleZeros(Object.assign({}, p.fields));
     const a = Object.assign({
       type: 'run',
       date: f.date,
@@ -298,15 +298,39 @@
   /* typed by hand, never overwritten by a paste */
   const TYPED = ['name', 'source', 'note', 'session'];
 
+  /* Garmin writes 0 for a sensor it did not have — 0 spm cadence on a run with
+     no footpod. A zero that falls outside a field's own range is not a reading,
+     it is a missing one, and treating it as a value made the save impossible:
+     "cadence_spm would become 0" with no way to clear it.
+
+     Derived from RANGES rather than a second list, so a field can never be in
+     one and not the other. */
+  function impossibleZero(key, value) {
+    if (value !== 0) return false;
+    const r = RANGES[key];
+    return !!r && r[0] > 0;
+  }
+
+  function dropImpossibleZeros(fields) {
+    Object.keys(fields).forEach(k => {
+      if (impossibleZero(k, fields[k])) delete fields[k];
+    });
+    return fields;
+  }
+
   function mergeInto(existing, p, opts) {
     opts = opts || {};
-    const f = p.fields;
+    const f = dropImpossibleZeros(Object.assign({}, p.fields));
     const out = Object.assign({}, existing);
     const changes = [];
 
+    /* null and undefined are the same absence. Comparing them with === listed
+       "resting_hr — -> —" as a change, which is no change at all. */
+    const same = (a, b) => (a == null && b == null) || a === b;
+
     const set = (k, v) => {
       const before = out[k];
-      if (before === v) return;
+      if (same(before, v)) return;
       out[k] = v;
       changes.push({ field: k, from: before, to: v });
     };
@@ -384,6 +408,7 @@
 
 
   const api = { parse, validate, inferType, toActivity, mergeInto, validateMerge, TYPED,
+                impossibleZero, dropImpossibleZeros,
                 _duration: duration, _sleep: sleepDuration, _date: date };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Parse = api;

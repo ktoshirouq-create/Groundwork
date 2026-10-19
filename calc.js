@@ -398,6 +398,28 @@
 
   /* ---------- periods: week / month / year / all ---------- */
 
+  /* First and last day of a period, so a past period can be read as it stood. */
+  function periodStart(key, scope) {
+    if (scope === 'week') return key;
+    if (scope === 'month') return key + '-01';
+    return key + '-01-01';
+  }
+
+  function periodEnd(key, scope) {
+    if (scope === 'week') {
+      const d = new Date(key + 'T12:00:00');
+      d.setDate(d.getDate() + 6);
+      return d.toISOString().slice(0, 10);
+    }
+    if (scope === 'month') {
+      const d = new Date(key + '-01T12:00:00');
+      d.setMonth(d.getMonth() + 1); d.setDate(0);
+      return d.toISOString().slice(0, 10);
+    }
+    return key + '-12-31';
+  }
+
+
   function periodKey(dateStr, scope) {
     if (scope === 'week') return weekStart(dateStr);
     if (scope === 'month') return dateStr.slice(0, 7);
@@ -516,7 +538,10 @@
       const v = metric === 'load'
         ? inK.reduce((t, a) => t + (load(a, cfgFor(metric)) || 0), 0)
         : s.distance_km;
+      const laps = [];
+      inK.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
       return { key: k, value: v, count: s.count, distance_km: s.distance_km,
+               zones: timeInZone(laps, zoneBounds(cfgFor())),
                selected: k === selectedKey };
     });
   }
@@ -831,10 +856,15 @@
     return acts.filter(a => a.date >= from && a.date <= end);
   }
 
-  function readRows(acts, cfg, asOf) {
+  /* `asOf` ends the window and `since` begins it. Given a past period's own
+     dates, every row describes that period instead of now — the section used
+     to show today's form under a title that said 2025. */
+  function readRows(acts, cfg, asOf, since) {
     const count = arr => (arr || []).length;
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    const year = lastYear(acts.filter(a => a.type === 'run' || a.type === 'test'), asOf);
+    let pool = acts.filter(a => a.type === 'run' || a.type === 'test');
+    if (since) pool = pool.filter(a => a.date >= since);
+    const year = lastYear(pool, asOf);
     const mine = year.filter(a => a.type === 'run').sort((a, b) => a.date.localeCompare(b.date));
     const rows = [];
 
@@ -1100,6 +1130,154 @@
     return share;
   }
 
+  /* ---------- the view model ----------
+
+     The whole class of bug this app kept producing had one shape: a value
+     computed in one place and rendered in another, with the render site
+     deciding for itself which activities, which window, and whether there was
+     anything worth showing. There were twenty-one such decisions in ui.js and
+     they disagreed with each other — that is how one screen came to show three
+     Z2 figures, how Form kept displaying today under a title that said 2025,
+     and how a zone bar appeared above a caption saying there was no zone data.
+
+     So the decisions move here, once. `homeModel` returns every value the home
+     screen needs, each already scoped, already labelled with the window it
+     describes, and already marked present or absent with a reason. The render
+     layer cannot get scoping wrong because it is never given the raw
+     activities to scope. */
+
+  /* A value that knows its own window and whether it exists. */
+  function stat(value, opts) {
+    opts = opts || {};
+    const missing = value == null || (typeof value === 'number' && !isFinite(value));
+    return {
+      value: missing ? null : value,
+      present: !missing,
+      unit: opts.unit || null,
+      window: missing ? null : (opts.window || null),
+      foot: missing ? null : (opts.foot || null),
+      /* a reason is only a reason when there is nothing there. Carrying both a
+         value and an excuse is how a screen ends up saying two things. */
+      absent: missing ? (opts.absent || 'not available') : null,
+      tone: missing ? null : (opts.tone || null),
+      n: opts.n == null ? null : opts.n
+    };
+  }
+
+  function homeModel(all, cfg, scope, key, today) {
+    const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
+    const runs = (all || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && isUsable(a));
+    const isCurrent = periodKey(today, scope) === key;
+    const start = periodStart(key, scope);
+    const end = isCurrent ? today : periodEnd(key, scope);
+    const label = periodLabel(key, scope, today);
+    const word = (isCurrent ? 'this ' : 'that ') + scope;
+
+    const inP = runs.filter(a => inPeriod(a, scope, key))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    /* history up to the end of the period — never beyond it */
+    const upTo = runs.filter(a => a.date <= end);
+
+    /* ---- the run the heroes describe: from the period, or nothing ---- */
+    const inPHr = inP.filter(a => a.avg_hr != null);
+    const lastRun = inPHr.length ? inPHr[0] : (isCurrent ? null : null);
+    const pace = lastRun ? aerobicPace(lastRun, c) : null;
+
+    /* ---- what that run is measured against: all history, never the period ---- */
+    const hist = upTo.filter(a => a.avg_hr != null)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    let peers = [], band = null, prevRun = null;
+    if (lastRun) {
+      const lo = lastRun.distance_km * 0.8, hi = lastRun.distance_km * 1.2;
+      peers = hist.filter(a => a.id !== lastRun.id &&
+        a.distance_km >= lo && a.distance_km <= hi)
+        .map(a => aerobicPace(a, c)).filter(v => v != null);
+      band = peers.length >= 3 ? { median: median(peers), n: peers.length, lo: lo, hi: hi } : null;
+      prevRun = hist.find(a => a.date < lastRun.date ||
+        (a.date === lastRun.date && a.id !== lastRun.id)) || null;
+    }
+
+    /* ---- Z2: rolling on the current period, the period itself otherwise ---- */
+    const rolling = isCurrent ? z2Rolling(runs, c, today) : null;
+    const periodShare = z2Of(lapsOf(inP), c);
+    const share = isCurrent ? rolling : periodShare;
+    const z2Window = isCurrent ? 'last ' + ROLLING_DAYS + ' days' : word;
+    const target = c.z2_target;
+
+    /* ---- the zone split for the period ---- */
+    const laps = lapsOf(inP);
+    const tz = timeInZone(laps, zoneBounds(c));
+    const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    const summary = summarize(inP);
+
+    /* ---- Form, read as of the end of the period ---- */
+    const rows = readRows(all, c, end, isCurrent ? null : start);
+
+    const prevKey = previousWithData(runs, scope, key);
+    const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey))) : null;
+
+    return {
+      period: { key: key, scope: scope, label: label, word: word,
+                isCurrent: isCurrent, start: start, end: end },
+      runs: inP,
+      count: inP.length,
+      summary: summary,
+      previous: prev ? { key: prevKey, label: periodLabel(prevKey, scope, today),
+                         summary: prev } : null,
+
+      hero: {
+        pace: stat(pace, {
+          unit: '/km',
+          window: lastRun ? (isCurrent ? 'last run' : null) : null,
+          n: inPHr.length,
+          absent: inPHr.length ? null
+            : (inP.length ? 'needs average heart rate' : 'no runs in this period')
+        }),
+        z2: stat(share ? share.pct : null, {
+          unit: '%', window: z2Window,
+          n: share ? (share.runs == null ? inP.length : share.runs) : 0,
+          tone: share ? z2Tone(share.pct, c) : null,
+          absent: inP.length ? 'needs lap heart rate' : 'no runs in this period'
+        }),
+        target: target,
+        thin: !!(isCurrent && share && share.runs != null && share.runs < 4),
+        lastRun: lastRun,
+        band: band,
+        previousRun: prevRun ? { run: prevRun, pace: aerobicPace(prevRun, c) } : null,
+        note: lastRun ? sessionNote(lastRun, c) : null
+      },
+
+      zones: {
+        tz: tz, zoned: zoned, unknown: tz.unknown,
+        elapsed: summary.elapsed_s,
+        share: zoned ? z2Of(laps, c) : null,
+        typical: z2Typical(runs, c, scope, key),
+        window: word,
+        absent: zoned ? null
+          : (summary.elapsed_s ? 'no lap heart rate' : 'nothing logged')
+      },
+
+      trend: (function () {
+        const segs = paceSeries(upTo, c, scope === 'year' ? 0 : PACE_WINDOW);
+        const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
+        return {
+          segments: segs,
+          mark: prevSeg && prevSeg.length >= 3
+            ? Math.min.apply(null, prevSeg.map(p => p.value)) : null,
+          shown: segs.shown, total: segs.total,
+          absent: segs.length ? null : 'needs two runs with heart rate'
+        };
+      })(),
+
+      form: { rows: rows, label: isCurrent ? null : label },
+
+      ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
+      gapBefore: emptyRunBefore(runs, scope, key),
+      record: z2Record(runs, c, scope, key, 10),
+      days: scope === 'week' ? weekDays(runs, c, key) : null
+    };
+  }
+
   /* ---------- load ----------
      Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
      short hard effort can cost the same as a long easy one. Needs only average
@@ -1170,8 +1348,8 @@
     paceSecPerKm, fmtPace, fmtDuration,
     fullLaps, mainLaps, hasLapHr, weightedHr,
     aerobicCost, drift, timeInZone, comparable, median,
-    isoWeek, weekStart, dayIndex, daysBetween, splitOnGaps,
-    ACTIVITY_TYPES, weekRollup, monthRollup, confidence,
+    isoWeek, weekStart, periodStart, periodEnd, dayIndex, daysBetween, splitOnGaps,
+    ACTIVITY_TYPES, homeModel, stat, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
