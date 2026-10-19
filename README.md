@@ -152,6 +152,33 @@ it — the empty path had the same cross-period leak as the full one.
 The totals agree with each other too: either all three rows carry a comparison
 or none does, with one line saying why.
 
+## One denominator
+
+Three places worked out a zone share, and two of them counted time whose zone
+was **unknown** into the total. The same 24:59 therefore appeared as:
+
+- **12%** in the zone bar — divided by known + unknown
+- **71%** in the caption underneath — divided by known only
+- **0%** in Form — divided by known + unknown again, in `zoneShareSeries`
+
+All three were "correct". None of them agreed.
+
+Unknown time is not a zone. `z2Of` counts only time whose zone is known, and
+the bar and the weekly series now both go through it. How much of a period
+lacks lap heart rate is reported **in words**, where it can be explained —
+*"From 35:08 of 12:43:37 with lap heart rate"* — rather than drawn as a grey
+slab competing with the real zones.
+
+`tests/architecture.js` fails on any `reduce(...) + tz.unknown`, and checks
+that `z2Of`, the weekly series and the model return the same number for a
+period containing both kinds of time.
+
+### And a window that ran past the data
+
+Form for a past period ended at the calendar edge, so the last three weeks of
+2025 were empty and a year with fourteen runs reported **0 days / week**. It
+ends at the last run in the period instead.
+
 ## A component exists once
 
 The clipboard button was built on the import screen and not on Replace. Same

@@ -809,15 +809,23 @@
     return out;
   }
 
+  /* Shares come from `z2Of`, which counts only time whose zone is known. This
+     used to add unknown time into the denominator on its own, which is how
+     Form reported 0% in Z2 on a year the caption below called 71%. */
   function zoneShareSeries(acts, cfg, n, endKey) {
     const bounds = zoneBounds(cfg);
     return weekKeys(acts, n, endKey).map(k => {
       const inWeek = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && weekStart(a.date) === k);
-      const laps = [];
-      inWeek.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
+      const laps = lapsOf(inWeek);
       const tz = timeInZone(laps, bounds);
-      const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
-      return { key: k, zones: tz, total: total, distance_km: summarize(inWeek).distance_km };
+      const share = z2Of(laps, cfg);
+      return {
+        key: k, zones: tz,
+        total: share ? share.total : 0,        /* known time only */
+        unknown: tz.unknown,
+        z2pct: share ? share.pct : null,
+        distance_km: summarize(inWeek).distance_km
+      };
     });
   }
 
@@ -888,7 +896,7 @@
              bestLabel: 'lowest', missingNote: 'needs runs of 4 km or more with lap HR' });
 
       const zs = zoneShareSeries(mine, c, 12, asOf ? weekStart(asOf) : null)
-        .filter(x => x.total > 0).map(x => x.zones[2] / x.total * 100);
+        .filter(x => x.z2pct != null).map(x => x.z2pct);
       const zw = windowStats(zs);
       push({ n: count(zs), key: 'z2', label: 'Time in Z2', unit: '%', kind: 'pct',
              window: 'last 3 runs', neverBad: true,
@@ -1211,7 +1219,11 @@
     const summary = summarize(inP);
 
     /* ---- Form, read as of the end of the period ---- */
-    const rows = readRows(all, c, end, isCurrent ? null : start);
+    /* Read to the last run in the period, not the calendar edge. Ending at
+       31 December meant the last three weeks of 2025 were empty, so a year
+       with fourteen runs reported "0 days / week". */
+    const readTo = isCurrent ? today : (inP.length ? inP[0].date : end);
+    const rows = readRows(all, c, readTo, isCurrent ? null : start);
 
     const prevKey = previousWithData(runs, scope, key);
     const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey))) : null;

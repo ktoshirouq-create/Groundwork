@@ -62,25 +62,28 @@
      used to make that judgement separately and they disagreed: the period view
      checked zoned time, the detail screen checked total time, so a run with
      laps but no heart rate drew a bar made entirely of "unknown". */
+  /* The bar shows the split of time whose zone is KNOWN, and nothing else.
+
+     It used to include unknown time in the denominator while `z2Of` did not,
+     so one screen showed the same 24:59 as "12%" in the bar and "71% in Z2" in
+     the caption underneath. Unknown time is not a zone; how much of the period
+     it covers is reported in words, where it can be explained. */
   function zoneBarHTML(tz) {
     const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
     if (!zoned) return '';
-    const total = zoned + tz.unknown;
-    /* Percentage in the bar, exact duration beneath it. Base work is judged as
-       a share of the session, not in minutes — "23:18 in Z2" means nothing
-       until you know what it was 23:18 out of. */
+
     const MIN_SHARE = 0.07;
-    const cell = (v, bg, z) => {
-      const pct = Math.round(v / total * 100);
-      const wide = v / total >= MIN_SHARE;
-      return '<div class="zseg' + (z === 2 ? ' z2' : '') + '" style="background:' + bg +
-        '; flex:' + v + '" title="' + Calc.fmtDuration(v) + ' \u00b7 ' + pct + '%">' +
-        (wide ? '<b>' + pct + '%</b><s>' + Calc.fmtDuration(v) + '</s>' : '') + '</div>';
-    };
-    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z => cell(tz[z], ZCOL[z], z));
-    if (tz.unknown > 0) parts.push(cell(tz.unknown, 'var(--stop)', 0));
+    const label = v => (v / zoned >= MIN_SHARE) ? Calc.fmtDuration(v) : '';
+    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z => {
+      const pct = Math.round(tz[z] / zoned * 100);
+      const wide = tz[z] / zoned >= MIN_SHARE;
+      return '<div class="zseg' + (z === 2 ? ' z2' : '') + '" style="background:' + ZCOL[z] +
+        '; flex:' + tz[z] + '" title="' + Calc.fmtDuration(tz[z]) + ' \u00b7 ' + pct + '%">' +
+        (wide ? '<b>' + pct + '%</b><s>' + label(tz[z]) + '</s>' : '') + '</div>';
+    });
     return '<div class="zbar tall">' + parts.join('') + '</div>';
   }
+
 
   function zoneKeyHTML(b) {
     return '<div class="zkey">' +
