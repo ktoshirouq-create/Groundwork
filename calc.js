@@ -480,11 +480,24 @@
   }
 
   /** Bars for the period ribbon. metric: 'distance' | 'ascent'. */
-  function ribbon(acts, scope, selectedKey, n, metric, cfg) {
+  /* The twelve periods ending now — not ending at the selection. Looking at
+     September used to make October disappear, which made the chart feel like
+     it had lost data rather than like you had scrolled back. */
+  function ribbon(acts, scope, selectedKey, n, metric, cfg, asOf) {
     const cfgFor = () => cfg;
+    const endKey = periodKey(asOf || new Date().toISOString().slice(0, 10), scope);
+    /* window ends at now; if the selection is older than that, extend back far
+       enough to include it so you can always see where you are */
+    let last = endKey;
+    let span = n;
+    if (selectedKey && selectedKey < endKey) {
+      let k = endKey, steps = 0;
+      while (k > selectedKey && steps < 60) { k = shiftKey(k, scope, -1); steps++; }
+      span = Math.max(n, steps + 1);
+    }
     const out = [];
-    let key = selectedKey;
-    for (let i = 0; i < n; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
+    let key = last;
+    for (let i = 0; i < span; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
     return out.map(k => {
       const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
       const s = summarize(inK);
@@ -1036,6 +1049,35 @@
     return null;
   }
 
+  /* ---------- the rolling window ----------
+     At two runs a week a calendar week holds two sessions, so one tempo run
+     drops the share from 95% to 30% on no change in behaviour, and every
+     Monday resets the sample to nothing. 28 days is eight or nine sessions and
+     is always "now". */
+
+  const ROLLING_DAYS = 28;
+
+  function sinceDays(acts, days, asOf) {
+    const end = asOf || new Date().toISOString().slice(0, 10);
+    const d = new Date(end + 'T12:00:00');
+    d.setDate(d.getDate() - (days - 1));
+    const from = d.toISOString().slice(0, 10);
+    return (acts || []).filter(a =>
+      ACTIVITY_TYPES.indexOf(a.type) >= 0 && a.date >= from && a.date <= end);
+  }
+
+  /* Z2 over the rolling window, with how many runs went into it so a thin
+     sample can say so rather than presenting itself as a verdict. */
+  function z2Rolling(acts, cfg, asOf, days) {
+    const n = days || ROLLING_DAYS;
+    const within = sinceDays(acts, n, asOf);
+    const share = z2Of(lapsOf(within), cfg);
+    if (!share) return null;
+    share.runs = within.filter(a => (a.laps || []).length).length;
+    share.days = n;
+    return share;
+  }
+
   /* ---------- load ----------
      Banister TRIMP: minutes weighted by heart-rate reserve, exponentially, so a
      short hard effort can cost the same as a long easy one. Needs only average
@@ -1113,7 +1155,8 @@
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
     load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone,
-    SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
+    SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
+    ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
   };

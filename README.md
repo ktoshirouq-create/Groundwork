@@ -91,6 +91,33 @@ against **its own intent** rather than a general rule:
 No verdict at all without a tag or without lap heart rate. The app doesn't
 guess what you meant.
 
+## The rolling window
+
+At two runs a week a calendar week holds two sessions. One tempo run drops the
+Z2 share from 95% to 30% on no change in behaviour, and every Monday the sample
+resets to nothing.
+
+So on the **current** period the Z2 hero rolls over **28 days** — eight or nine
+sessions, and always "now". It says `In Z2 · last 28 days`, and under four runs
+it says `only 3 runs so far` instead of presenting itself as a verdict.
+
+On an **older** period it describes that period and says so. A rolling window
+anchored to today would be meaningless on a month you are scrolling back to.
+
+The weekly figure stays in Time in Zone, because that one is supposed to be
+sensitive.
+
+## Looking back
+
+The ribbon always ends at **now**, whatever period is selected. Selecting
+September used to make October vanish, which read as lost data rather than as
+scrolling back. If the selection is older than the twelve periods shown, the
+window extends to reach it.
+
+The hero takes its run from **the period on screen**. Built from every run, it
+showed October's pace and October's session note under a title that said
+September.
+
 ## One number, one window
 
 The same screen once showed 29%, 33% and 29% for what any reader would take to

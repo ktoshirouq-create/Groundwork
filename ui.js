@@ -101,7 +101,7 @@
     if (scope === 'all') return '';
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
-    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'load', cfg);
+    const bars = Calc.ribbon(real(), scope, key(), RIBBON, 'load', cfg, today());
     const max = Math.max.apply(null, bars.map(b => b.value).concat([1]));
 
     const label = b => {
@@ -612,7 +612,13 @@
 
   function runHero(inP, mine, bounds) {
     const cfg = Store.config();
-    const withHr = mine.filter(a => a.avg_hr != null).sort((a, b) => b.date.localeCompare(a.date));
+    /* Prefer a run from the period on screen. Built from every run, the hero
+       showed October's run while the title said September. */
+    const byDate = arr => arr.filter(a => a.avg_hr != null)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const inPeriodHr = byDate(inP);
+    const fromPeriod = inPeriodHr.length > 0;
+    const withHr = fromPeriod ? inPeriodHr : byDate(mine);
     const last = withHr[0];
     const pace = last ? Calc.aerobicPace(last, cfg) : null;
     const prevPace = withHr[1] ? Calc.aerobicPace(withHr[1], cfg) : null;
@@ -622,7 +628,16 @@
        measured at 145 bpm it improves fastest when you train above Z2, which is
        the opposite of base work. The share sits beside it at the same size so
        the screen answers "am I building base" before "am I fast". */
-    const share = Calc.z2Share(inP, cfg);
+    /* On the current period the figure rolls over 28 days — at two runs a week
+       a calendar week is two sessions, so one tempo run swings it by 60 points
+       and every Monday starts from nothing. On an older period it describes
+       that period, and says so. */
+    const isNow = Calc.periodKey(today(), scope) === key() && fromPeriod;
+    const share = isNow
+      ? Calc.z2Rolling(real(), cfg, today())
+      : Calc.z2Share(inP, cfg);
+    const z2Window = isNow ? 'last ' + Calc.ROLLING_DAYS + ' days' : periodWord();
+    const thin = isNow && share && share.runs < 4;
     const tone = share ? Calc.z2Tone(share.pct, cfg) : 'none';
     const target = cfg.z2_target;
 
@@ -640,18 +655,21 @@
 
       h += '<div class="heropair">';
       h += '<div class="hcol">' +
-        '<div class="eyebrow">Aerobic pace \u00b7 last run</div>' +
+        '<div class="eyebrow">Aerobic pace \u00b7 ' +
+        esc(isNow ? 'last run' : fmtDate(last.date)) + '</div>' +
         '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
         '<div class="hunit">/km</div></div>' +
         '<div class="hfoot">at ' + Calc.refHr(cfg) + ' bpm' +
         (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div></div>';
       h += '<div class="hcol' + (share ? ' t-' + tone : '') + '">' +
-        '<div class="eyebrow">In Z2 \u00b7 ' + esc(periodWord()) + '</div>' +
+        '<div class="eyebrow">In Z2 \u00b7 ' + esc(z2Window) + '</div>' +
         '<div class="hero"><div class="hnum z2num">' +
         (share ? share.pct : '\u2014') + '</div><div class="hunit">%</div></div>' +
         '<div class="hfoot">' + (share
-          ? (share.pct >= target ? 'at your ' + target + '% target'
-             : (target - share.pct) + ' under ' + target + '%')
+          ? (thin
+              ? 'only ' + share.runs + (share.runs === 1 ? ' run' : ' runs') + ' so far'
+              : share.pct >= target ? 'at your ' + target + '% target'
+                : (target - share.pct) + ' under ' + target + '%')
           : 'needs lap heart rate') + '</div></div>';
       h += '</div>';
       h += '<div class="hsub">' + '' +
@@ -668,9 +686,12 @@
       /* One implementation, shared with the detail screen, and it knows what
          the session was tagged as. The note is about the last run, so it says
          so — the numbers above it describe the whole period. */
+      /* the note describes a run inside the period on screen, never the most
+         recent run overall — looking at September used to show a comment about
+         a run from October */
       const note = Calc.sessionNote(last, cfg);
       if (note) h += '<div class="hnote' + (note.tone === 'ok' ? ' good' : '') + '">' +
-        '<em>Last run</em> ' + note.text + '</div>';
+        '<em>' + esc(isNow ? 'Last run' : fmtDate(last.date)) + '</em> ' + note.text + '</div>';
     } else {
       h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
         '<div class="hsub">Needs a run with average heart rate.</div>';
