@@ -136,6 +136,39 @@ The hero takes its run from **the period on screen**. Built from every run, it
 showed October's pace and October's session note under a title that said
 September.
 
+## Invariants
+
+Every bug in the last few rounds was the same bug: **the app failing to notice
+it had nothing to say.** A zone bar made entirely of unknown time. A unit with
+no number in front of it. A gap counter running to its cap. Each was found by
+eye, one screenshot at a time, and each fix was applied at one call site while
+the same mistake sat untouched at two others.
+
+`tests/invariants.js` is the answer to that. Thirteen deliberately awkward
+datasets — nothing at all, one run, laps without heart rate, no heart rate
+anywhere, a year-long gap, everything on one day, a 400-metre run, a 62 km run,
+sessions tagged but not matched — rendered at **every scope, every reachable
+period, every detail screen and Setup**, and checked against rules that hold
+whatever the data:
+
+- no `NaN`, `null`, `undefined` or `Infinity` reaches the screen
+- no unit appears without a value
+- no plot renders without a line
+- no zone bar is made entirely of unknown time
+- no percentage falls outside a sane range
+- no period count runs into the hundreds
+- nothing says "1 days"
+- no two statements on one screen contradict each other
+- the error boundary never fires
+
+That is roughly 3,400 checks, and it found two live bugs the moment it was
+written — both of them repeats of ones already fixed elsewhere.
+
+The fixes were made in the shared renderers rather than at the call sites:
+`zoneBarHTML` now decides for itself whether it has anything to show, and a
+single `heroHTML` renders a value and its unit together or not at all. "— %"
+and "—/km" were the same mistake written twice.
+
 ## Nothing is drawn that cannot be read
 
 A period can contain runs and still contain no zone information, and that case

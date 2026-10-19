@@ -58,9 +58,14 @@
       '<span>' + (l.avg_hr == null ? '\u2014' : l.avg_hr) + '</span>').join('') + '</div>';
   }
 
+  /* The bar decides for itself whether it has anything to show. Every caller
+     used to make that judgement separately and they disagreed: the period view
+     checked zoned time, the detail screen checked total time, so a run with
+     laps but no heart rate drew a bar made entirely of "unknown". */
   function zoneBarHTML(tz) {
-    const total = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
-    if (!total) return '';
+    const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+    if (!zoned) return '';
+    const total = zoned + tz.unknown;
     /* Percentage in the bar, exact duration beneath it. Base work is judged as
        a share of the session, not in minutes — "23:18 in Z2" means nothing
        until you know what it was 23:18 out of. */
@@ -610,6 +615,20 @@
     return now ? 'this year' : 'that year';
   }
 
+  /* One hero renderer. A value and its unit are rendered together or not at
+     all — "— %" and "—/km" were the same bug written twice, in two places, and
+     fixed once. */
+  function heroHTML(opts) {
+    const has = opts.value != null && opts.value !== '';
+    return '<div class="hcol' + (opts.tone ? ' t-' + opts.tone : '') + '">' +
+      '<div class="eyebrow">' + esc(opts.label) + '</div>' +
+      '<div class="hero"><div class="hnum' + (has ? (opts.numClass ? ' ' + opts.numClass : '')
+        : ' pending') + '">' + (has ? opts.value : '\u2014') + '</div>' +
+      (has && opts.unit ? '<div class="hunit">' + esc(opts.unit) + '</div>' : '') +
+      '</div>' +
+      '<div class="hfoot">' + (has ? (opts.foot || '') : esc(opts.needs || '')) + '</div></div>';
+  }
+
   function runHero(inP, mine, bounds) {
     const cfg = Store.config();
     /* Prefer a run from the period on screen. Built from every run, the hero
@@ -663,24 +682,28 @@
       const d = banded ? Calc.delta(pace, ref, 'down') : null;
 
       h += '<div class="heropair">';
-      h += '<div class="hcol">' +
-        '<div class="eyebrow">Aerobic pace \u00b7 ' +
-        esc(isNow ? 'last run' : fmtDate(last.date)) + '</div>' +
-        '<div class="hero"><div class="hnum">' + Calc.fmtPace(pace) + '</div>' +
-        '<div class="hunit">/km</div></div>' +
-        '<div class="hfoot">at ' + Calc.refHr(cfg) + ' bpm' +
-        (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</div></div>';
-      h += '<div class="hcol' + (share ? ' t-' + tone : '') + '">' +
-        '<div class="eyebrow">In Z2 \u00b7 ' + esc(z2Window) + '</div>' +
-        '<div class="hero"><div class="hnum z2num' + (share ? '' : ' pending') + '">' +
-        (share ? share.pct : '\u2014') + '</div>' +
-        (share ? '<div class="hunit">%</div>' : '') + '</div>' +
-        '<div class="hfoot">' + (share
+      h += heroHTML({
+        label: 'Aerobic pace \u00b7 ' + (isNow ? 'last run' : fmtDate(last.date)),
+        value: pace != null ? Calc.fmtPace(pace) : null,
+        unit: '/km',
+        foot: 'at ' + Calc.refHr(cfg) + ' bpm' +
+          (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : ''),
+        needs: 'needs average heart rate'
+      });
+      h += heroHTML({
+        label: 'In Z2 \u00b7 ' + z2Window,
+        value: share ? share.pct : null,
+        unit: '%',
+        numClass: 'z2num',
+        tone: share ? tone : null,
+        foot: share
           ? (thin
               ? 'only ' + share.runs + (share.runs === 1 ? ' run' : ' runs') + ' so far'
               : share.pct >= target ? 'at your ' + target + '% target'
                 : (target - share.pct) + ' under ' + target + '%')
-          : 'needs lap heart rate') + '</div></div>';
+          : '',
+        needs: 'needs lap heart rate'
+      });
       h += '</div>';
       h += '<div class="hsub">' + '' +
         (banded
@@ -703,8 +726,14 @@
       if (note) h += '<div class="hnote' + (note.tone === 'ok' ? ' good' : '') + '">' +
         '<em>' + esc(isNow ? 'Last run' : fmtDate(last.date)) + '</em> ' + note.text + '</div>';
     } else {
-      h += '<div class="hero"><div class="hnum pending">\u2014</div><div class="hunit">/km</div></div>' +
-        '<div class="hsub">Needs a run with average heart rate.</div>';
+      /* the empty case goes through the same renderer as the full one, so it
+         cannot drift back into showing a unit with nothing in front of it */
+      h += '<div class="heropair">' +
+        heroHTML({ label: 'Aerobic pace', value: null, unit: '/km',
+                   needs: 'needs average heart rate' }) +
+        heroHTML({ label: 'In Z2', value: null, unit: '%', numClass: 'z2num',
+                   needs: 'needs lap heart rate' }) +
+        '</div>';
     }
 
     const newest = mine.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
