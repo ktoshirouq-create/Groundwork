@@ -694,3 +694,27 @@ label > span {
   border: 1px solid var(--z2); border-radius: 3px;
   padding: 1px 4px; vertical-align: 1px; margin-right: 4px;
 }
+
+/* ---------- chart markers ----------
+
+   The plot's viewBox is stretched to the container width, so an SVG circle
+   inside it comes out as a wide ellipse — single-run blocks read as smudges.
+   Markers live in the HTML layer instead, where a circle is a circle. */
+
+.cplot { position: relative; }
+.cdot {
+  position: absolute; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.cdot.now  { background: var(--z2); }
+.cdot.prev { background: var(--mute); }
+.cdot.tip  { background: var(--z2); box-shadow: 0 0 0 2px var(--bg); }
+
+/* each zone's share sits in the key, so the full split is always readable
+   even where a segment is too narrow to carry a label */
+.zkey b {
+  font-family: var(--f-data); font-weight: 400;
+  color: var(--ink); margin-left: 5px;
+}
+.zkey .key-z2 b { color: var(--z2); }

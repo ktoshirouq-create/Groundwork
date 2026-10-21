@@ -665,13 +665,27 @@
   }
 
   /* How far back a trend should reach for the period being viewed. */
-  function trendRange(scope, key, today, isCurrent) {
+  function trendRange(scope, key, today, isCurrent, runs) {
     const end = isCurrent ? today : periodEnd(key, scope);
     let start = periodStart(key, scope);
     if (daysBetween(start, end) < TREND_MIN_DAYS) {
       const d = new Date(end + 'T12:00:00');
       d.setDate(d.getDate() - TREND_MIN_DAYS);
       start = d.toISOString().slice(0, 10);
+    }
+
+    /* Start at the first run in range rather than at the calendar edge. The
+       2026 view ran 1 Jan to 21 Oct with nothing before August, so three
+       quarters of the chart was blank — and blank before your first run says
+       nothing the ribbon has not already said. Gaps BETWEEN runs are kept:
+       those are the part worth seeing. */
+    if (runs && runs.length) {
+      const within = runs.filter(a => a.date >= start && a.date <= end)
+        .map(a => a.date).sort();
+      if (within.length) {
+        start = within[0];
+        return { from: start, to: within[within.length - 1] > end ? end : end };
+      }
     }
     return { from: start, to: end };
   }
@@ -1152,6 +1166,13 @@
      home screen and the detail screen can never disagree — the home note used
      to call a run tagged Tempo "a tempo run, not base work", scolding you for
      doing exactly what you had planned. */
+  /* "a easy run" is the kind of thing that makes an app feel machine-made. */
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function article(word) {
+    return /^[aeiou]/i.test(String(word || '')) ? 'an' : 'a';
+  }
+
   function sessionNote(act, cfg) {
     const share = z2Of(act && act.laps, cfg);
     if (!share) return null;
@@ -1162,17 +1183,18 @@
       if (s.z2 === 'low') {
         /* a hard session run hard needs no comment at all */
         return share.above >= 40
-          ? { tone: 'ok', text: 'A ' + s.label.toLowerCase() + ' session, run like one \u2014 ' +
-              '<b>' + share.above + '% above Z2</b>.' }
+          ? { tone: 'ok', text: cap(article(s.label)) + ' ' + s.label.toLowerCase() +
+              ' session, run like one \u2014 <b>' + share.above + '% above Z2</b>.' }
           : { tone: 'ok', text: 'Tagged ' + s.label.toLowerCase() + ', but <b>' + share.pct +
               '% of it sat in Z2</b>.' };
       }
       if (share.pct >= target) {
-        return { tone: 'ok', text: 'A ' + s.label.toLowerCase() + ' run, run like one \u2014 ' +
-          '<b>' + share.pct + '% in Z2</b>.' };
+        return { tone: 'ok', text: cap(article(s.label)) + ' ' + s.label.toLowerCase() +
+          ' run, run like one \u2014 <b>' + share.pct + '% in Z2</b>.' };
       }
-      return { tone: 'warn', text: 'You called this a <b>' + s.label.toLowerCase() +
-        ' run</b>, and <b>' + share.above + '% of it was above Z2</b>.' };
+      return { tone: 'warn', text: 'You called this ' + article(s.label) + ' <b>' +
+        s.label.toLowerCase() + ' run</b>, and <b>' + share.above +
+        '% of it was above Z2</b>.' };
     }
 
     /* untagged: no intent to measure against, so only the plain fact */
@@ -1349,7 +1371,7 @@
       },
 
       trend: (function () {
-        const range = trendRange(scope, key, today, isCurrent);
+        const range = trendRange(scope, key, today, isCurrent, aerobicSamples(runs));
         const segs = paceSeries(runs, c, range.from, range.to);
         const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
         return {
@@ -1359,7 +1381,11 @@
           shown: segs.shown, total: segs.total,
           from: range.from, to: range.to,
           days: daysBetween(range.from, range.to),
-          absent: segs.length ? null : 'no runs with heart rate in this stretch'
+          /* One point is not a trend. It used to draw an axis with a single
+             dot on it, which says nothing the hero has not already said. */
+          absent: segs.shown >= 2 ? null
+            : (segs.shown === 1 ? 'one run so far \u2014 a trend needs two'
+                                : 'no runs with heart rate in this stretch')
         };
       })(),
 

@@ -152,6 +152,30 @@ it — the empty path had the same cross-period leak as the full one.
 The totals agree with each other too: either all three rows carry a comparison
 or none does, with one line saying why.
 
+## Markers live outside the stretched space
+
+The plot's viewBox is 100×100 stretched to the container's width, so an SVG
+`<circle>` inside it renders as a wide ellipse — single-run blocks read as grey
+smudges. Markers are HTML elements positioned by percentage instead, where a
+circle is a circle.
+
+And one point is not a trend: a chart with a single run on it used to draw an
+axis with one dot, which says nothing the hero has not already said.
+
+## The whole split is always readable
+
+A zone segment under 7% is too narrow to carry a label, so the visible numbers
+stopped short of 100 — which reads exactly like the rounding bug that was
+already fixed. Each zone's share now sits in the key beneath the bar, so the
+split always adds up in plain sight even where a sliver cannot be labelled.
+
+## The chart does not spend width on months before you ran
+
+The 2026 view ran 1 January to 21 October with nothing logged before August, so
+three quarters of the chart was blank. It starts at the first run in range
+instead — 71 days rather than 293. Gaps *between* runs are kept, because those
+are the part worth seeing.
+
 ## Best efforts
 
 Fastest 1, 2, 3, 5, 10, 15, 21.1 and 42.2 km, taken from per-kilometre laps.

@@ -105,12 +105,30 @@
   }
 
 
-  function zoneKeyHTML(b) {
+  /* The legend carries each zone's share when there is one, because a segment
+     under seven percent is too narrow to label and the visible numbers then
+     fail to reach a hundred — which reads exactly like a rounding bug. */
+  function zoneKeyHTML(b, tz) {
+    let pct = null;
+    if (tz) {
+      const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+      if (zoned) {
+        const all = [1,2,3,4,5];
+        const shares = Calc.sharesOf(all.map(z => tz[z]), zoned);
+        pct = {};
+        all.forEach((z, i) => { pct[z] = shares[i]; });
+      }
+    }
+    const share = z => pct ? ' <b>\u00b7 ' + pct[z] + '%</b>' : '';
+    const z5 = pct && pct[5] > 0
+      ? '<span><i style="background:var(--z5)"></i>Z5' + share(5) + '</span>' : '';
+
     return '<div class="zkey">' +
-      '<span><i style="background:var(--z1)"></i>Z1 &lt;' + b.z2 + '</span>' +
-      '<span class="key-z2"><i style="background:var(--z2)"></i>Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) + '</span>' +
-      '<span><i style="background:var(--z3)"></i>Z3 ' + b.z3 + '\u2013' + (b.z4 - 1) + '</span>' +
-      '<span><i style="background:var(--z4)"></i>Z4 ' + b.z4 + '+</span></div>';
+      '<span><i style="background:var(--z1)"></i>Z1 &lt;' + b.z2 + share(1) + '</span>' +
+      '<span class="key-z2"><i style="background:var(--z2)"></i>Z2 ' + b.z2 + '\u2013' + (b.z3 - 1) + share(2) + '</span>' +
+      '<span><i style="background:var(--z3)"></i>Z3 ' + b.z3 + '\u2013' + (b.z4 - 1) + share(3) + '</span>' +
+      '<span><i style="background:var(--z4)"></i>Z4 ' + b.z4 + '+' + share(4) + '</span>' +
+      z5 + '</div>';
   }
 
   function metric(label, value, unit, caption, pending) {
@@ -234,6 +252,7 @@
       return opt.invert ? t * 100 : 100 - t * 100;
     };
 
+    const dots = [];
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
 
@@ -256,18 +275,22 @@
         svg += '<polyline class="draw" fill="none" stroke="' + col + '" stroke-width="' + w +
           '" vector-effect="non-scaling-stroke" points="' + pts.join(' ') + '"/>';
       } else {
-        /* a block of one has no line, so it is drawn as a point you can see */
-        const x = xOf(seg[0].date), y = yOf(seg[0].value);
-        svg += '<circle cx="' + x.toFixed(2) + '" cy="' + y.toFixed(2) +
-          '" r="1.8" fill="' + col + '"/>';
+        /* A block of one run has no line to draw. The marker goes in the HTML
+           layer, not the SVG: the viewBox is stretched to the plot's width, so
+           a <circle> in here comes out as a wide ellipse and reads as a smudge. */
+        dots.push({ x: xOf(seg[0].date), y: yOf(seg[0].value),
+                    cls: si === last ? 'now' : 'prev', r: 4 });
       }
       if (si === last) {
         const p = seg[seg.length - 1];
-        svg += '<circle class="tip" cx="' + xOf(p.date).toFixed(2) + '" cy="' +
-          yOf(p.value).toFixed(2) + '" r="2.4" fill="var(--z2)"/>';
+        dots.push({ x: xOf(p.date), y: yOf(p.value), cls: 'tip', r: 5 });
       }
     });
     svg += '</svg>';
+
+    const dotHTML = dots.map(d =>
+      '<i class="cdot ' + d.cls + '" style="left:' + d.x.toFixed(2) + '%; top:' +
+      d.y.toFixed(2) + '%; width:' + d.r + 'px; height:' + d.r + 'px"></i>').join('');
 
     const fmt = opt.format || (v => Math.round(v));
     const best = Math.min.apply(null, all), worst = Math.max.apply(null, all);
@@ -277,7 +300,7 @@
       (opt.anchorLabels ? '<em>' + opt.anchorLabels[i] + '</em>' : '') + '</span>').join('');
 
     return '<div class="chart"><div class="cwrap">' +
-      '<div class="cplot">' + svg + '</div>' +
+      '<div class="cplot">' + svg + dotHTML + '</div>' +
       '<div class="yax" style="height:' + (opt.height || 150) + 'px">' + axis + '</div></div>' +
       (opt.xax ? '<div class="xax">' + opt.xax.map(s => '<span>' + esc(s) + '</span>').join('') + '</div>' : '') +
       (opt.legend ? '<div class="legend">' + opt.legend + '</div>' : '') + '</div>';
@@ -690,7 +713,8 @@
         from: m.trend.from, to: m.trend.to,
         format: v => Calc.fmtPace(v),
         anchorLabels: ['best', 'slowest'],
-        label: 'Aerobic pace across ' + m.trend.shown + ' runs over ' + m.trend.days + ' days. Faster is higher.',
+        label: 'Aerobic pace across ' + m.trend.shown + ' run' +
+          (m.trend.shown === 1 ? '' : 's') + '. Faster is higher.',
         xax: [fmtDate(m.trend.from).toUpperCase(), '', fmtDate(m.trend.to).toUpperCase()],
         legend: '<span><i class="sw now"></i>this block</span>' +
                 (segs.length > 1 ? '<span><i class="sw prev"></i>earlier blocks</span>' : '')
@@ -702,7 +726,9 @@
         (m.trend.mark != null ? '. Dashed rule is your previous best, ' +
           Calc.fmtPace(m.trend.mark) : '') +
         '. ' + m.trend.shown + ' run' + (m.trend.shown === 1 ? '' : 's') +
-        ' over ' + m.trend.days + ' days.</div>';
+        (m.trend.days >= 2
+          ? ' over ' + m.trend.days + ' days'
+          : '') + '.</div>';
     }
 
     /* time in zone */
@@ -710,7 +736,7 @@
     if (!Z.absent) {
       h += '<div class="sec"><span>Time in zone</span><span>' +
         Calc.fmtDuration(Z.elapsed) + '</span></div>';
-      h += zoneBarHTML(Z.tz) + zoneKeyHTML(bounds);
+      h += zoneBarHTML(Z.tz) + zoneKeyHTML(bounds, Z.tz);
       const missing = Z.elapsed - Z.zoned;
       h += '<div class="est"><b class="z2mark">' + Z.share.pct + '% in Z2 ' + esc(Z.window) +
         '</b>' +
