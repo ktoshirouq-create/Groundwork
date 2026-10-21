@@ -152,6 +152,84 @@ it — the empty path had the same cross-period leak as the full one.
 The totals agree with each other too: either all three rows carry a comparison
 or none does, with one line saying why.
 
+## Best efforts
+
+Fastest 1, 2, 3, 5, 10, 15, 21.1 and 42.2 km, taken from per-kilometre laps.
+Shown on each run with the laps they came from, and marked **PB** where the
+run holds the all-time best.
+
+Three things worth knowing about the method:
+
+- **Laps, not a rolling window.** Strava reads a GPS stream, so its best 5 km
+  can start mid-kilometre. This is the fastest five *consecutive laps*, which
+  is a shade slower. The app says so on screen rather than claiming a number it
+  does not have.
+- **Only whole laps count.** A 0.43 km final lap is not a kilometre, and
+  counting partials would make nearly every run look like a personal best.
+- **Races count here**, unlike aerobic pace. The fastest you have run 10 km is
+  the fastest you have run it, however you came by it.
+
+## Bounds: impossible blocks, unusual warns
+
+A range was doing two incompatible jobs — catching a mistyped 1400 for 140, and
+describing what a normal run looks like. An 8.37 km climb with 414 m of ascent
+at 12:48/km has a cadence of 89, which is real, and the app refused to record
+it with no override.
+
+- **POSSIBLE** is physics. Outside it the reading is wrong and the record is
+  refused.
+- **PLAUSIBLE** is typical. Outside it the app says so and **saves anyway**.
+
+`checkBounds` is the only place a value meets its bounds. The edit screen used
+to carry its own copy with different numbers — 30–220 for heart rate where the
+parser said 20–250 — so the same value could be accepted by a paste and refused
+by an edit.
+
+## A change reads in its own units
+
+A percentage of a percentage is nonsense, and a percentage of a near-zero
+baseline is worse: drift improving from +15 to 0 showed as **100%** when the
+story is fifteen beats. `deltaAs` is declared on the metric — seconds for pace,
+bpm for drift, points for Z2, days for consistency — so no render site chooses,
+which is how the wrong default got applied in the first place.
+
+## Parts of a whole sum to the whole
+
+Rounding each zone share on its own gave **95%** on real data and 99% on any
+even three-way split. `sharesOf` uses largest remainder, so the segments always
+total 100.
+
+## The chart is placed in time
+
+Points were spaced by index with a minimum width per block, which inverted the
+moment there were several blocks: three single-run blocks took 12% of the width
+each while a fourteen-run block took 5%, and the gutters between them took 35%.
+The chart described how the data was grouped rather than the running.
+
+**x is now the date.** A gap is blank because nothing happened then, which is
+the honest picture and needs no gutter at all. A block of one run is drawn as a
+point. The range follows the period, with a 120-day floor so a single week
+still has enough history to be a trend.
+
+## A race is not a measurement of aerobic pace
+
+Aerobic pace claims to be what you would hold at 145 bpm, and a five-hour
+marathon at 156 bpm is not that. It was setting the 2024 headline, sitting in
+the trend, and holding the all-time best.
+
+Races are excluded from the hero, the trend, the best, the Form row and the
+length-band comparison. They are kept in the list (marked **RACE**), the
+totals, the load and the zone split — and in **drift**, deliberately, because
+how much you faded over a race is exactly when drift is worth knowing.
+
+## Every period with data is reachable
+
+The ribbon ran a fixed twelve bars, so backfilling 2024 put ten of its months
+beyond reach from Month scope. It now spans from your first run to now and
+scrolls past thirteen bars, with the selected period scrolled to the centre.
+Week is capped at 52 on purpose — scrolling back two years week by week is not
+navigation.
+
 ## One denominator
 
 Three places worked out a zone share, and two of them counted time whose zone

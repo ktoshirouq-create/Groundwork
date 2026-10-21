@@ -505,6 +505,11 @@
   /* The twelve periods ending now — not ending at the selection. Looking at
      September used to make October disappear, which made the chart feel like
      it had lost data rather than like you had scrolled back. */
+  /* How far back the ribbon will reach, per scope. Not a display limit — the
+     ribbon scrolls — but a point past which scrolling week by week stops being
+     navigation and starts being a chore. Use Month or Year to go further. */
+  const MAX_RIBBON = { week: 52, month: 36, year: 20 };
+
   function ribbon(acts, scope, selectedKey, n, metric, cfg, asOf) {
     const cfgFor = () => cfg;
     const endKey = periodKey(asOf || new Date().toISOString().slice(0, 10), scope);
@@ -515,20 +520,22 @@
     const dates = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0)
       .map(a => a.date).sort();
     const firstKey = dates.length ? periodKey(dates[0], scope) : null;
+    /* The window runs from the first activity to now — every period you have
+       data for is reachable. `n` is only the number that fits on screen; past
+       that the ribbon scrolls. Capped at twelve it meant that backfilling 2024
+       put ten of its months beyond reach from Month scope. */
+    const cap = MAX_RIBBON[scope] || 24;
+    const stepsBack = (to) => {
+      let k = endKey, steps = 0;
+      while (k > to && steps < cap) { k = shiftKey(k, scope, -1); steps++; }
+      return steps;
+    };
+
     let last = endKey;
-    let span = n;
-    if (firstKey) {
-      let k = endKey, steps = 0;
-      while (k > firstKey && steps < 200) { k = shiftKey(k, scope, -1); steps++; }
-      span = Math.max(3, Math.min(n, steps + 1));
-    }
-    if (selectedKey && selectedKey < endKey) {
-      /* reach back far enough to show the selection, but never further than
-         the trim above — selecting 2025 used to redraw a decade of empty years */
-      let k = endKey, steps = 0;
-      while (k > selectedKey && steps < 200) { k = shiftKey(k, scope, -1); steps++; }
-      span = Math.max(span, steps + 1);
-    }
+    let span = Math.max(3, n);
+    if (firstKey) span = Math.max(3, Math.min(cap, stepsBack(firstKey) + 1));
+    if (selectedKey && selectedKey < endKey)
+      span = Math.max(span, Math.min(cap, stepsBack(selectedKey) + 1));
     const out = [];
     let key = last;
     for (let i = 0; i < span; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
@@ -625,25 +632,51 @@
 
   const PACE_WINDOW = 20;
 
+  /* The minimum stretch of time a trend is drawn over. A week on its own is
+     not a trend, so a short period reaches back far enough to be one. */
+  const TREND_MIN_DAYS = 120;
+
   /* Date-ordered pace series, split wherever training stopped.
-     `limit` keeps the most recent n runs: an early block sets a floor the scale
-     never escapes otherwise, and six months from now three ancient points would
-     flatten everything worth seeing. Pass 0 for the whole history. */
-  function paceSeries(acts, cfg, limit) {
-    const n = limit === undefined ? PACE_WINDOW : limit;
-    let runs = acts
-      .filter(a => a.type === 'run' && a.avg_hr != null)
+
+     Points carry their date because the chart places them in TIME, not by
+     index. Spacing by point count meant three single-run blocks each took 12%
+     of the width while a fourteen-run block took 5%, and the gutters between
+     them took 35% — the chart said more about how the data was grouped than
+     about the running. */
+  function paceSeries(acts, cfg, from, to) {
+    let runs = (acts || [])
+      .filter(a => a.type === 'run' && a.avg_hr != null && !isRace(a))
       .sort((a, b) => a.date.localeCompare(b.date));
+
     const total = runs.length;
-    if (n && total > n) runs = runs.slice(total - n);
+    if (to) runs = runs.filter(a => a.date <= to);
+    if (from) runs = runs.filter(a => a.date >= from);
+
     const segs = splitOnGaps(runs, cfg).map(seg =>
       seg.map(a => ({ id: a.id, date: a.date, name: a.name, value: aerobicPace(a, cfg) }))
          .filter(p => p.value != null)
     ).filter(seg => seg.length);
+
     segs.total = total;
     segs.shown = runs.length;
+    segs.from = runs.length ? runs[0].date : null;
+    segs.to = runs.length ? runs[runs.length - 1].date : null;
     return segs;
   }
+
+  /* How far back a trend should reach for the period being viewed. */
+  function trendRange(scope, key, today, isCurrent) {
+    const end = isCurrent ? today : periodEnd(key, scope);
+    let start = periodStart(key, scope);
+    if (daysBetween(start, end) < TREND_MIN_DAYS) {
+      const d = new Date(end + 'T12:00:00');
+      d.setDate(d.getDate() - TREND_MIN_DAYS);
+      start = d.toISOString().slice(0, 10);
+    }
+    return { from: start, to: end };
+  }
+
+
 
   /* ---------- normalising what comes back from Sheets ----------
      A date column that didn't take the plain-text format comes back as a real
@@ -717,7 +750,7 @@
     const by = (arr, f, dir) => arr.filter(a => f(a) != null)
       .sort((a, b) => dir === 'min' ? f(a) - f(b) : f(b) - f(a))[0];
 
-    const best = by(mine, a => aerobicPace(a, cfg), 'min');
+    const best = by(aerobicSamples(mine), a => aerobicPace(a, cfg), 'min');
     if (best) out.push({ label: 'Best aerobic pace', value: fmtPace(aerobicPace(best, cfg)),
       unit: '/km', when: best.date, id: best.id });
     const far = by(mine, a => a.distance_km, 'max');
@@ -736,7 +769,46 @@
     return out;
   }
 
+  /* Parts of a whole, rounded so they still total the whole.
+
+     Rounding each share on its own is the obvious thing and it is wrong: a
+     three-way even split gives 33+33+33 = 99, and one real zone split on this
+     app's own data gave 101. Largest remainder hands the leftover points to
+     whichever parts were rounded down hardest, which is both correct and the
+     fairest place to put them. */
+  function sharesOf(values, total) {
+    const sum = total != null ? total : values.reduce((a, b) => a + b, 0);
+    if (!sum) return values.map(() => 0);
+    const exact = values.map(v => v / sum * 100);
+    const floors = exact.map(Math.floor);
+    let left = 100 - floors.reduce((a, b) => a + b, 0);
+    const order = exact
+      .map((v, i) => ({ i: i, frac: v - Math.floor(v) }))
+      .sort((a, b) => b.frac - a.frac);
+    const out = floors.slice();
+    for (let k = 0; k < order.length && left > 0; k++) { out[order[k].i]++; left--; }
+    return out;
+  }
+
   /* ---------- deltas ---------- */
+
+  /* How a change reads. A percentage of a percentage is nonsense — Z2 going
+     from 61 to 33 is "28 points", not "51%" — and a percentage of a near-zero
+     baseline is worse: drift improving from +15 to 0 showed as "100%" when the
+     story is fifteen beats. Declared on the metric so no render site has to
+     choose, which is how the wrong default got applied in the first place. */
+  function deltaText(d, as) {
+    if (!d) return '';
+    const n = Math.abs(d.diff);
+    if (as === 'seconds') return Math.round(n) + 's';
+    if (as === 'bpm') return Math.round(n) + ' bpm';
+    if (as === 'points') return Math.round(n) + (Math.round(n) === 1 ? ' point' : ' points');
+    if (as === 'days') return (Math.round(n * 10) / 10) + (n === 1 ? ' day' : ' days');
+    if (as === 'km') return (Math.round(n * 100) / 100) + ' km';
+    return Math.abs(d.pct).toFixed(0) + '%';
+  }
+
+
 
   /* betterWhen: 'down' | 'up' | null. Null means direction is shown without a
      verdict — a shorter week may be a recovery week, and the app doesn't know. */
@@ -879,10 +951,15 @@
     const push = (o) => rows.push(o);
 
     {
-      const paces = mine.filter(a => a.avg_hr != null).map(a => aerobicPace(a, c)).filter(v => v != null);
+      /* Races excluded: aerobic pace claims to be what you would hold at
+         145 bpm, and a race is not that. Drift below deliberately keeps them —
+         how much you faded over a race is exactly when drift is worth
+         knowing. */
+      const paces = aerobicSamples(mine).filter(a => a.avg_hr != null)
+        .map(a => aerobicPace(a, c)).filter(v => v != null);
       const w = windowStats(paces);
       push({ n: count(paces), key: 'pace', label: 'Aerobic pace', unit: '/km', kind: 'pace',
-             window: 'last 3 runs',
+             window: 'last 3 runs', deltaAs: 'seconds',
              now: w.now, prev: w.prev, need: w.need, betterWhen: 'down',
              range: rangeOf(paces), band: paces.length >= 3 ? rangeOf(paces.slice(-3)) : null,
              bestLabel: 'best', worstLabel: '' });
@@ -890,7 +967,7 @@
       const drifts = mine.map(a => drift(a.laps)).filter(v => v != null);
       const dw = windowStats(drifts);
       push({ n: count(drifts), key: 'drift', label: 'Drift', unit: 'bpm', kind: 'bpm',
-             window: 'last 3 measured',
+             window: 'last 3 measured', deltaAs: 'bpm',
              now: dw.now, prev: dw.prev, need: dw.need, betterWhen: 'down',
              range: rangeOf(drifts), band: drifts.length >= 3 ? rangeOf(drifts.slice(-3)) : null,
              bestLabel: 'lowest', missingNote: 'needs runs of 4 km or more with lap HR' });
@@ -899,7 +976,7 @@
         .filter(x => x.z2pct != null).map(x => x.z2pct);
       const zw = windowStats(zs);
       push({ n: count(zs), key: 'z2', label: 'Time in Z2', unit: '%', kind: 'pct',
-             window: 'last 3 runs', neverBad: true,
+             window: 'last 3 runs', neverBad: true, deltaAs: 'points',
              now: zw.now, prev: zw.prev, need: zw.need, betterWhen: 'up',
              range: rangeOf(zs), band: zs.length >= 3 ? rangeOf(zs.slice(-3)) : null,
              bestLabel: 'most' });
@@ -914,7 +991,7 @@
         .map(x => x.value);
       const cw = windowStats(days);
       push({ n: count(days), key: 'days', label: 'Consistency', unit: 'days / week', kind: 'int',
-             window: 'last 3 weeks',
+             window: 'last 3 weeks', deltaAs: 'days',
              now: cw.now, prev: cw.prev, need: cw.need, betterWhen: 'up',
              range: rangeOf(days), band: null, bestLabel: 'most' });
 
@@ -1186,13 +1263,15 @@
     /* history up to the end of the period — never beyond it */
     const upTo = runs.filter(a => a.date <= end);
 
-    /* ---- the run the heroes describe: from the period, or nothing ---- */
-    const inPHr = inP.filter(a => a.avg_hr != null);
+    /* ---- the run the heroes describe: from the period, or nothing ----
+       A race is not an aerobic-pace measurement, so it never becomes the
+       exemplar. It stays in the list, the totals and the zone split. */
+    const inPHr = inP.filter(a => a.avg_hr != null && !isRace(a));
     const lastRun = inPHr.length ? inPHr[0] : (isCurrent ? null : null);
     const pace = lastRun ? aerobicPace(lastRun, c) : null;
 
     /* ---- what that run is measured against: all history, never the period ---- */
-    const hist = upTo.filter(a => a.avg_hr != null)
+    const hist = upTo.filter(a => a.avg_hr != null && !isRace(a))
       .sort((a, b) => b.date.localeCompare(a.date));
     let peers = [], band = null, prevRun = null;
     if (lastRun) {
@@ -1270,24 +1349,116 @@
       },
 
       trend: (function () {
-        const segs = paceSeries(upTo, c, scope === 'year' ? 0 : PACE_WINDOW);
+        const range = trendRange(scope, key, today, isCurrent);
+        const segs = paceSeries(runs, c, range.from, range.to);
         const prevSeg = segs.length > 1 ? segs[segs.length - 2] : null;
         return {
           segments: segs,
           mark: prevSeg && prevSeg.length >= 3
             ? Math.min.apply(null, prevSeg.map(p => p.value)) : null,
           shown: segs.shown, total: segs.total,
-          absent: segs.length ? null : 'needs two runs with heart rate'
+          from: range.from, to: range.to,
+          days: daysBetween(range.from, range.to),
+          absent: segs.length ? null : 'no runs with heart rate in this stretch'
         };
       })(),
 
       form: { rows: rows, label: isCurrent ? null : label },
+
+      races: inP.filter(isRace),
 
       ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
       gapBefore: emptyRunBefore(runs, scope, key),
       record: z2Record(runs, c, scope, key, 10),
       days: scope === 'week' ? weekDays(runs, c, key) : null
     };
+  }
+
+  /* ---------- what counts as a measurement of aerobic fitness ----------
+
+     Aerobic pace is "what you would hold at 145 bpm", and it only means that
+     for a run where you were trying to sit at an even aerobic effort. A
+     marathon at 156 bpm for five hours is a different thing entirely: it set
+     the 2024 headline, it sat in the trend, and it dragged the all-time best.
+
+     Races are kept everywhere else — distance, time, load, zone split, the
+     list — because they happened and they cost you something. They are only
+     excluded from the places that claim to measure aerobic pace. */
+
+  function isRace(a) { return !!a && a.session === 'race'; }
+
+  function aerobicSamples(acts) {
+    return (acts || []).filter(a => !isRace(a));
+  }
+
+  /* ---------- best efforts ----------
+
+     Strava computes these from a GPS stream. This has per-kilometre laps, so a
+     "best 5 km" is the fastest five CONSECUTIVE LAPS — marginally slower than
+     a true rolling window, which could start anywhere. That is a real
+     difference and the app says so rather than pretending to be the same
+     number.
+
+     Only full laps count: a 0.43 km final lap is not a kilometre, and a
+     partial would otherwise make every run look like a personal best. */
+
+  const EFFORT_DISTANCES = [1, 2, 3, 5, 10, 15, 21.1, 42.2];
+
+  /* Fastest run of `km` consecutive full laps, or null if the run is shorter.
+     Laps are rarely exactly 1 km, so distance is accumulated rather than
+     counted, and a window must cover at least the distance asked for. */
+  function bestEffort(laps, km) {
+    const full = fullLaps(laps);
+    if (!full.length) return null;
+    let best = null;
+    for (let i = 0; i < full.length; i++) {
+      let dist = 0, time = 0;
+      for (let j = i; j < full.length; j++) {
+        dist += full[j].distance_km;
+        time += full[j].time_s;
+        if (dist >= km) {
+          /* pace over the window, so a window that overshoots is not favoured */
+          const pace = time / dist;
+          if (best == null || pace < best.pace)
+            best = { pace: pace, seconds: Math.round(pace * km),
+                     from: full[i].n, to: full[j].n,
+                     overDistance: Math.round((dist - km) * 100) / 100 };
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  /* Every distance this run is long enough for. */
+  function effortsOf(act, distances) {
+    const out = [];
+    (distances || EFFORT_DISTANCES).forEach(km => {
+      const e = bestEffort(act && act.laps, km);
+      if (e) out.push(Object.assign({ km: km }, e));
+    });
+    return out;
+  }
+
+  /* The best each distance has ever been, and which run holds it. Races count
+     here — a best effort is a best effort, however it was come by. */
+  function bestEffortBoard(acts, distances) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    return (distances || EFFORT_DISTANCES).map(km => {
+      let best = null;
+      runs.forEach(a => {
+        const e = bestEffort(a.laps, km);
+        if (e && (best == null || e.pace < best.pace))
+          best = Object.assign({ km: km, run: a }, e);
+      });
+      return best;
+    }).filter(Boolean);
+  }
+
+  /* Which distances this run holds the record for, as of the whole history. */
+  function recordsSetBy(act, acts, distances) {
+    const board = bestEffortBoard(acts, distances);
+    return board.filter(b => b.run && b.run.id === act.id);
   }
 
   /* ---------- load ----------
@@ -1364,10 +1535,12 @@
     ACTIVITY_TYPES, homeModel, stat, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
-    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, records, delta, driftNeeds, driftIsFlat, DRIFT_FLAT,
+    refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, trendRange, TREND_MIN_DAYS, records, delta, deltaText, sharesOf, driftNeeds, driftIsFlat, DRIFT_FLAT,
     isUsable, damaged, whatsMissing, normalise, normaliseDate, toNumber,
     load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone,
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
+    isRace, aerobicSamples,
+    EFFORT_DISTANCES, bestEffort, effortsOf, bestEffortBoard, recordsSetBy,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

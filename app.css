@@ -640,3 +640,57 @@ label > span {
 /* the hero note belongs to the last run, not the period above it */
 .hnote em { font-style: normal; font-family: var(--f-data); font-size: var(--t-micro);
   letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin-right: 6px; }
+
+
+/* a hero with nothing in it is a dash, not a slab — at 40px an em-dash reads
+   as a loading bar */
+.hnum.pending {
+  font-size: var(--t-lead); color: var(--dim); opacity: .6;
+  line-height: 1.6;
+}
+
+.striplbl-note {
+  font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim);
+  margin-top: 4px; letter-spacing: .06em;
+}
+
+
+/* ---------- a ribbon longer than the screen ----------
+
+   The window now runs from your first run to now, so with a couple of years
+   backfilled there are more periods than fit. Rather than truncating — which
+   put ten months of 2024 beyond reach — the ribbon scrolls, and the bars keep
+   a width you can actually hit with a thumb. */
+
+.ribbonwrap {
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -ms-overflow-style: none;
+  margin: 0 -15px; padding: 0 15px;      /* bleed to the screen edges */
+  scroll-behavior: smooth;
+}
+.ribbonwrap::-webkit-scrollbar { display: none; }
+
+/* when there are more bars than fit, each gets a thumb-sized minimum */
+.ribbonwrap.scrolls .rp { flex: 0 0 22px; }
+.ribbonwrap.scrolls .rlbl div { flex: 0 0 22px; }
+
+/* the selected period is worth finding at a glance when scrolled */
+.rp.on .stackwrap { outline: 1px solid rgba(233,240,239,.5); outline-offset: 1px; }
+
+/* a race is marked where it is listed, and left out of aerobic pace */
+.racetag {
+  font-family: var(--f-data); font-style: normal; font-size: var(--t-micro);
+  letter-spacing: .14em; color: var(--z4);
+  border: 1px solid var(--z4); border-radius: 3px;
+  padding: 1px 4px; vertical-align: 2px; margin-right: 3px;
+}
+
+/* ---------- best efforts ---------- */
+
+.cmp.pb .v { color: var(--z2); }
+.pbtag {
+  font-family: var(--f-data); font-style: normal; font-size: var(--t-micro);
+  letter-spacing: .14em; color: var(--z2);
+  border: 1px solid var(--z2); border-radius: 3px;
+  padding: 1px 4px; vertical-align: 1px; margin-right: 4px;
+}

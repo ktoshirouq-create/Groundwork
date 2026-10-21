@@ -51,11 +51,28 @@
 
   /* The heart rates sit under the blocks they belong to. As a run-on list they
      drifted out of register with the strip and stopped meaning anything. */
+  /* A number needs room. At 43 laps a marathon gave each cell 7.9px against a
+     9px type size, so the heart rates ran together into one illegible string.
+     Past the point where every lap fits, label a regular sample instead and
+     say which — the full set is still on each block as a tooltip. */
   function stripLabelsHTML(a) {
     const laps = Calc.fullLaps(a.laps);
     if (!laps.length) return '';
-    return '<div class="striplbl">' + laps.map(l =>
-      '<span>' + (l.avg_hr == null ? '\u2014' : l.avg_hr) + '</span>').join('') + '</div>';
+
+    const MIN_PX = 22;                 /* room for three digits plus a gap */
+    const width = 340;                 /* the narrowest phone this targets */
+    const every = Math.max(1, Math.ceil(laps.length / Math.floor(width / MIN_PX)));
+
+    const cells = laps.map((l, i) =>
+      '<span>' + (every === 1 || i % every === 0
+        ? (l.avg_hr == null ? '\u2014' : l.avg_hr) : '') + '</span>').join('');
+
+    const note = every > 1
+      ? '<div class="striplbl-note">every ' + every +
+        (every === 2 ? 'nd' : every === 3 ? 'rd' : 'th') +
+        ' kilometre \u00b7 hold a block for the rest</div>'
+      : '';
+    return '<div class="striplbl">' + cells + '</div>' + note;
   }
 
   /* The bar decides for itself whether it has anything to show. Every caller
@@ -73,13 +90,16 @@
     if (!zoned) return '';
 
     const MIN_SHARE = 0.07;
-    const label = v => (v / zoned >= MIN_SHARE) ? Calc.fmtDuration(v) : '';
-    const parts = [1,2,3,4,5].filter(z => tz[z] > 0).map(z => {
-      const pct = Math.round(tz[z] / zoned * 100);
+    const zones = [1,2,3,4,5].filter(z => tz[z] > 0);
+    /* rounded together, so the segments always total 100 — rounded apart they
+       came to 95 and 101 on real data */
+    const pcts = Calc.sharesOf(zones.map(z => tz[z]), zoned);
+
+    const parts = zones.map((z, i) => {
       const wide = tz[z] / zoned >= MIN_SHARE;
       return '<div class="zseg' + (z === 2 ? ' z2' : '') + '" style="background:' + ZCOL[z] +
-        '; flex:' + tz[z] + '" title="' + Calc.fmtDuration(tz[z]) + ' \u00b7 ' + pct + '%">' +
-        (wide ? '<b>' + pct + '%</b><s>' + label(tz[z]) + '</s>' : '') + '</div>';
+        '; flex:' + tz[z] + '" title="' + Calc.fmtDuration(tz[z]) + ' \u00b7 ' + pcts[i] + '%">' +
+        (wide ? '<b>' + pcts[i] + '%</b><s>' + Calc.fmtDuration(tz[z]) + '</s>' : '') + '</div>';
     });
     return '<div class="zbar tall">' + parts.join('') + '</div>';
   }
@@ -160,7 +180,12 @@
         '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>'
       : '';
 
-    return '<div class="ribbon">' + cells + '</div><div class="rlbl">' + labels + '</div>' +
+    /* FITS is how many bars the narrowest phone shows without scrolling */
+    const FITS = 13;
+    const scrolls = bars.length > FITS ? ' scrolls' : '';
+    return '<div class="ribbonwrap' + scrolls + '" id="ribbonwrap">' +
+      '<div class="ribbon">' + cells + '</div>' +
+      '<div class="rlbl">' + labels + '</div></div>' +
       gapLine + recLine + rampLine;
   }
 
@@ -173,17 +198,33 @@
      better) so a rising line always means improvement. */
   /* Line chart over one or more segments. A training gap is drawn as a gutter
      inside a single plot — never a second panel with its own axis. */
+  /* A line chart placed in TIME.
+
+     Points used to be spaced by index with a minimum width per block, which
+     inverted the moment there were several small blocks: three single-run
+     blocks took 12% of the width each while a fourteen-run block took 5%, and
+     the gutters between them took 35%. The chart described how the data was
+     grouped rather than the running.
+
+     Now x is the date. A gap is blank because nothing happened then, which is
+     the honest picture and needs no gutter at all. */
   function lineChart(segments, opt) {
     opt = opt || {};
     const all = [].concat.apply([], segments).map(p => p.value).filter(v => v != null);
-    if (all.length < 2) return null;
+    if (all.length < 1) return null;
+
+    const dates = [].concat.apply([], segments).map(p => p.date).sort();
+    const t0 = new Date((opt.from || dates[0]) + 'T12:00:00').getTime();
+    const t1 = new Date((opt.to || dates[dates.length - 1]) + 'T12:00:00').getTime();
+    const spanMs = Math.max(1, t1 - t0);
+    const xOf = d => {
+      const t = new Date(d + 'T12:00:00').getTime();
+      return Math.max(0, Math.min(100, (t - t0) / spanMs * 100));
+    };
+
     let lo = opt.min != null ? opt.min : Math.min.apply(null, all);
     let hi = opt.max != null ? opt.max : Math.max.apply(null, all);
-    if (hi === lo) hi = lo + 1;
-    /* Both ends get padding; the good end gets more, so a best-ever value can't
-       sit on the dashed rule. Previously the extra was taken from the other
-       end, which pushed the worst point clean off the plot — on the resting-HR
-       chart that silently dropped the highest day and split the line in two. */
+    if (hi === lo) { lo -= 1; hi += 1; }
     const pad = (hi - lo) * 0.12;
     const extra = pad * 0.6;
     if (opt.invert) { lo -= pad + extra; hi += pad; }
@@ -193,42 +234,9 @@
       return opt.invert ? t * 100 : 100 - t * 100;
     };
 
-    const counts = segments.map(s => s.length);
-    const totalPts = counts.reduce((a, b) => a + b, 0);
-    const breaks = segments.length - 1;
-    const breakW = 7;
-    const usable = 100 - breakW * breaks;
-    /* Width is proportional to how many runs a block holds — a two-run block
-       must not occupy the same width as a fourteen-run one. The floor only
-       exists so a single-point segment doesn't vanish. */
-    const MINW = segments.length > 1 ? 12 : 0;
-    let raw = counts.map(n => n / totalPts * usable);
-    if (MINW) {
-      const short = raw.map(w => Math.max(0, MINW - w));
-      const owed = short.reduce((a, b) => a + b, 0);
-      const spare = raw.reduce((a, w, i) => a + Math.max(0, w - MINW), 0);
-      raw = raw.map((w, i) => w < MINW ? MINW : w - (spare ? (w - MINW) / spare * owed : 0));
-    }
-    let x = 0;
-    const paths = [], gutters = [];
-    segments.forEach((seg, si) => {
-      const w = raw[si];
-      const step = seg.length > 1 ? w / (seg.length - 1) : 0;
-      const pts = seg.map((p, i) => (x + i * step).toFixed(2) + ',' + yOf(p.value).toFixed(2));
-      paths.push({ points: pts.join(' '), last: si === segments.length - 1,
-                   single: seg.length === 1,
-                   cx: x + (seg.length - 1) * step, cy: yOf(seg[seg.length - 1].value) });
-      x += w;
-      if (si < segments.length - 1) { gutters.push([x, x + breakW]); x += breakW; }
-    });
-
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
 
-    /* A filled band has a hard top and bottom edge, and any full-height divider
-       crossing it turns one plot into two boxes. Rendered side by side, every
-       filled variant boxed and every line variant did not — so the previous
-       block's best is a single dashed rule instead. */
     if (opt.mark != null) {
       const my = yOf(opt.mark).toFixed(2);
       svg += '<line x1="0" y1="' + my + '" x2="100" y2="' + my + '" stroke="var(--z2)" ' +
@@ -238,46 +246,29 @@
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
 
-    /* small ticks under the plot, marking days you trained */
-    if (opt.ticksBelow && opt.ticksBelow.length) {
-      opt.ticksBelow.forEach(px => {
-        svg += '<line x1="' + px.toFixed(2) + '" y1="94" x2="' + px.toFixed(2) +
-          '" y2="100" stroke="var(--z3)" stroke-width="1.4" vector-effect="non-scaling-stroke"/>';
-      });
-    }
+    const last = segments.length - 1;
+    segments.forEach((seg, si) => {
+      const col = si === last ? 'var(--z2)' : 'var(--mute)';
+      const w = si === last ? 2.2 : 1.6;
+      const pts = seg.map(p => xOf(p.date).toFixed(2) + ',' + yOf(p.value).toFixed(2));
 
-    /* Ticks at the edges, never a full-height rule. A line spanning the plot
-       divides it however it's styled. */
-    gutters.forEach(g => {
-      const mid = ((g[0] + g[1]) / 2).toFixed(2);
-      svg += '<line x1="' + mid + '" y1="0" x2="' + mid + '" y2="8" stroke="#55686D" ' +
-        'stroke-width=".7" vector-effect="non-scaling-stroke"/>' +
-        '<line x1="' + mid + '" y1="92" x2="' + mid + '" y2="100" stroke="#55686D" ' +
-        'stroke-width=".7" vector-effect="non-scaling-stroke"/>';
-    });
-
-    paths.forEach((p, i) => {
-      const col = p.last ? 'var(--z2)' : 'var(--mute)';
-      if (!p.single) {
-        svg += '<polyline class="draw" fill="none" stroke="' + col +
-          '" stroke-width="' + (p.last ? 2.2 : 1.6) +
-          '" vector-effect="non-scaling-stroke" points="' + p.points + '"/>';
+      if (seg.length > 1) {
+        svg += '<polyline class="draw" fill="none" stroke="' + col + '" stroke-width="' + w +
+          '" vector-effect="non-scaling-stroke" points="' + pts.join(' ') + '"/>';
       } else {
-        /* One run in a block has no line to draw. A bare endpoint dot read as
-           a stray mark floating off the trend, so give it a short rule to sit
-           on and make it clear it is a block of its own. */
-        const x0 = Math.max(0, p.cx - 5), x1 = Math.min(100, p.cx + 5);
-        svg += '<line x1="' + x0.toFixed(2) + '" y1="' + p.cy.toFixed(2) +
-          '" x2="' + x1.toFixed(2) + '" y2="' + p.cy.toFixed(2) + '" stroke="' + col +
-          '" stroke-width="' + (p.last ? 2.2 : 1.6) + '" vector-effect="non-scaling-stroke"/>';
+        /* a block of one has no line, so it is drawn as a point you can see */
+        const x = xOf(seg[0].date), y = yOf(seg[0].value);
+        svg += '<circle cx="' + x.toFixed(2) + '" cy="' + y.toFixed(2) +
+          '" r="1.8" fill="' + col + '"/>';
       }
-      if (p.last) svg += '<circle class="tip" cx="' + p.cx.toFixed(2) + '" cy="' +
-        p.cy.toFixed(2) + '" r="2.4" fill="var(--z2)"/>';
+      if (si === last) {
+        const p = seg[seg.length - 1];
+        svg += '<circle class="tip" cx="' + xOf(p.date).toFixed(2) + '" cy="' +
+          yOf(p.value).toFixed(2) + '" r="2.4" fill="var(--z2)"/>';
+      }
     });
     svg += '</svg>';
 
-    /* axis labels sit outside the plot, in their own column */
-    /* label the values you actually ran, not the padded frame */
     const fmt = opt.format || (v => Math.round(v));
     const best = Math.min.apply(null, all), worst = Math.max.apply(null, all);
     const anchors = opt.invert ? [best, worst] : [worst, best];
@@ -292,12 +283,15 @@
       (opt.legend ? '<div class="legend">' + opt.legend + '</div>' : '') + '</div>';
   }
 
-  function deltaHTML(d, fmt) {
+
+  /* `as` comes from the metric, never from the call site. Leaving the choice
+     to each renderer meant percentage was the default, so drift improving by
+     fifteen beats read as "100%". */
+  function deltaHTML(d, as) {
     if (!d || d.dir === 'flat') return '';
     const arrow = d.dir === 'up' ? '\u25b2' : '\u25bc';
     const cls = d.tone === 'good' ? 'good' : d.tone === 'bad' ? 'bad' : 'neutral';
-    const text = fmt ? fmt(d) : (Math.abs(d.pct).toFixed(0) + '%');
-    return '<span class="delta ' + cls + '">' + arrow + ' ' + text + '</span>';
+    return '<span class="delta ' + cls + '">' + arrow + ' ' + Calc.deltaText(d, as) + '</span>';
   }
 
   function recordsHTML() {
@@ -503,8 +497,7 @@
       h += '<div class="rd">';
       h += '<div class="rd-top"><div class="rd-name">' + esc(r.label) + '</div><div class="rd-val">' +
         fmtRead(r.now, r.kind) + (r.unit ? '<s>' + esc(unitFor(r)) + '</s>' : '') +
-        (d ? ' ' + deltaHTML(d, r.kind === 'pace' ? (x => Math.abs(Math.round(x.diff)) + 's')
-             : r.kind === 'sleep' ? (x => Math.abs(Math.round(x.diff / 60)) + 'm') : null) : '') +
+        (d ? ' ' + deltaHTML(d, r.deltaAs) : '') +
         '</div></div>';
       h += '<div class="track' + (r.need ? ' off' : '') + '"><div class="line"></div>' +
         (bandFrom != null && bandTo != null && Math.abs(bandTo - bandFrom) > 0.5
@@ -652,8 +645,7 @@
       value: H.pace.present ? Calc.fmtPace(H.pace.value) : null,
       unit: H.pace.unit,
       foot: 'at ' + Calc.refHr(cfg) + ' bpm' + (H.band
-        ? ' ' + deltaHTML(Calc.delta(H.pace.value, H.band.median, 'down'),
-            x => Math.abs(Math.round(x.diff)) + 's') : ''),
+        ? ' ' + deltaHTML(Calc.delta(H.pace.value, H.band.median, 'down'), 'seconds') : ''),
       needs: H.pace.absent
     });
     h += heroHTML({
@@ -693,24 +685,24 @@
     /* the trend */
     if (!m.trend.absent) {
       const segs = m.trend.segments;
-      const flat = [].concat.apply([], segs);
-      const first = flat[0].date, lastD = flat[flat.length - 1].date;
       h += lineChart(segs, {
         invert: true, mark: m.trend.mark, height: 150,
+        from: m.trend.from, to: m.trend.to,
         format: v => Calc.fmtPace(v),
         anchorLabels: ['best', 'slowest'],
-        label: 'Aerobic pace across ' + flat.length + ' runs. Faster is higher.',
-        xax: [fmtDate(first).toUpperCase(), segs.length > 1 ? 'break' : '',
-              fmtDate(lastD).toUpperCase()],
+        label: 'Aerobic pace across ' + m.trend.shown + ' runs over ' + m.trend.days + ' days. Faster is higher.',
+        xax: [fmtDate(m.trend.from).toUpperCase(), '', fmtDate(m.trend.to).toUpperCase()],
         legend: '<span><i class="sw now"></i>this block</span>' +
-                (segs.length > 1 ? '<span><i class="sw prev"></i>before the break</span>' : '')
+                (segs.length > 1 ? '<span><i class="sw prev"></i>earlier blocks</span>' : '')
       });
-      const hidden = m.trend.total - m.trend.shown;
-      h += '<div class="est">Faster is higher' +
+      const raced = m.races.length;
+      h += '<div class="est">Faster is higher, spaced by date \u2014 a gap is time off' +
+        (raced ? '. ' + raced + ' race' + (raced === 1 ? '' : 's') +
+          ' left out, a race is not a measurement of aerobic pace' : '') +
         (m.trend.mark != null ? '. Dashed rule is your previous best, ' +
           Calc.fmtPace(m.trend.mark) : '') +
-        (hidden > 0 ? '. Last ' + m.trend.shown + ' runs \u2014 switch to Year for all ' +
-          m.trend.total : '') + '.</div>';
+        '. ' + m.trend.shown + ' run' + (m.trend.shown === 1 ? '' : 's') +
+        ' over ' + m.trend.days + ' days.</div>';
     }
 
     /* time in zone */
@@ -774,7 +766,8 @@
 
     return '<div class="rrow" data-id="' + esc(a.id) + '">' +
       '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) + '</div>' +
-      '<div class="rnm" style="font-size:' + size + 'px">' + esc(a.name) +
+      '<div class="rnm" style="font-size:' + size + 'px">' +
+      (Calc.isRace(a) ? '<i class="racetag">RACE</i> ' : '') + esc(a.name) +
       ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
       '<div class="rfig">' + (c ? c.value : '\u2014') + '</div></div>' +
       stripHTML(a, bounds) +
@@ -812,11 +805,40 @@
       lo.toFixed(1) + '\u2013' + hi.toFixed(1) + ' km</span></div>';
     h += '<div class="cmp"><span class="k">' + ordinal(rank) + ' of ' + all.length +
       '</span><span class="v">' + Calc.fmtPace(mine) +
-      (d ? ' ' + deltaHTML(d, x => Math.abs(Math.round(x.diff)) + 's') : '') + '</span></div>';
+      (d ? ' ' + deltaHTML(d, 'seconds') : '') + '</span></div>';
     h += '<div class="cmp"><span class="k">Median of the rest</span><span class="v">' +
       Calc.fmtPace(med) + '</span></div>';
     if (all[0].act.id !== a.id) h += '<div class="cmp"><span class="k">Best at this length</span>' +
       '<span class="v">' + Calc.fmtPace(all[0].pace) + '<s>' + fmtDate(all[0].act.date) + '</s></span></div>';
+    return h;
+  }
+
+
+
+  /* ---------------------------------------------------------- best efforts */
+
+  function effortsHTML(a) {
+    const efforts = Calc.effortsOf(a);
+    if (!efforts.length) return '';
+    const held = Calc.recordsSetBy(a, Store.all());
+    const heldKm = {};
+    held.forEach(b => { heldKm[b.km] = true; });
+
+    let h = '<div class="sec"><span>Best efforts</span><span>' +
+      (held.length ? held.length + ' all-time best' + (held.length === 1 ? '' : 's') : 'in this run') +
+      '</span></div>';
+
+    h += efforts.map(e =>
+      '<div class="cmp' + (heldKm[e.km] ? ' pb' : '') + '">' +
+      '<span class="k">' + (heldKm[e.km] ? '<i class="pbtag">PB</i> ' : '') +
+      e.km + ' km</span>' +
+      '<span class="v">' + Calc.fmtDuration(e.seconds) +
+      '<s>' + Calc.fmtPace(e.pace) + '/km \u00b7 km ' + e.from +
+      (e.to !== e.from ? '\u2013' + e.to : '') + '</s></span></div>').join('');
+
+    h += '<div class="est">The fastest run of consecutive kilometres in this run. ' +
+      'Laps, not a rolling window \u2014 a true best could start mid-kilometre and ' +
+      'would be a little quicker.</div>';
     return h;
   }
 
@@ -876,6 +898,7 @@
         ' run, run like one \u2014 <b>' + intent.pct + '% in Z2</b>.</div>';
 
     h += bandHTML(a);
+    h += effortsHTML(a);
 
     h += '<div class="rule"></div><div class="grid2">';
     const ap = Calc.aerobicPace(a, cfg);
@@ -992,7 +1015,13 @@
     h += '</div>';
 
     const errors = flags.filter(f => f.level === 'error');
-    if (!errors.length) h += '<div class="flag ok"><i>\u2713</i><div>Nothing inconsistent found.</div></div>';
+    /* The tick means "nothing to look at". It used to appear whenever there
+       were no errors, so it sat directly above three warnings saying the laps
+       did not add up. */
+    const noteworthy = flags.filter(f => f.level === 'error' || f.level === 'warn');
+    if (!noteworthy.length) h += '<div class="flag ok"><i>\u2713</i><div>Nothing inconsistent found.</div></div>';
+    else if (!errors.length) h += '<div class="flag ok"><i>\u2713</i><div>Nothing blocking \u2014 ' +
+      noteworthy.length + ' thing' + (noteworthy.length === 1 ? '' : 's') + ' worth a look.</div></div>';
     flags.forEach(f => {
       const cls = f.level === 'error' ? 'error' : f.level === 'info' ? 'info' : '';
       const mark = f.level === 'error' ? '\u2715' : f.level === 'info' ? 'i' : '!';
@@ -1346,11 +1375,15 @@
     if (a.elapsed_s == null || a.elapsed_s <= 0) add('error', 'A time is required.');
     if (a.moving_s != null && a.elapsed_s != null && a.moving_s > a.elapsed_s)
       add('error', 'Moving time is longer than elapsed time.');
-    if (a.avg_hr != null && (a.avg_hr < 30 || a.avg_hr > 220)) add('error', 'Avg HR is out of range.');
-    if (a.resting_hr != null && (a.resting_hr < 25 || a.resting_hr > 120)) add('error', 'Resting HR is out of range.');
+    /* the same bounds the parser uses, so a value accepted by a paste can
+       never be refused by an edit */
+    ['avg_hr', 'resting_hr', 'cadence_spm', 'ascent_m', 'temp_c', 'rpe'].forEach(k => {
+      const r = Parse.checkBounds(k, a[k]);
+      if (r) add(r.level, r.msg);
+    });
     (a.laps || []).forEach(l => {
-      if (l.avg_hr != null && (l.avg_hr < 30 || l.avg_hr > 220))
-        add('error', 'Lap ' + l.n + ' heart rate is out of range.');
+      const r = Parse.checkBounds('avg_hr', l.avg_hr);
+      if (r && r.level === 'error') add('error', 'Lap ' + l.n + ': ' + r.msg);
     });
     if ((a.laps || []).length) {
       const ld = a.laps.reduce((t, l) => t + l.distance_km, 0);
@@ -1430,6 +1463,14 @@
     document.querySelectorAll('#view-home [data-scope]').forEach(b => {
       b.onclick = () => { scope = b.dataset.scope; periodKey = null; render('home'); };
     });
+    /* a selection off-screen in a scrolled ribbon is a selection you cannot see */
+    const wrap = el('ribbonwrap');
+    if (wrap && wrap.classList.contains('scrolls')) {
+      const on = wrap.querySelector('.rp.on');
+      if (on) wrap.scrollLeft = Math.max(0,
+        on.offsetLeft - wrap.clientWidth / 2 + on.offsetWidth / 2);
+    }
+
     document.querySelectorAll('#view-home [data-period]').forEach(b => {
       b.onclick = () => { periodKey = b.dataset.period; render('home'); };
     });

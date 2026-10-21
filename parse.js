@@ -200,15 +200,60 @@
 
   function inferType() { return 'run'; }
 
-  const RANGES = {
-    avg_hr: [30, 220],
-    resting_hr: [25, 120],
-    cadence_spm: [100, 220],
-    distance_km: [0.1, 100],
-    ascent_m: [0, 5000],
-    temp_c: [-40, 50],
+  /* Two kinds of bound, and they do different jobs.
+
+     POSSIBLE is what physics and the format allow. Outside it, the reading is
+     wrong and the record is refused.
+
+     PLAUSIBLE is what a normal run looks like. Outside it, the reading is
+     merely unusual, and the app says so and saves anyway — because you were
+     there and it was not. A cadence of 89 spm on an 8 km climb with 414 m of
+     ascent at 12:48/km is a real cadence; refusing it made a genuine run
+     impossible to enter, with no override. */
+
+  const POSSIBLE = {
+    avg_hr: [20, 250],
+    resting_hr: [20, 150],
+    cadence_spm: [20, 260],
+    distance_km: [0.05, 500],
+    ascent_m: [0, 20000],
+    temp_c: [-60, 60],
     rpe: [1, 10]
   };
+
+  const PLAUSIBLE = {
+    avg_hr: [80, 210],
+    resting_hr: [30, 110],
+    cadence_spm: [140, 220],
+    distance_km: [0.3, 100],
+    ascent_m: [0, 5000],
+    temp_c: [-30, 45]
+  };
+
+  /* kept for the zero rule, which asks whether zero is possible at all */
+  const RANGES = POSSIBLE;
+
+  const LABEL = {
+    avg_hr: 'An average heart rate', resting_hr: 'A resting heart rate',
+    cadence_spm: 'A cadence', distance_km: 'A distance',
+    ascent_m: 'An ascent', temp_c: 'A temperature', rpe: 'An RPE'
+  };
+
+  /* The one place a value is judged against its bounds. The edit screen used
+     to carry its own copy with different numbers — 30-220 for heart rate where
+     the parser said 20-250 — so the same value could be accepted by a paste
+     and refused by an edit. */
+  function checkBounds(key, value) {
+    if (value == null) return null;
+    const poss = POSSIBLE[key];
+    if (poss && (value < poss[0] || value > poss[1]))
+      return { level: 'error', msg: LABEL[key] + ' of ' + value + ' is impossible \u2014 expected ' +
+        poss[0] + '\u2013' + poss[1] + '.' };
+    const plaus = PLAUSIBLE[key];
+    if (plaus && (value < plaus[0] || value > plaus[1]))
+      return { level: 'warn', msg: LABEL[key] + ' of ' + value + ' is unusual, but it is kept as given.' };
+    return null;
+  }
 
   function validate(p, opts) {
     opts = opts || {};
@@ -216,18 +261,17 @@
     const f = p.fields, flags = [];
     const add = (level, msg) => flags.push({ level: level, msg: msg });
 
+    Object.keys(POSSIBLE).forEach(k => {
+      const r = checkBounds(k, f[k]);
+      if (r) add(r.level, r.msg);
+    });
+
     if (f.date == null) add('error', 'No date found.');
     else if (f.date > today) add('error', 'Date is in the future.');
     else if (f.date < '2015-01-01') add('error', 'Date is before 2015.');
 
     if (f.distance_km == null) add('error', 'No distance found.');
     if (f.elapsed_s == null) add('error', 'No time found.');
-
-    Object.keys(RANGES).forEach(k => {
-      if (f[k] == null) return;
-      const [lo, hi] = RANGES[k];
-      if (f[k] < lo || f[k] > hi) add('error', k + ' is ' + f[k] + ', outside ' + lo + '–' + hi + '.');
-    });
 
     if (f.moving_s != null && f.elapsed_s != null && f.moving_s > f.elapsed_s)
       add('error', 'Moving time is longer than elapsed time.');
@@ -395,10 +439,9 @@
         add('warn', 'Laps total ' + Math.round(lt) + 's against ' + merged.elapsed_s + 's on the record.');
     }
 
-    Object.keys(RANGES).forEach(k => {
-      if (merged[k] == null) return;
-      const [lo, hi] = RANGES[k];
-      if (merged[k] < lo || merged[k] > hi) add('error', k + ' would become ' + merged[k] + '.');
+    Object.keys(POSSIBLE).forEach(k => {
+      const r = checkBounds(k, merged[k]);
+      if (r) add(r.level, r.msg);
     });
 
     p.warnings.forEach(w => add('warn', w));
@@ -408,6 +451,7 @@
 
 
   const api = { parse, validate, inferType, toActivity, mergeInto, validateMerge, TYPED,
+                POSSIBLE, PLAUSIBLE, checkBounds, LABEL,
                 impossibleZero, dropImpossibleZeros,
                 _duration: duration, _sleep: sleepDuration, _date: date };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
