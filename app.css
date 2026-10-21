@@ -718,3 +718,16 @@ label > span {
   color: var(--ink); margin-left: 5px;
 }
 .zkey .key-z2 b { color: var(--z2); }
+
+/* ---------- review: a closed period read as a summary ---------- */
+
+.rvrace { padding: 6px 0 10px; cursor: pointer; }
+.rvname { font-size: var(--t-strong); font-weight: 500; }
+.rvname span { color: var(--mute); font-weight: 400; font-size: var(--t-label); }
+.rvrace .strip { margin-left: 0; height: 10px; }
+.cmp[data-id] { cursor: pointer; }
+.mbars .col:not(.rest) .v { background: var(--mute); }
+.mbars .col .v.top { background: var(--ink); }
+.mix { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 0 2px;
+       font-size: var(--t-body); color: var(--mute); }
+.mix b { color: var(--ink); font-family: var(--f-data); font-weight: 500; }

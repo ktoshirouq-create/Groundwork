@@ -138,8 +138,8 @@
       (caption ? '<div class="g-c">' + esc(caption) + '</div>' : '') + '</div>';
   }
 
-  function cmp(k, v, aside) {
-    return '<div class="cmp"><span class="k">' + esc(k) + '</span><span class="v">' + v +
+  function cmp(k, v, aside, id) {
+    return '<div class="cmp"' + (id ? ' data-id="' + esc(id) + '"' : '') + '><span class="k">' + esc(k) + '</span><span class="v">' + v +
       (aside ? '<s>' + esc(aside) + '</s>' : '') + '</span></div>';
   }
 
@@ -192,7 +192,8 @@
       ? '<div class="z2rec"><b>' + rec.cleared + ' of your last ' + rec.of + '</b> ' +
         unit + ' cleared ' + rec.target + '% in Z2.</div>' : '';
 
-    const ramp = Calc.rampFlag(bars.filter(b => b.value > 0));
+    /* a load jump is a training warning; a finished period has nothing to warn */
+    const ramp = m.mode === 'live' ? Calc.rampFlag(bars.filter(b => b.value > 0)) : null;
     const rampLine = ramp
       ? '<div class="callout warn">Load went <b>' + ramp.from + ' \u2192 ' + ramp.to +
         '</b>, up ' + Math.round(ramp.change * 100) + '%. Worth knowing, not necessarily wrong.</div>'
@@ -267,8 +268,10 @@
 
     const last = segments.length - 1;
     segments.forEach((seg, si) => {
-      const col = si === last ? 'var(--z2)' : 'var(--mute)';
-      const w = si === last ? 2.2 : 1.6;
+      /* in a review no block is "this block" — the whole period is the subject */
+      const lead = opt.uniform || si === last;
+      const col = lead ? 'var(--z2)' : 'var(--mute)';
+      const w = lead ? 2.2 : 1.6;
       const pts = seg.map(p => xOf(p.date).toFixed(2) + ',' + yOf(p.value).toFixed(2));
 
       if (seg.length > 1) {
@@ -608,7 +611,7 @@
     h += ribbonHTML(m, bounds);
     if (m.days) h += weekStripHTML(m);
     h += '<div class="rule"></div>';
-    h += runHero(m, bounds, cfg);
+    h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
 
     h += '<div class="sec"><span>' +
       (m.period.isCurrent ? 'This ' + scope : esc(m.period.label)) + '</span><span>' +
@@ -623,7 +626,7 @@
         esc(Calc.periodLabel(nextK, scope, today())) + '.';
       h += '<div class="empty-state">Nothing here.' + line + '</div>';
     } else {
-      h += m.runs.map(a => runRow(a, bounds)).join('');
+      h += m.runs.map(a => runRow(a, bounds, scope === 'year')).join('');
     }
 
     el('view-home').innerHTML = h;
@@ -731,26 +734,7 @@
           : '') + '.</div>';
     }
 
-    /* time in zone */
-    const Z = m.zones;
-    if (!Z.absent) {
-      h += '<div class="sec"><span>Time in zone</span><span>' +
-        Calc.fmtDuration(Z.elapsed) + '</span></div>';
-      h += zoneBarHTML(Z.tz) + zoneKeyHTML(bounds, Z.tz);
-      const missing = Z.elapsed - Z.zoned;
-      h += '<div class="est"><b class="z2mark">' + Z.share.pct + '% in Z2 ' + esc(Z.window) +
-        '</b>' +
-        (Z.typical != null && Math.abs(Z.share.pct - Z.typical) >= 4
-          ? ' \u2014 your recent typical is ' + Z.typical + '%'
-          : Z.typical != null ? ' \u2014 about your usual' : '') +
-        (missing > 30 ? '. From ' + Calc.fmtDuration(Z.zoned) + ' of ' +
-          Calc.fmtDuration(Z.elapsed) + ' with lap heart rate' : '') + '.</div>';
-    } else if (Z.elapsed) {
-      h += '<div class="sec"><span>Time in zone</span><span>' +
-        Calc.fmtDuration(Z.elapsed) + '</span></div>';
-      h += '<div class="est">None of these runs carried lap heart rate, so there is ' +
-        'no zone split for ' + esc(Z.window) + '.</div>';
-    }
+    h += zonesHTML(m.zones, bounds);
 
     /* totals */
     const s = m.summary, P = m.previous;
@@ -771,7 +755,168 @@
   }
 
 
-  function runRow(a, bounds) {
+  /* Time in zone, once, for both screens. The live one compares against your
+     recent typical; a review has no "recent" and passes none. */
+  function zonesHTML(Z, bounds) {
+    let h = '';
+    if (!Z.absent) {
+      h += '<div class="sec"><span>Time in zone</span><span>' +
+        Calc.fmtDuration(Z.elapsed) + '</span></div>';
+      h += zoneBarHTML(Z.tz) + zoneKeyHTML(bounds, Z.tz);
+      const missing = Z.elapsed - Z.zoned;
+      h += '<div class="est"><b class="z2mark">' + Z.share.pct + '% in Z2 ' + esc(Z.window) +
+        '</b>' +
+        (Z.typical != null && Math.abs(Z.share.pct - Z.typical) >= 4
+          ? ' \u2014 your recent typical is ' + Z.typical + '%'
+          : Z.typical != null ? ' \u2014 about your usual' : '') +
+        (missing > 30 ? '. From ' + Calc.fmtDuration(Z.zoned) + ' of ' +
+          Calc.fmtDuration(Z.elapsed) + ' with lap heart rate' : '') + '.</div>';
+    } else if (Z.elapsed) {
+      h += '<div class="sec"><span>Time in zone</span><span>' +
+        Calc.fmtDuration(Z.elapsed) + '</span></div>';
+      h += '<div class="est">None of these runs carried lap heart rate, so there is ' +
+        'no zone split for ' + esc(Z.window) + '.</div>';
+    }
+    return h;
+  }
+
+  /* ------------------------------------------------------------- review ---
+
+     A closed period, read as a summary. Pure presentation like runHero: every
+     value arrives in the model, already scoped to the period and already
+     marked present or absent. Nothing here can reach today, because a
+     finished year should read the same whenever you look at it. */
+
+  const EFFORT_NAME = { 21.1: 'Half', 42.2: 'Marathon' };
+  const MONTH = ['January','February','March','April','May','June',
+                 'July','August','September','October','November','December'];
+  const effortName = km => EFFORT_NAME[km] || km + ' km';
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+
+  function raceHTML(R, bounds) {
+    const a = R.run;
+    let h = '<div class="rvrace" data-id="' + esc(a.id) + '">' +
+      '<div class="rvname"><i class="racetag">RACE</i> ' + esc(a.name) +
+      ' <span>\u00b7 ' + fmtDate(a.date) + ' \u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +
+      stripHTML(a, bounds) + '</div>';
+
+    h += cmp('Time', Calc.fmtDuration(a.elapsed_s),
+      Calc.fmtPace(R.pace) + '/km' + (R.gap != null ? ' \u00b7 ' + Calc.fmtPace(R.gap) + ' GAP' : ''));
+    if (a.avg_hr != null) h += cmp('Heart rate', a.avg_hr + ' bpm',
+      R.drift == null ? '' : Calc.driftIsFlat(R.drift) ? 'drift flat'
+        : 'drift ' + (R.drift > 0 ? '+' : '') + R.drift);
+    if (R.halves) {
+      const H = R.halves;
+      h += cmp('Halves', Calc.fmtPace(H.first) + ' \u2192 ' + Calc.fmtPace(H.second),
+        H.shape === 'even' ? 'even' : H.shape === 'positive'
+          ? Math.abs(H.fade) + ' s/km slower second half'
+          : Math.abs(H.fade) + ' s/km faster second half');
+    }
+    const B = R.build;
+    h += cmp(B.days / 7 + ' weeks before', B.count
+      ? plural(B.count, 'run') + ' \u00b7 ' + B.distance_km.toFixed(1) + ' km' : 'nothing logged',
+      B.count ? 'longest ' + B.longest.distance_km.toFixed(1) + ' km, ' +
+        (B.longestWeeksOut <= 1 ? 'race week' : B.longestWeeksOut + ' weeks out') : '');
+    return h;
+  }
+
+  function monthsHTML(M) {
+    if (!M || M.absent) return '';
+    const max = Math.max.apply(null, M.list.map(m => m.distance_km).concat([1]));
+    let h = '<div class="sec"><span>Month by month</span><span>km logged</span></div>';
+    h += '<div class="wsb mbars">' + M.list.map(m => {
+      if (!m.count) return '<div class="col rest" title="nothing logged"><div class="v"></div></div>';
+      const top = M.top && m.key === M.top.key;
+      return '<div class="col" title="' + m.distance_km.toFixed(1) + ' km \u00b7 ' +
+        plural(m.count, 'run') + '"><div class="v' + (top ? ' top' : '') + '" style="height:' +
+        Math.max(8, Math.round(m.distance_km / max * 100)) + '%"></div></div>';
+    }).join('') + '</div>';
+    h += '<div class="wslbl">' + M.list.map(m => '<div>' + MON[+m.key.slice(5) - 1][0] + '</div>').join('') + '</div>';
+    const T = M.top;
+    h += '<div class="est">Most logged: <b>' + MONTH[+T.key.slice(5) - 1] + '</b>, ' +
+      T.distance_km.toFixed(1) + ' km over ' + plural(T.count, 'run') +
+      '. An empty month means nothing logged, not necessarily time off.</div>';
+    return h;
+  }
+
+  function bestsHTML(B, word) {
+    if (!B) return '';
+    const when = a => fmtDate(a.date) + (Calc.isRace(a) ? ' \u00b7 race' : '');
+    let h = '<div class="sec"><span>Bests</span><span>' + esc(word) + '</span></div>';
+    h += cmp('Longest run', B.longest.distance_km.toFixed(2) + ' km', when(B.longest), B.longest.id);
+    if (B.longestTraining) h += cmp('Longest outside a race',
+      B.longestTraining.distance_km.toFixed(2) + ' km', fmtDate(B.longestTraining.date),
+      B.longestTraining.id);
+    B.efforts.forEach(e => {
+      h += '<div class="cmp' + (e.pb ? ' pb' : '') + '" data-id="' + esc(e.run.id) + '"><span class="k">' +
+        (e.pb ? '<i class="pbtag">PB</i> ' : '') + esc(effortName(e.km)) + '</span>' +
+        '<span class="v">' + Calc.fmtDuration(e.seconds) + '<s>' + Calc.fmtPace(e.pace) +
+        '/km \u00b7 ' + esc(when(e.run)) + '</s></span></div>';
+    });
+    if (B.aerobic) h += cmp('Best aerobic pace', Calc.fmtPace(B.aerobic.pace) + '/km',
+      fmtDate(B.aerobic.run.date), B.aerobic.run.id);
+    if (B.efforts.length) h += '<div class="est">Efforts are the fastest consecutive ' +
+      'kilometres from laps. PB marks one that still stands as your all-time best.</div>';
+    return h;
+  }
+
+  function reviewHTML(m, bounds) {
+    if (!m.count) return '';
+    const s = m.summary, P = m.previous;
+    let h = '';
+
+    /* races first: in a finished year they are the headline */
+    if (m.races.length) {
+      h += '<div class="sec"><span>' + (m.races.length === 1 ? 'Race' : 'Races') +
+        '</span><span>' + (m.races.length > 1 ? m.races.length : '') + '</span></div>';
+      h += m.races.map(R => raceHTML(R, bounds)).join('');
+    }
+
+    /* the period beside the one before: two numbers, never an arrow */
+    const had = P && P.summary.count;
+    h += '<div class="sec"><span>Logged</span><span>' +
+      (had ? 'beside ' + esc(P.label) : '') + '</span></div>';
+    h += '<div class="totals">';
+    h += cmp('Runs', String(s.count), had ? P.label + ' ' + P.summary.count : '');
+    h += cmp('Distance', s.distance_km.toFixed(2) + ' km',
+      had ? P.label + ' ' + P.summary.distance_km.toFixed(2) : '');
+    h += cmp('Time', Calc.fmtDuration(s.elapsed_s),
+      had ? P.label + ' ' + Calc.fmtDuration(P.summary.elapsed_s) : '');
+    if (s.ascent_m != null) h += cmp('Ascent', Math.round(s.ascent_m) + ' m',
+      had && P.summary.ascent_m != null ? P.label + ' ' + Math.round(P.summary.ascent_m) : '');
+    h += '<div class="est">' + (had
+      ? 'Side by side rather than as a change \u2014 either total may still be missing runs.'
+      : P ? 'Nothing logged in ' + esc(P.label) + '.' : '') + '</div>';
+    h += '</div>';
+
+    h += monthsHTML(m.months);
+    h += bestsHTML(m.bests, m.period.word);
+
+    if (m.mix) {
+      h += '<div class="sec"><span>What you mainly did</span><span>' +
+        plural(s.count, 'run') + '</span></div>';
+      h += '<div class="mix">' + m.mix.map(x =>
+        '<span><b>' + x.count + '</b> ' + esc(x.label) + '</span>').join('') + '</div>';
+    }
+    h += zonesHTML(m.zones, bounds);
+
+    if (!m.trend.absent) {
+      const T = m.trend, raced = m.races.length;
+      h += '<div class="sec"><span>Aerobic pace</span><span>' + esc(m.period.word) + '</span></div>';
+      h += lineChart(T.segments, {
+        invert: true, uniform: true, height: 150, from: T.from, to: T.to,
+        format: v => Calc.fmtPace(v), anchorLabels: ['best', 'slowest'],
+        label: 'Aerobic pace across ' + T.shown + ' runs. Faster is higher.',
+        xax: [fmtDate(T.from).toUpperCase(), '', fmtDate(T.to).toUpperCase()]
+      });
+      h += '<div class="est">Faster is higher, spaced by date \u2014 a gap is nothing logged' +
+        (raced ? '. ' + plural(raced, 'race') + ' left out, a race is not a measurement of aerobic pace' : '') +
+        '. ' + plural(T.shown, 'run') + (T.days >= 2 ? ' over ' + T.days + ' days' : '') + '.</div>';
+    }
+    return h;
+  }
+
+  function runRow(a, bounds, withMonth) {
     const c = Calc.aerobicCost(a);
     const d = Calc.drift(a.laps);
     const meta = [];
@@ -791,7 +936,9 @@
     const size = (13 + scale * 3).toFixed(0);
 
     return '<div class="rrow" data-id="' + esc(a.id) + '">' +
-      '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) + '</div>' +
+      '<div class="rtop"><div class="rday">' + DAYS[Calc.dayIndex(a.date)] + ' ' + a.date.slice(8) +
+      /* over a whole year "SAT 21" doesn't say which Saturday */
+      (withMonth ? '<br>' + MON[+a.date.slice(5, 7) - 1].toUpperCase() : '') + '</div>' +
       '<div class="rnm" style="font-size:' + size + 'px">' +
       (Calc.isRace(a) ? '<i class="racetag">RACE</i> ' : '') + esc(a.name) +
       ' <span>\u00b7 ' + a.distance_km.toFixed(2) + ' km</span></div>' +

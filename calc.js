@@ -1275,6 +1275,8 @@
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
     const runs = (all || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && isUsable(a));
     const isCurrent = periodKey(today, scope) === key;
+    /* A closed period is a summary, not a training screen. See reviewModel. */
+    if (!isCurrent) return reviewModel(runs, c, scope, key, today);
     const start = periodStart(key, scope);
     const end = isCurrent ? today : periodEnd(key, scope);
     const label = periodLabel(key, scope, today);
@@ -1330,6 +1332,7 @@
     const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey))) : null;
 
     return {
+      mode: 'live',
       period: { key: key, scope: scope, label: label, word: word,
                 isCurrent: isCurrent, start: start, end: end },
       runs: inP,
@@ -1397,6 +1400,209 @@
       gapBefore: emptyRunBefore(runs, scope, key),
       record: z2Record(runs, c, scope, key, 10),
       days: scope === 'week' ? weekDays(runs, c, key) : null
+    };
+  }
+
+  /* ---------- the review model: a closed period ----------
+
+     A past year used to be the live screen rewound to its last day: the hero
+     described the last run of 2024, Form read the last three weeks of 2024,
+     and a two-year-old run was asked to be tagged "so the app knows whether
+     that was the plan". Every card answered "where am I now?" with "now"
+     moved to 31 December — a question nobody asks of a finished year.
+
+     A closed period answers a different question: how did it go. So it gets
+     its own model, and the live training values — the heroes, Form, the
+     28-day Z2, the target count, the load ramp — are ABSENT here, not
+     rewound.
+
+     Two rules hold for everything this returns:
+
+     - It is frozen. Nothing in it depends on today, so the same data gives
+       the same summary whenever you look at it. Only the ribbon, which is
+       navigation rather than content, still ends at now.
+     - It never claims anything about runs that are not logged. The backfill
+       is unfinished, so an empty month is "nothing logged", never "time
+       off", and the year before is shown beside this one as plain numbers —
+       no arrows, no percentages, because a fall might only be a gap in the
+       backfill. The figures simply grow as runs are added. */
+
+  /* How many runs a card needs before it says anything. Below these it is
+     absent rather than a verdict drawn from two data points. */
+  const REVIEW_MIN = { bests: 2, mix: 3, months: 2 };
+  const BUILD_DAYS = 84;
+  const EVEN_SPLIT_S = 5;
+  const REVIEW_EFFORTS = [1, 5, 10, 21.1, 42.2];
+
+  function runPace(a) {
+    return a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
+  }
+
+  /* First half against second half, split by distance on whole laps. */
+  function halves(laps) {
+    const full = fullLaps(laps).filter(l => l.time_s);
+    if (full.length < 4) return null;
+    const total = full.reduce((t, l) => t + l.distance_km, 0);
+    let d = 0, i = 0;
+    while (i < full.length && d + full[i].distance_km <= total / 2 + 1e-9) { d += full[i].distance_km; i++; }
+    const a = full.slice(0, i), b = full.slice(i);
+    if (!a.length || !b.length) return null;
+    const pace = arr => arr.reduce((t, l) => t + l.time_s, 0) /
+                        arr.reduce((t, l) => t + l.distance_km, 0);
+    const first = pace(a), second = pace(b);
+    const fade = Math.round(second - first);
+    return { first: first, second: second, fade: fade,
+             shape: Math.abs(fade) <= EVEN_SPLIT_S ? 'even' : fade > 0 ? 'positive' : 'negative' };
+  }
+
+  function addDays(dateStr, n) {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setDate(d.getDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /* What a race was run on: the twelve weeks before it, from logged runs.
+     Eight missed most of a marathon block — 2024's July build sat seven to
+     twelve weeks out. */
+  function raceBuild(race, runs) {
+    const from = addDays(race.date, -BUILD_DAYS);
+    const before = runs.filter(a => a.id !== race.id && a.date >= from && a.date < race.date);
+    if (!before.length) return { count: 0, days: BUILD_DAYS };
+    const longest = before.slice().sort((a, b) => b.distance_km - a.distance_km)[0];
+    return {
+      count: before.length, days: BUILD_DAYS,
+      distance_km: Math.round(before.reduce((t, a) => t + a.distance_km, 0) * 100) / 100,
+      longest: longest,
+      longestWeeksOut: Math.round(daysBetween(longest.date, race.date) / 7)
+    };
+  }
+
+  function reviewModel(runs, c, scope, key, today) {
+    const start = periodStart(key, scope), end = periodEnd(key, scope);
+    const label = periodLabel(key, scope, today);
+    const word = 'that ' + scope;
+    const inP = runs.filter(a => inPeriod(a, scope, key))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const summary = summarize(inP);
+    const n = inP.length;
+
+    /* ---- races, and what they were run on ---- */
+    const races = inP.filter(isRace).slice().reverse().map(r => ({
+      run: r,
+      pace: paceSecPerKm(r.distance_km, r.elapsed_s),
+      gap: r.gap_pace_s != null ? r.gap_pace_s : null,
+      halves: halves(r.laps),
+      drift: drift(r.laps),
+      build: raceBuild(r, runs)
+    }));
+
+    /* ---- the period beside the one before it: plain numbers, no verdict ---- */
+    const prevKey = scope === 'all' ? null : shiftKey(key, scope, -1);
+    const prevRuns = prevKey ? runs.filter(a => inPeriod(a, scope, prevKey)) : [];
+    const previous = prevKey ? { key: prevKey, label: periodLabel(prevKey, scope, today),
+                                 summary: summarize(prevRuns) } : null;
+
+    /* ---- months, for a year ---- */
+    let months = null;
+    if (scope === 'year') {
+      const list = [];
+      for (let m = 1; m <= 12; m++) {
+        const ym = key + '-' + String(m).padStart(2, '0');
+        const these = inP.filter(a => a.date.slice(0, 7) === ym);
+        list.push({ key: ym, count: these.length,
+          distance_km: Math.round(these.reduce((t, a) => t + a.distance_km, 0) * 100) / 100 });
+      }
+      const withRuns = list.filter(m => m.count);
+      const top = withRuns.slice().sort((a, b) => b.distance_km - a.distance_km)[0] || null;
+      months = {
+        list: list, logged: withRuns.length,
+        top: withRuns.length >= REVIEW_MIN.months ? top : null,
+        absent: withRuns.length >= REVIEW_MIN.months ? null
+          : 'runs logged in only ' + withRuns.length + (withRuns.length === 1 ? ' month' : ' months')
+      };
+    }
+
+    /* ---- bests ---- */
+    let bests = null;
+    if (n >= REVIEW_MIN.bests) {
+      const byLength = inP.slice().sort((a, b) => b.distance_km - a.distance_km);
+      const longest = byLength[0];
+      const training = byLength.find(a => !isRace(a)) || null;
+      const allBoard = bestEffortBoard(runs, REVIEW_EFFORTS);
+      const held = {};
+      allBoard.forEach(b => { held[b.km] = b.run.id; });
+      const efforts = bestEffortBoard(inP, REVIEW_EFFORTS)
+        .map(e => Object.assign({}, e, { pb: held[e.km] === e.run.id }));
+      const aer = inP.filter(a => a.avg_hr != null && !isRace(a))
+        .map(a => ({ run: a, pace: aerobicPace(a, c) })).filter(x => x.pace != null)
+        .sort((a, b) => a.pace - b.pace)[0] || null;
+      bests = {
+        longest: longest,
+        /* the race is usually the longest run of its year; the build is the
+           longest thing you did to get there */
+        longestTraining: isRace(longest) && training ? training : null,
+        efforts: efforts,
+        aerobic: aer
+      };
+    }
+
+    /* ---- what you mainly did ---- */
+    let mix = null;
+    if (n >= REVIEW_MIN.mix) {
+      const counts = {};
+      inP.forEach(a => { const k = sessionOf(a.session) ? a.session : 'untagged';
+                         counts[k] = (counts[k] || 0) + 1; });
+      const order = SESSIONS.map(s => s.key).concat(['untagged']);
+      mix = Object.keys(counts).map(k => ({ key: k,
+        label: k === 'untagged' ? 'untagged' : sessionLabel(k).toLowerCase(), count: counts[k] }))
+        .sort((a, b) => b.count - a.count || order.indexOf(a.key) - order.indexOf(b.key));
+    }
+
+    /* ---- zones: the period's own split, no rolling window, no "usual" ---- */
+    const laps = lapsOf(inP);
+    const tz = timeInZone(laps, zoneBounds(c));
+    const zoned = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0);
+
+    /* ---- aerobic pace across the period itself, and nothing outside it ---- */
+    const trend = (function () {
+      const samples = aerobicSamples(inP).filter(a => a.avg_hr != null).map(a => a.date).sort();
+      const from = samples[0] || start, to = samples[samples.length - 1] || end;
+      const segs = paceSeries(inP, c, from, to);
+      return {
+        segments: segs, shown: segs.shown, from: from, to: to,
+        days: daysBetween(from, to),
+        absent: segs.shown >= 2 ? null
+          : (segs.shown === 1 ? 'one run with heart rate \u2014 a trend needs two'
+                              : 'no runs with heart rate')
+      };
+    })();
+
+    return {
+      mode: 'review',
+      period: { key: key, scope: scope, label: label, word: word,
+                isCurrent: false, start: start, end: end },
+      runs: inP,
+      count: n,
+      summary: summary,
+      previous: previous,
+      races: races,
+      months: months,
+      bests: bests,
+      mix: mix,
+      zones: {
+        tz: tz, zoned: zoned, unknown: tz.unknown,
+        elapsed: summary.elapsed_s,
+        share: zoned ? z2Of(laps, c) : null,
+        typical: null,
+        window: word,
+        absent: zoned ? null
+          : (summary.elapsed_s ? 'no lap heart rate' : 'nothing logged')
+      },
+      trend: trend,
+      /* the live training values, absent rather than rewound */
+      hero: null, form: null, record: null, days: null,
+      ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
+      gapBefore: emptyRunBefore(runs, scope, key)
     };
   }
 
@@ -1558,7 +1764,7 @@
     fullLaps, mainLaps, hasLapHr, weightedHr,
     aerobicCost, drift, timeInZone, comparable, median,
     isoWeek, weekStart, periodStart, periodEnd, dayIndex, daysBetween, splitOnGaps,
-    ACTIVITY_TYPES, homeModel, stat, weekRollup, monthRollup, confidence,
+    ACTIVITY_TYPES, homeModel, reviewModel, halves, raceBuild, REVIEW_MIN, stat, weekRollup, monthRollup, confidence,
     periodKey, shiftKey, inPeriod, periodLabel, periodSpan, nextWithData,
     summarize, ribbon, previousWithData, emptyRunBefore, medianCost,
     refHr, suggestedPaceRef, aerobicPace, paceSeries, PACE_WINDOW, trendRange, TREND_MIN_DAYS, records, delta, deltaText, sharesOf, driftNeeds, driftIsFlat, DRIFT_FLAT,

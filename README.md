@@ -143,6 +143,9 @@ bar and the list — while **Form and the trend chart stayed in the present**.
 Two thirds of the screen ignored the selector, so a 2025 view showed today's
 form and plotted 2026 runs under an x-axis labelled "19 OCT".
 
+*Superseded for closed periods — see "A finished period is a summary" below.
+What follows still holds for the period you are in.*
+
 Now every section answers the same question. `readRows` takes the period's own
 start and end, so Form reads that period and names itself *Form · 2025*. The
 trend ends at the period, showing history as it stood then. And a period with
@@ -151,6 +154,51 @@ it — the empty path had the same cross-period leak as the full one.
 
 The totals agree with each other too: either all three rows carry a comparison
 or none does, with one line saying why.
+
+## A finished period is a summary
+
+Rewinding the live screen to the end of a past period answered the wrong
+question. 2024 showed the last run of 2024 as its hero, Form for the last three
+weeks of 2024, and asked for a two-year-old run to be tagged "so the app knows
+whether that was the plan". Nobody asks "where am I now?" of a finished year.
+
+So `homeModel` makes one more decision, once: the current period is **live**,
+and any closed period goes to `reviewModel` and is a **review**. In a review the
+heroes, Form, the 28-day Z2, the target count and the load ramp are **absent,
+not rewound**. What it shows instead, in order:
+
+- **Races**: time, pace, heart rate and drift; first half against second half
+  from whole laps (within 5 s/km reads "even"); and the build, meaning runs,
+  km and the longest run in the twelve weeks before. Eight weeks missed most
+  of the 2024 marathon block.
+- **Logged**: runs, distance, time and ascent, with the period before **beside**
+  it as plain numbers.
+- **Month by month** (years only), with the biggest month named.
+- **Bests**: longest run, the longest outside a race when a race is the longest,
+  the period's best efforts at 1, 5, 10 km, half and marathon (**PB** where one
+  still stands all-time), and the best aerobic pace, never from a race.
+- **What you mainly did**: session tags counted, with untagged runs shown as
+  untagged rather than guessed at, then the period's own zone split.
+- **Aerobic pace** across the period, and nothing outside it.
+
+Two rules hold for all of it.
+
+**It is frozen.** Nothing in a review depends on today, so the same data reads
+the same whenever you look. Only the ribbon, which is navigation rather than
+content, still ends at now.
+
+**It never claims anything about runs that aren't logged.** The backfill is
+unfinished, so an empty month is "nothing logged", never "time off", and the
+year before sits beside this one with no arrow and no percentage, because a
+fall might only be a gap in the backfill. There is deliberately no "complete"
+flag: the summary just grows as runs are added.
+
+Each card has a minimum (bests 2 runs, the mix 3, the biggest month 2 months
+with runs) and is absent below it rather than drawing a verdict from one or
+two data points. A past week therefore mostly shows its races, totals and runs.
+
+Over a whole year the run list carries the month under the day: "SAT 21" does
+not say which Saturday.
 
 ## Markers live outside the stretched space
 
