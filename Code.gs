@@ -9,6 +9,19 @@
  *        Who has access:  Anyone
  *   4. Copy the /exec URL and the token into js/store.js
  *
+ * Garmin, once (see "Garmin" in README.md for the same steps with pictures
+ * in words):
+ *   5. Project Settings > Script properties > Add script property
+ *        Property:  GARMIN_KEY
+ *        Value:     your Garmin Connect Personal API key
+ *   6. Run setupGarmin()      checks the key, writes a "Garmin check" tab,
+ *                             imports recent runs and checks hourly from then on
+ *   7. Deploy > Manage deployments > edit > Version: New version > Deploy
+ *        (same URL and token, so nothing changes in the app)
+ *
+ * The key lives only in Script properties — never in this file, the sheet or
+ * the repo.
+ *
  * "Anyone" means anyone holding the URL can read and write, which is why the
  * token exists. Treat both as secrets — they are the only thing between your
  * data and whoever finds the link.
@@ -26,20 +39,30 @@ var ACT_COLS = [
   'ascent_m', 'descent_m', 'ele_min_m', 'ele_max_m',
   'temp_c', 'avg_hr', 'gap_pace_s', 'cadence_spm',
   'rpe', 'feel', 'conditions', 'pack', 'note',
-  'created_at', 'updated_at'
+  'created_at', 'updated_at',
+  /* Added Oct 2026. These lived only on the phone: a storage clear lost every
+     session tag and both field-test results. Nothing the app stores on a run
+     may be missing from this list — tests check it against the app's fields. */
+  'resting_hr', 'session', 'subtype', 'value', 'protocol_note',
+  /* written by the Garmin import only; the app never sets it */
+  'garmin_id'
 ];
+
+/* Columns the server owns. A run sent up from the app never blanks them. */
+var SERVER_COLS = ['garmin_id'];
 
 var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
 
 /* Columns that must never be coerced by Sheets. Dates stay strings — a date
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
-                 'source', 'feel', 'conditions', 'pack', 'note'];
+                 'source', 'feel', 'conditions', 'pack', 'note',
+                 'session', 'subtype', 'protocol_note', 'garmin_id'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
   ele_min_m: 1, ele_max_m: 1, temp_c: 1, avg_hr: 1, gap_pace_s: 1,
-  cadence_spm: 1, rpe: 1, n: 1, time_s: 1
+  cadence_spm: 1, rpe: 1, n: 1, time_s: 1, resting_hr: 1, value: 1
 };
 
 /* ------------------------------------------------------------------ setup */
@@ -68,6 +91,22 @@ function ensureSheet(ss, name, cols) {
     }
   });
   return sh;
+}
+
+/* A sheet set up before a column existed has no header for it, and a column
+   with no header is silently never written. Add what's missing, at the end,
+   so nothing already there moves. Cheap when nothing is missing. */
+function addMissingHeaders(sh, cols) {
+  var m = headerMap(sh);
+  var missing = cols.filter(function (c) { return !(c in m); });
+  if (!missing.length) return 0;
+  var at = sh.getLastColumn() + 1;
+  sh.getRange(1, at, 1, missing.length).setValues([missing]).setFontWeight('bold');
+  missing.forEach(function (c, i) {
+    if (TEXT_COLS.indexOf(c) >= 0 && sh.getMaxRows() > 1)
+      sh.getRange(2, at + i, sh.getMaxRows() - 1, 1).setNumberFormat('@');
+  });
+  return missing.length;
 }
 
 function makeToken() {
@@ -166,6 +205,7 @@ function doPost(e) {
     if (body.action === 'put') return json(putActivity(body.activity));
     if (body.action === 'delete') return json(deleteActivity(body.id));
     if (body.action === 'config') return json(putConfig(body.config));
+    if (body.action === 'fields') return json(putFields(body.fields));
     return json({ error: 'unknown action' });
   } finally {
     lock.releaseLock();
@@ -182,6 +222,7 @@ function json(obj) {
 
 function listAll() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  addMissingHeaders(ss.getSheetByName(SHEETS.activities), ACT_COLS);
   var acts = readAll(ss.getSheetByName(SHEETS.activities), ACT_COLS);
   var laps = readAll(ss.getSheetByName(SHEETS.laps), LAP_COLS);
 
@@ -204,7 +245,10 @@ function listAll() {
     config[r.key] = (v !== null && v !== '' && !isNaN(Number(v))) ? Number(v) : v;
   });
 
-  return { schema: 1, config: config, activities: acts };
+  /* columns: lets the app tell an up-to-date script from an old deployment.
+     garmin: how the last import went, so a dead key is said, not hidden. */
+  return { schema: 1, config: config, activities: acts,
+           columns: ACT_COLS, garmin: garminStatus() };
 }
 
 function putActivity(act) {
@@ -213,9 +257,18 @@ function putActivity(act) {
   var ash = ss.getSheetByName(SHEETS.activities);
   var lsh = ss.getSheetByName(SHEETS.laps);
 
+  addMissingHeaders(ash, ACT_COLS);
   var row = objToRow(ash, ACT_COLS, act);
   var at = findRowById(ash, 'id', act.id);
-  if (at > 0) ash.getRange(at, 1, 1, row.length).setValues([row]);
+  if (at > 0) {
+    /* keep what only the server writes */
+    var hm0 = headerMap(ash);
+    var old = ash.getRange(at, 1, 1, row.length).getValues()[0];
+    SERVER_COLS.forEach(function (c) {
+      if (hm0[c] != null && (row[hm0[c]] === '' || row[hm0[c]] == null)) row[hm0[c]] = old[hm0[c]];
+    });
+    ash.getRange(at, 1, 1, row.length).setValues([row]);
+  }
   else { ash.appendRow(row); at = ash.getLastRow(); }
   /* force the text columns back to plain text on this row — a format set on
      empty rows at setup() does not survive an append */
@@ -260,9 +313,46 @@ function deleteActivity(id) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var ash = ss.getSheetByName(SHEETS.activities);
   var at = findRowById(ash, 'id', id);
-  if (at > 0) ash.deleteRow(at);
+  if (at > 0) {
+    /* a run deleted on purpose must not come back on the next Garmin check */
+    var hm = headerMap(ash);
+    if (hm.garmin_id != null) {
+      var gid = String(ash.getRange(at, hm.garmin_id + 1).getValue() || '');
+      if (gid) garminSkip(gid);
+    }
+    ash.deleteRow(at);
+  }
   var removed = clearLaps(ss.getSheetByName(SHEETS.laps), id);
   return { ok: true, id: id, laps_removed: removed };
+}
+
+/* Fill fields on runs already in the sheet without touching anything else:
+   no laps rewritten, no timestamps moved. Used once, to bring up the session
+   tags and test results that until now lived only on the phone. Only fills —
+   a value already in the sheet is never overwritten by this. */
+function putFields(fields) {
+  var ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities);
+  addMissingHeaders(ash, ACT_COLS);
+  var hm = headerMap(ash);
+  var last = ash.getLastRow();
+  if (last < 2) return { ok: true, filled: 0 };
+  var width = ash.getLastColumn();
+  var range = ash.getRange(2, 1, last - 1, width);
+  var rows = range.getValues();
+  var filled = 0;
+  rows.forEach(function (r) {
+    var f = (fields || {})[String(r[hm.id])];
+    if (!f) return;
+    Object.keys(f).forEach(function (c) {
+      if (hm[c] == null || ACT_COLS.indexOf(c) < 0 || SERVER_COLS.indexOf(c) >= 0) return;
+      if (f[c] === null || f[c] === undefined || f[c] === '') return;
+      if (r[hm[c]] !== '' && r[hm[c]] != null) return;
+      r[hm[c]] = f[c];
+      filled++;
+    });
+  });
+  range.setValues(rows);
+  return { ok: true, filled: filled };
 }
 
 function putConfig(config) {
@@ -274,4 +364,382 @@ function putConfig(config) {
     else sh.appendRow([k, config[k], today]);
   });
   return { ok: true, keys: Object.keys(config || {}).length };
+}
+
+/* ================================================================= Garmin ===
+
+   Runs come in from Garmin Connect's Personal API on an hourly trigger and are
+   written to the sheet like any other run; the app picks them up on its normal
+   sync. The key never leaves Script properties.
+
+   Where each figure comes from:
+   - the activity list (JSON) decides which activities are runs, gives the
+     local date and Garmin's grade-adjusted pace;
+   - the original .FIT file gives everything else — distance, time, heart
+     rate, cadence, ascent, temperature and every lap. The FIT format is
+     published and fixed, so the import does not depend on guessed JSON names.
+   Only laps are kept from the file. The GPS track is never stored.
+
+   A run you already pasted is matched (same day, same distance within 2% or
+   time within a minute) and linked rather than imported twice. Linking only
+   records the Garmin id; your pasted figures are left exactly as they are. */
+
+var GARMIN_BASE = 'https://personal.connectapi.garmin.com';
+var GARMIN_TOKEN_PATH = '/personalapitoken-service/personal-api/personal-api-key/token';
+var GARMIN_FIRST_DAYS = 14;     // how far back the first import looks
+var GARMIN_OVERLAP_DAYS = 3;    // each check re-reads a few days, for late watch syncs
+
+function garminProps() { return PropertiesService.getScriptProperties(); }
+
+function garminStatus() {
+  var props = garminProps();
+  if (!props.getProperty('GARMIN_KEY')) return { state: 'off' };
+  try { return JSON.parse(props.getProperty('GARMIN_STATUS') || '{"state":"waiting"}'); }
+  catch (e) { return { state: 'waiting' }; }
+}
+
+function garminSetStatus(st) {
+  st.at = new Date().toISOString();
+  garminProps().setProperty('GARMIN_STATUS', JSON.stringify(st));
+  return st;
+}
+
+function garminSkip(gid) {
+  var props = garminProps();
+  var list = (props.getProperty('GARMIN_SKIP') || '').split(',').filter(String);
+  if (list.indexOf(gid) < 0) list.push(gid);
+  props.setProperty('GARMIN_SKIP', list.slice(-500).join(','));
+}
+
+function GarminError(kind, message) { this.kind = kind; this.message = message; }
+
+function garminToken() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('GARMIN_BEARER');
+  if (hit) return hit;
+  var key = garminProps().getProperty('GARMIN_KEY');
+  if (!key) throw new GarminError('key', 'No GARMIN_KEY in Script properties.');
+  var res = UrlFetchApp.fetch(GARMIN_BASE + GARMIN_TOKEN_PATH, {
+    method: 'post', muteHttpExceptions: true,
+    headers: { 'Authorization': 'ApiKey ' + key.trim(), 'Accept': '*/*' }
+  });
+  var code = res.getResponseCode();
+  if (code === 401 || code === 403)
+    throw new GarminError('key', 'Garmin refused the key \u2014 it has probably expired. ' +
+      'Make a new one in Garmin Connect and replace GARMIN_KEY in Script properties.');
+  if (code >= 300) throw new GarminError('http', 'Garmin did not hand out a token (HTTP ' + code + ').');
+  var token = res.getContentText().trim();
+  /* tokens last 24 hours; keep it for 20 */
+  cache.put('GARMIN_BEARER', token, 20 * 3600);
+  return token;
+}
+
+function garminGet(path, params, raw) {
+  var q = params ? '?' + Object.keys(params).map(function (k) {
+    return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+  }).join('&') : '';
+  var res = UrlFetchApp.fetch(GARMIN_BASE + path + q, {
+    muteHttpExceptions: true,
+    headers: { 'Authorization': 'Bearer ' + garminToken(),
+               'Accept': raw ? 'application/zip, application/octet-stream' : 'application/json' }
+  });
+  var code = res.getResponseCode();
+  if (code === 401 || code === 403) {
+    CacheService.getScriptCache().remove('GARMIN_BEARER');
+    throw new GarminError('key', 'Garmin refused the key \u2014 it has probably expired. ' +
+      'Make a new one in Garmin Connect and replace GARMIN_KEY in Script properties.');
+  }
+  if (code >= 300) throw new GarminError('http', 'Garmin did not answer (HTTP ' + code + ' on ' + path.split('/')[1] + ').');
+  return raw ? res.getBlob() : JSON.parse(res.getContentText() || 'null');
+}
+
+/* The list comes back either bare or wrapped, depending on the endpoint version. */
+function garminList(v) {
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.activities)) return v.activities;
+  if (v && Array.isArray(v.activityList)) return v.activityList;
+  return [];
+}
+
+function garminSearch(from, to) {
+  var all = [], start = 0, page;
+  do {
+    page = garminList(garminGet('/activitylist-service/activities/search/activities',
+      { start: start, limit: 100, startDate: from, endDate: to }));
+    all = all.concat(page);
+    start += page.length;
+  } while (page.length === 100 && start < 2000);
+  return all;
+}
+
+/* Running of any kind by Garmin's own type key; anything else is not ours. */
+function garminIsRun(j) {
+  var t = j && j.activityType && (j.activityType.typeKey || j.activityType.key) || '';
+  return /run/i.test(String(t));
+}
+
+function garminFit(gid) {
+  var blob = garminGet('/download-service/files/activity/' + gid, null, true);
+  var bytes;
+  try {
+    var parts = Utilities.unzip(blob);
+    var fit = parts.filter(function (b) { return /\.fit$/i.test(b.getName()); })[0] || parts[0];
+    bytes = fit.getBytes();
+  } catch (e) {
+    bytes = blob.getBytes();         // not zipped
+  }
+  return fitDecode(bytes);
+}
+
+/* ------------------------------------------------------------- FIT reader ---
+   Just enough of the published FIT format for sessions and laps. Handles
+   both byte orders, developer fields (skipped) and compressed timestamps. */
+
+function fitDecode(input) {
+  var b = [];
+  for (var i = 0; i < input.length; i++) b.push(input[i] & 0xff);
+  var hdr = b[0];
+  if (b.length < 12 || String.fromCharCode(b[8], b[9], b[10], b[11]) !== '.FIT')
+    throw new GarminError('fit', 'Not a FIT file.');
+  var dataSize = b[4] | (b[5] << 8) | (b[6] << 16) | (b[7] * 16777216);
+  var p = hdr, end = Math.min(b.length, hdr + dataSize);
+  var defs = {}, out = { sessions: [], laps: [] };
+  var SIZES = { 0: 1, 1: 1, 2: 1, 0x83: 2, 0x84: 2, 0x85: 4, 0x86: 4, 0x07: 1, 0x88: 4,
+                0x89: 8, 0x0a: 1, 0x8b: 2, 0x8c: 4, 0x0d: 1, 0x8e: 8, 0x8f: 8, 0x90: 8 };
+  function uint(off, size, le) {
+    var v = 0;
+    for (var k = 0; k < size; k++) v += b[off + (le ? k : size - 1 - k)] * Math.pow(256, k);
+    return v;
+  }
+  while (p < end) {
+    var h = b[p++];
+    if (h & 0x80) {                                   // compressed timestamp
+      var d = defs[(h >> 5) & 0x03];
+      if (!d) throw new GarminError('fit', 'FIT data before its definition.');
+      p = readData(d, p);
+      continue;
+    }
+    var local = h & 0x0f;
+    if (h & 0x40) {                                   // definition
+      var le = b[p + 1] === 0;
+      var gnum = uint(p + 2, 2, le);
+      var nf = b[p + 4];
+      p += 5;
+      var fields = [];
+      for (var f = 0; f < nf; f++) { fields.push({ num: b[p], size: b[p + 1], base: b[p + 2] }); p += 3; }
+      var devSize = 0;
+      if (h & 0x20) { var nd = b[p++]; for (var g = 0; g < nd; g++) { devSize += b[p + 1]; p += 3; } }
+      defs[local] = { gnum: gnum, le: le, fields: fields, devSize: devSize };
+    } else {
+      var dd = defs[local];
+      if (!dd) throw new GarminError('fit', 'FIT data before its definition.');
+      p = readData(dd, p);
+    }
+  }
+  function readData(d, at) {
+    var rec = {};
+    d.fields.forEach(function (fd) {
+      var bt = fd.base & 0x9f, unit = SIZES[fd.base] || SIZES[bt] || 1;
+      if (fd.size === unit && unit <= 4) {
+        var v = uint(at, unit, d.le);
+        var invalid = unit === 1 ? (bt === 0x01 ? 0x7f : 0xff) : unit === 2 ? (fd.base === 0x83 ? 0x7fff : 0xffff)
+                    : (fd.base === 0x85 ? 0x7fffffff : 0xffffffff);
+        if (v !== invalid) {
+          if (fd.base === 0x01 && v > 127) v -= 256;           // sint8
+          if (fd.base === 0x83 && v > 32767) v -= 65536;       // sint16
+          if (fd.base === 0x85 && v > 2147483647) v -= 4294967296;
+          rec[fd.num] = v;
+        }
+      }
+      at += fd.size;
+    });
+    at += d.devSize;
+    if (d.gnum === 18) out.sessions.push(rec);
+    if (d.gnum === 19) out.laps.push(rec);
+    return at;
+  }
+  return out;
+}
+
+/* ---------------------------------------------------- one Garmin run → row */
+
+var MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function r2(x) { return Math.round(x * 100) / 100; }
+
+function garminActivity(j, fit) {
+  var gid = String(j.activityId);
+  var date = String(j.startTimeLocal || j.startTimeGMT || '').slice(0, 10);
+  if (!/^\d{4}-\d\d-\d\d$/.test(date)) return null;           // no date, no run
+  var s = (fit && fit.sessions && fit.sessions[0]) || {};
+  if (s[5] != null && s[5] !== 1) return null;                 // FIT says not running
+  var dist = s[9] != null ? r2(s[9] / 100000) : (j.distance != null ? r2(j.distance / 1000) : null);
+  var timer = s[8] != null ? Math.round(s[8] / 1000)
+            : (j.duration != null ? Math.round(j.duration) : null);
+  var cad = s[18] != null ? Math.round((s[18] + (s[92] || 0) / 128) * 2) : null;
+  var gapSpeed = j.avgGradeAdjustedSpeed;
+  var laps = ((fit && fit.laps) || []).map(function (l, i) {
+    return { n: i + 1,
+             distance_km: l[9] != null ? r2(l[9] / 100000) : null,
+             time_s: l[8] != null ? Math.round(l[8] / 1000) : null,
+             avg_hr: l[15] != null ? l[15] : null,
+             role: 'main' };
+  }).filter(function (l) { return l.distance_km > 0 && l.time_s > 0; });
+  var now = new Date().toISOString();
+  return {
+    id: 'run-' + date + '-g' + gid,
+    type: 'run', date: date,
+    name: 'Run \u00b7 ' + (+date.slice(8)) + ' ' + MON3[+date.slice(5, 7) - 1],
+    source: 'tracked',
+    distance_km: dist,
+    elapsed_s: timer,
+    moving_s: j.movingDuration != null ? Math.round(j.movingDuration) : null,
+    ascent_m: s[22] != null ? s[22] : (j.elevationGain != null ? Math.round(j.elevationGain) : null),
+    descent_m: s[23] != null ? s[23] : (j.elevationLoss != null ? Math.round(j.elevationLoss) : null),
+    temp_c: s[57] != null ? s[57] : null,
+    avg_hr: s[16] != null ? s[16] : (j.averageHR != null ? Math.round(j.averageHR) : null),
+    gap_pace_s: gapSpeed > 0 ? Math.round(1000 / gapSpeed) : null,
+    cadence_spm: cad,
+    garmin_id: gid,
+    laps: laps,
+    created_at: now, updated_at: now
+  };
+}
+
+/* Same day, and the same distance within 2% or the same time within a
+   minute — the app's own duplicate rule, so a pasted run is recognised. */
+function garminMatch(act, rows) {
+  return rows.filter(function (r) {
+    if (r.date !== act.date || (r.type && r.type !== 'run')) return false;
+    var dOk = r.distance_km != null && act.distance_km != null &&
+      Math.abs(r.distance_km - act.distance_km) <= Math.max(0.05, act.distance_km * 0.02);
+    var tOk = r.elapsed_s != null && act.elapsed_s != null &&
+      Math.abs(r.elapsed_s - act.elapsed_s) <= 60;
+    return dOk || tOk;
+  })[0] || null;
+}
+
+function isoDay(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
+
+/* ------------------------------------------------------------ the import -- */
+
+/** Hourly. Also safe to run by hand from the editor. */
+function garminSync() {
+  if (!garminProps().getProperty('GARMIN_KEY')) return garminSetStatus({ state: 'off' });
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return garminStatus();
+  try {
+    var props = garminProps();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ash = ss.getSheetByName(SHEETS.activities);
+    addMissingHeaders(ash, ACT_COLS);
+
+    var today = new Date();
+    var since = props.getProperty('GARMIN_SINCE') ||
+      isoDay(new Date(today.getTime() - GARMIN_FIRST_DAYS * 864e5));
+    var found = garminSearch(since, isoDay(today)).filter(garminIsRun);
+
+    var rows = readAll(ash, ACT_COLS);
+    var known = {};
+    rows.forEach(function (r) { if (r.garmin_id) known[String(r.garmin_id)] = true; });
+    (props.getProperty('GARMIN_SKIP') || '').split(',').forEach(function (g) { if (g) known[g] = true; });
+
+    var added = 0, linked = 0, hm = headerMap(ash);
+    found.forEach(function (j) {
+      var gid = String(j.activityId);
+      if (known[gid]) return;
+      /* match on the list's own figures first — no download for a run you pasted */
+      var probe = { date: String(j.startTimeLocal || '').slice(0, 10),
+                    distance_km: j.distance != null ? r2(j.distance / 1000) : null,
+                    elapsed_s: j.duration != null ? Math.round(j.duration) : null };
+      var mine = garminMatch(probe, rows);
+      var act = null;
+      if (!mine) {
+        act = garminActivity(j, garminFit(gid));
+        if (!act) return;
+        mine = garminMatch(act, rows);
+      }
+      if (mine) {
+        /* link only: your figures and timestamps stay as they are */
+        var at = findRowById(ash, 'id', mine.id);
+        if (at > 0) ash.getRange(at, hm.garmin_id + 1).setNumberFormat('@').setValue(gid);
+        mine.garmin_id = gid;
+        linked++;
+      } else {
+        putActivity(act);
+        rows.push(act);
+        added++;
+      }
+      known[gid] = true;
+    });
+
+    props.setProperty('GARMIN_SINCE',
+      isoDay(new Date(today.getTime() - GARMIN_OVERLAP_DAYS * 864e5)));
+    return garminSetStatus({ state: 'ok', added: added, linked: linked, seen: found.length });
+  } catch (e) {
+    var kind = e instanceof GarminError ? e.kind : 'error';
+    return garminSetStatus({ state: kind === 'key' ? 'key' : 'error',
+                             message: String(e.message || e) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** One-off report, written to a "Garmin check" tab: how far back the key
+    reaches, and which figures arrive. Changes nothing else. */
+function garminCheck() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('Garmin check') || ss.insertSheet('Garmin check');
+  sh.clear();
+  var out = [['Garmin check', new Date().toISOString()], ['', '']];
+  var thisYear = new Date().getFullYear(), oldest = null;
+  for (var y = thisYear - 12; y <= thisYear; y++) {
+    var runs = [];
+    try { runs = garminSearch(y + '-01-01', y + '-12-31').filter(garminIsRun); }
+    catch (e) { out.push([String(y), 'error: ' + e.message]); continue; }
+    if (runs.length) {
+      out.push([String(y), runs.length + ' runs']);
+      runs.forEach(function (r) {
+        var d = String(r.startTimeLocal || '').slice(0, 10);
+        if (d && (!oldest || d < oldest)) oldest = d;
+      });
+    }
+  }
+  out.push(['Oldest run reachable', oldest || 'none found']);
+  var recent = garminSearch(isoDay(new Date(Date.now() - 60 * 864e5)), isoDay(new Date()))
+    .filter(garminIsRun)[0];
+  if (recent) {
+    out.push(['', ''], ['Newest run', String(recent.startTimeLocal) + ' \u00b7 id ' + recent.activityId]);
+    out.push(['Grade-adjusted pace (GAP)', recent.avgGradeAdjustedSpeed > 0
+      ? 'yes \u2014 ' + Math.floor(1000 / recent.avgGradeAdjustedSpeed / 60) + ':' +
+        ('0' + Math.round(1000 / recent.avgGradeAdjustedSpeed % 60)).slice(-2) + '/km'
+      : 'not provided']);
+    try {
+      var act = garminActivity(recent, garminFit(String(recent.activityId)));
+      out.push(['FIT file', 'read OK']);
+      out.push(['Distance / time', act.distance_km + ' km \u00b7 ' + act.elapsed_s + ' s']);
+      out.push(['Heart rate / cadence', act.avg_hr + ' bpm \u00b7 ' + act.cadence_spm + ' spm']);
+      out.push(['Ascent / temperature', act.ascent_m + ' m \u00b7 ' + act.temp_c + '\u00b0']);
+      out.push(['Laps', act.laps.length + (act.laps[0] ? ' \u2014 first ' + act.laps[0].distance_km +
+        ' km in ' + act.laps[0].time_s + ' s at ' + act.laps[0].avg_hr + ' bpm' : '')]);
+    } catch (e) { out.push(['FIT file', 'could not read: ' + e.message]); }
+    out.push(['Fields in the list', Object.keys(recent).sort().join(', ')]);
+  } else {
+    out.push(['Newest run', 'no run in the last 60 days']);
+  }
+  sh.getRange(1, 1, out.length, 2).setValues(out);
+  sh.setColumnWidth(1, 220);
+  return out;
+}
+
+/** Run once after putting GARMIN_KEY in Script properties. */
+function setupGarmin() {
+  garminToken();                     // fails loudly here if the key is wrong
+  garminCheck();
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'garminSync') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('garminSync').timeBased().everyHours(1).create();
+  var st = garminSync();
+  Logger.log('Garmin: ' + JSON.stringify(st) + '. See the "Garmin check" tab.');
+  return st;
 }

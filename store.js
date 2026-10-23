@@ -15,8 +15,13 @@
     config: 'groundwork:config',
     schema: 'groundwork:schema',
     queue: 'groundwork:queue',
-    sheets: 'groundwork:sheets'      /* endpoint + token, deliberately not synced */
+    sheets: 'groundwork:sheets',     /* endpoint + token, deliberately not synced */
+    fieldsUp: 'groundwork:fields-up' /* the one-time fill of the new sheet columns */
   };
+
+  /* Fields that until Oct 2026 lived only on the phone, because the sheet had
+     no column for them. Sent up once, as a fill, when the script has them. */
+  const FILL_FIELDS = ['session', 'subtype', 'value', 'protocol_note', 'resting_hr'];
 
   function readJSON(k, fallback) {
     try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(fallback)); }
@@ -185,7 +190,8 @@
   const Store = {
     adapter: null,
     bundle: null,
-    sync: { state: 'off', at: null, error: null, pending: 0 },
+    sync: { state: 'off', at: null, error: null, pending: 0,
+            garmin: null, outdated: false },
     onsync: null,
 
     init: function () {
@@ -295,7 +301,12 @@
         if (data.config && Object.keys(data.config).length) {
           self.bundle.config = Object.assign({}, data.config, self.bundle.config);
         }
-        return self.adapter.saveAll(self.bundle).then(() => ({ merged: remote.length }));
+        self.sync.garmin = data.garmin || null;
+        /* an Apps Script deployed before the new columns can't keep tags */
+        self.sync.outdated = !(data.columns && data.columns.indexOf('session') >= 0);
+        return self.adapter.saveAll(self.bundle)
+          .then(() => self.fillFields())
+          .then(() => ({ merged: remote.length }));
       })
       .then(res => {
         self.sync.state = 'ok';
@@ -310,6 +321,29 @@
         if (self.onsync) self.onsync();
         return { error: self.sync.error };
       });
+    },
+
+    /* Once, after the script gains the new columns: send up what only this
+       phone knew — session tags, test results — as a fill. It changes no
+       laps and moves no timestamps, and never overwrites a value already in
+       the sheet. Retried on every sync until it succeeds. */
+    fillFields: function () {
+      if (this.sync.outdated || localStorage.getItem(KEY.fieldsUp)) return Promise.resolve(0);
+      const fields = {};
+      this.all().forEach(a => {
+        const f = {};
+        FILL_FIELDS.forEach(k => { if (a[k] != null && a[k] !== '') f[k] = a[k]; });
+        if (Object.keys(f).length) fields[a.id] = f;
+      });
+      if (!Object.keys(fields).length) {
+        localStorage.setItem(KEY.fieldsUp, new Date().toISOString());
+        return Promise.resolve(0);
+      }
+      return Sheets.post({ action: 'fields', fields: fields }).then(r => {
+        if (!r || r.error) return 0;
+        localStorage.setItem(KEY.fieldsUp, new Date().toISOString());
+        return r.filled || 0;
+      }).catch(() => 0);
     },
 
     /* Send everything up, one at a time — the deployed script takes one

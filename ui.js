@@ -1308,7 +1308,11 @@
     if (sy.pending) h += '<div class="flag"><i>!</i><div>' + sy.pending +
       ' change' + (sy.pending === 1 ? '' : 's') + ' waiting to go up.</div></div>';
     if (sy.error) h += '<div class="flag error"><i>\u2715</i><div>' + esc(sy.error) + '</div></div>';
-    if (Store.sheetsConfigured() && !sy.error && sy.state === 'ok')
+    if (Store.sheetsConfigured() && sy.state === 'ok' && sy.outdated)
+      h += '<div class="flag error"><i>!</i><div>Your Apps Script is older than this app, so session ' +
+        'tags and test results are still only on this phone. Paste the new <b>Code.gs</b> into ' +
+        'Apps Script and deploy a new version \u2014 the steps are under Garmin in the README.</div></div>';
+    else if (Store.sheetsConfigured() && !sy.error && sy.state === 'ok')
       h += '<div class="flag ok"><i>\u2713</i><div>Your runs are in the spreadsheet as well as on this phone.</div></div>';
     h += '<div class="est">A fetch from Sheets never deletes what is on this phone. ' +
       'An empty or unreachable sheet is pushed to, not copied from.</div>';
@@ -1320,6 +1324,8 @@
         'address could read it, so only do this if that is an acceptable trade for ' +
         'run data.</div></div>';
     }
+
+    h += garminHTML(sy);
 
     /* whether the browser has actually promised to keep the data */
     h += '<div class="sec"><span>Storage</span><span id="persist-state">checking</span></div>';
@@ -1736,6 +1742,30 @@
     navigator.storage.persist().catch(function () {});
   }
 
+  /* Garmin runs arrive through the Apps Script, never through this app: the
+     key stays in Script properties. All this shows is how the last check went. */
+  function garminHTML(sy) {
+    if (!Store.sheetsConfigured() || sy.outdated || !sy.garmin) return '';
+    const G = sy.garmin;
+    const when = G.at ? (function (d) {
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    })(new Date(G.at)) : '';
+    let h = '<div class="sec"><span>Garmin</span><span>' +
+      ({ off: 'not connected', waiting: 'waiting', ok: 'checked ' + when,
+         key: 'key not working', error: 'last check failed' }[G.state] || '') + '</span></div>';
+    if (G.state === 'off') h += '<div class="est">Not connected. To have runs arrive by themselves, ' +
+      'follow the Garmin steps in the README.</div>';
+    else if (G.state === 'waiting') h += '<div class="est">Key in place \u2014 waiting for the first check.</div>';
+    else if (G.state === 'ok') h += '<div class="est">New runs arrive by themselves, checked every hour. ' +
+      (G.added || G.linked
+        ? 'Last check: ' + (G.added ? G.added + ' new' : '') + (G.added && G.linked ? ', ' : '') +
+          (G.linked ? G.linked + ' matched to runs you had pasted' : '') + '.'
+        : 'Last check found nothing new.') + '</div>';
+    else h += '<div class="flag error"><i>\u2715</i><div>' + esc(G.message || 'The Garmin check failed.') +
+      (G.state === 'error' ? ' It tries again every hour.' : '') + '</div></div>';
+    return h;
+  }
+
   /* Boot can fail before any screen renders — bad stored JSON, a failed
      migration. The render boundary doesn't cover that, so this does. */
   Store.init().then(() => {
@@ -1745,6 +1775,11 @@
       Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
       Store.flush().then(() => Store.pull()).then(() => {
         if (!el('view-home').hidden) render('home');
+        /* said once per open, never silently: something has stopped syncing */
+        const G = Store.sync.garmin;
+        if (G && G.state === 'key') toast('Garmin key not working \u2014 see Setup', 'bad');
+        else if (Store.sync.outdated && Store.sync.state === 'ok')
+          toast('Apps Script needs updating \u2014 see Setup', 'bad');
       }).catch(err => { toast('Sync failed: ' + (err.message || err), 'bad'); });
     }
   }).catch(err => {

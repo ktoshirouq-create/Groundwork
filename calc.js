@@ -334,7 +334,6 @@
     ascent_m: null, descent_m: null, ele_min_m: null, ele_max_m: null,
     temp_c: null, avg_hr: null, resting_hr: null, gap_pace_s: null, cadence_spm: null,
     rpe: null, feel: null, session: null, note: null,
-    sleep_s: null, sleep_score: null, hrv_ms: null,
     laps: [], created_at: null, updated_at: null
   };
 

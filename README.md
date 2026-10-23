@@ -726,6 +726,72 @@ boots and simply reports sync as off.
 No code change needed. The URL and token live in localStorage, deliberately
 outside the synced config so they can't be overwritten by a pull.
 
+## Nothing lives only on the phone
+
+Until Oct 2026 the sheet had no column for a run's **session tag**, or for a
+field test's **result** (subtype, value, protocol note). Those lived only in the
+browser, so every storage clear lost every race, long and tempo tag and both
+test results, and a restore from the sheet brought them back empty.
+
+The sheet now has those columns, and an existing sheet adds any missing header
+at the end of its header row the first time the new script touches it. Nothing
+already there moves. The first sync against the updated script sends the
+phone's tags and results up **once, as a fill**: one request, no laps
+rewritten, no timestamps moved, and never over a value already in the sheet.
+Until the script is updated the app doesn't try (it would be lost), and Setup
+says the script is out of date instead.
+
+The rule behind it is checked: every field the app stores on a run must be a
+sheet column.
+
+## Garmin
+
+Runs arrive by themselves from Garmin Connect's **Personal API**. The import
+runs **inside the Apps Script**, never in the app. The site is public, and
+anything in it (like `sheets.json`) can be read by anyone. The key lives only
+in Script properties, where nobody can see it.
+
+Every hour the script asks Garmin for recent runs and writes new ones to the
+sheet, laps included. The app picks them up on its normal sync. Tags, RPE and
+feel are still yours to add in the app.
+
+- **Where the figures come from.** The activity list decides what is a run and
+  gives the date and grade-adjusted pace. Everything else (distance, time,
+  heart rate, cadence, ascent, temperature, every lap) comes from the original
+  `.FIT` file. That format is published and fixed, so the import doesn't
+  depend on guessed field names. The GPS track is never stored.
+- **A run you already pasted** is matched (same day; distance within 2% or time
+  within a minute, the app's own duplicate rule) and only **linked**. Your
+  pasted figures and timestamps stay exactly as they were. The match uses the
+  list's own figures first, so a pasted run is never even downloaded.
+- **A Garmin run you delete** in the app stays deleted.
+- **A dead key is said**, in Setup and with a message when the app opens.
+  Keys expire on the date you chose when making them.
+
+### Setting it up (once)
+
+Easiest on a computer, or a browser in desktop mode.
+
+1. Open the Groundwork spreadsheet, then **Extensions > Apps Script**.
+2. Select everything in `Code.gs`, delete it, paste in the new `Code.gs`, then
+   save.
+3. Open **Project Settings** (the gear), then **Script properties > Add script
+   property**. Set Property to `GARMIN_KEY` and Value to your key. Save.
+4. Back in the editor, choose **setupGarmin** in the function menu and press
+   **Run**. Google asks for permission to connect to an external service;
+   allow it. This checks the key, writes a **Garmin check** tab, imports the
+   last two weeks of runs, and turns on the hourly check.
+5. **Deploy > Manage deployments**, press the pencil, set Version to **New
+   version**, then **Deploy**. Same URL and token, so nothing changes in the
+   app.
+
+Then open the app once: it sends up the tags and test results.
+
+The **Garmin check** tab reports how far back your key reaches, how many runs
+per year it can see, whether grade-adjusted pace arrives, and whether the
+`.FIT` file and its laps read correctly. Whether to import 2024–2025 from
+Garmin is decided from that tab, not guessed.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.
