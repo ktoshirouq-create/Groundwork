@@ -811,6 +811,19 @@ races are easy to find. Garmin's automatic names ("Oslo Running") are replaced
 by the app's own format. Activities the watch file says aren't runs, and runs
 uploaded to Garmin twice, are skipped for good.
 
+### Checking Gemini against Garmin
+
+`garminCompare()`, run from the editor, compares every pasted run that is
+linked to its Garmin original against Garmin's own file: distance, time,
+heart rate, cadence, ascent, GAP, temperature, and every lap's distance, time
+and heart rate. It writes a **Gemini check** tab and changes nothing else.
+
+Each difference gets one verdict: **rounding** (one unit in the last digit
+Garmin shows), **different measure** (a real Garmin figure, just not the one
+stored, such as elapsed time instead of timer time, or Connect's corrected
+ascent), **not pasted**, or **misread**. A misread lap time that matches its
+neighbour is named as a swap.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.

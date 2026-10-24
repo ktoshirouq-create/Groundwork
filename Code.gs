@@ -816,3 +816,159 @@ function setupGarmin() {
   Logger.log('Garmin: ' + JSON.stringify(st) + '. See the "Garmin check" tab.');
   return st;
 }
+
+/* ============================================================ Gemini check ===
+
+   Run garminCompare() from the editor. For every run you pasted that is linked
+   to its Garmin original, it compares what Gemini transcribed against
+   Garmin's own file, field by field and lap by lap, and writes the result to a
+   "Gemini check" tab. It changes nothing else.
+
+   Each difference gets one verdict:
+   - exact            the same figure
+   - rounding         one unit in the last shown digit; Garmin's screen rounds
+   - different measure the paste holds a real Garmin figure, just not the one
+                      the app stores (e.g. elapsed time instead of timer time,
+                      or Connect's corrected ascent instead of the watch's)
+   - not pasted       Garmin has it, the paste left it out
+   - misread          none of the above: a wrong digit, a swapped or missing lap */
+
+var CMP_RULES = {
+  distance_km: { label: 'distance', eq: 0.005, round: 0.015, unit: ' km' },
+  elapsed_s:   { label: 'time', eq: 0.5, round: 1.5, unit: ' s' },
+  avg_hr:      { label: 'heart rate', eq: 0, round: 1, unit: ' bpm' },
+  cadence_spm: { label: 'cadence', eq: 0, round: 1, unit: ' spm' },
+  ascent_m:    { label: 'ascent', eq: 0, round: 1, unit: ' m' },
+  gap_pace_s:  { label: 'GAP', eq: 0, round: 1, unit: ' s/km' },
+  temp_c:      { label: 'temperature', eq: 0, round: 1, unit: '\u00b0' }
+};
+var LAP_RULES = {
+  distance_km: { label: 'lap distance', eq: 0.005, round: 0.015, unit: ' km' },
+  time_s:      { label: 'lap time', eq: 0.5, round: 1.5, unit: ' s' },
+  avg_hr:      { label: 'lap heart rate', eq: 0, round: 1, unit: ' bpm' }
+};
+
+function cmpVerdict(mine, theirs, rule, alts) {
+  if (mine == null || mine === '') return theirs == null ? null : { verdict: 'not pasted' };
+  if (theirs == null) return null;
+  var d = Math.abs(Number(mine) - Number(theirs));
+  if (d <= rule.eq + 1e-9) return { verdict: 'exact' };
+  if (d <= rule.round + 1e-9) return { verdict: 'rounding' };
+  var hit = (alts || []).filter(function (a) {
+    return a.value != null && Math.abs(Number(mine) - a.value) <= rule.round + 1e-9;
+  })[0];
+  if (hit) return { verdict: 'different measure', note: hit.label };
+  return { verdict: 'misread' };
+}
+
+/* One pasted run against Garmin's version of it. Pure: tested on its own. */
+function compareRun(mine, g) {
+  var out = [];
+  Object.keys(CMP_RULES).forEach(function (k) {
+    var v = cmpVerdict(mine[k], g.act[k], CMP_RULES[k], g.alts[k]);
+    if (v) out.push({ field: CMP_RULES[k].label, mine: mine[k], theirs: g.act[k],
+                      verdict: v.verdict, note: v.note || '', unit: CMP_RULES[k].unit });
+  });
+  var a = mine.laps || [], b = g.act.laps || [];
+  if (b.length && !a.length) {
+    out.push({ field: 'laps', mine: 0, theirs: b.length, verdict: 'not pasted', note: '', unit: '' });
+    return out;
+  }
+  if (a.length !== b.length)
+    out.push({ field: 'laps', mine: a.length, theirs: b.length, verdict: 'misread',
+               note: a.length < b.length ? 'laps missing' : 'extra laps', unit: '' });
+  var n = Math.min(a.length, b.length);
+  var timeOk = function (i, j) { return a[i] && b[j] && Math.abs(a[i].time_s - b[j].time_s) <= LAP_RULES.time_s.round; };
+  for (var i = 0; i < n; i++) {
+    Object.keys(LAP_RULES).forEach(function (k) {
+      var v = cmpVerdict(a[i][k], b[i][k], LAP_RULES[k]);
+      if (!v) return;
+      var note = 'lap ' + (i + 1);
+      if (v.verdict === 'misread' && k === 'time_s' &&
+          ((timeOk(i, i + 1) && timeOk(i + 1, i)) || (timeOk(i, i - 1) && timeOk(i - 1, i))))
+        note += ', swapped with a neighbour';
+      out.push({ field: LAP_RULES[k].label, mine: a[i][k], theirs: b[i][k], verdict: v.verdict,
+                 note: note, unit: LAP_RULES[k].unit });
+    });
+  }
+  return out;
+}
+
+var CMP_BUDGET_MS = 5 * 60 * 1000;
+
+function garminCompare() {
+  var started = Date.now();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var acts = readAll(ss.getSheetByName(SHEETS.activities), ACT_COLS);
+  var laps = readAll(ss.getSheetByName(SHEETS.laps), LAP_COLS);
+  var byAct = {};
+  laps.forEach(function (l) { (byAct[l.activity_id] = byAct[l.activity_id] || []).push(l); });
+  /* pasted, and linked: the imported ones have the Garmin id in their own id */
+  var pasted = acts.filter(function (a) {
+    return a.garmin_id && String(a.id).indexOf('-g' + a.garmin_id) < 0;
+  }).sort(function (x, y) { return String(x.date).localeCompare(String(y.date)); });
+
+  var lists = {};
+  function listFor(date) {
+    var y = String(date).slice(0, 4);
+    if (!lists[y]) {
+      lists[y] = {};
+      garminSearch(y + '-01-01', y + '-12-31').forEach(function (j) { lists[y][String(j.activityId)] = j; });
+    }
+    return lists[y];
+  }
+
+  var rows = [], tally = {}, compared = 0, clean = 0, cut = false;
+  pasted.forEach(function (m) {
+    if (cut || Date.now() - started > CMP_BUDGET_MS) { cut = true; return; }
+    var j = listFor(m.date)[String(m.garmin_id)] ||
+            { activityId: m.garmin_id, startTimeLocal: m.date + ' 00:00:00' };
+    var fit = garminFit(String(m.garmin_id));
+    var act = garminActivity(j, fit);
+    if (!act) return;
+    var s = fit.sessions[0] || {};
+    var g = { act: act, alts: {
+      elapsed_s: [{ label: 'elapsed time, pauses included', value: s[7] != null ? Math.round(s[7] / 1000) : null },
+                  { label: 'moving time', value: j.movingDuration != null ? Math.round(j.movingDuration) : null }],
+      ascent_m:  [{ label: 'Connect\u2019s corrected ascent', value: j.elevationGain != null ? Math.round(j.elevationGain) : null }],
+      distance_km: [{ label: 'Connect\u2019s distance', value: j.distance != null ? r2(j.distance / 1000) : null }]
+    } };
+    m.laps = (byAct[m.id] || []).sort(function (x, y) { return x.n - y.n; });
+    var found = compareRun(m, g);
+    compared++;
+    var bad = found.filter(function (f) { return f.verdict !== 'exact'; });
+    if (!bad.length) clean++;
+    found.forEach(function (f) {
+      var t = tally[f.field] = tally[f.field] || { exact: 0, rounding: 0, 'different measure': 0, 'not pasted': 0, misread: 0 };
+      t[f.verdict]++;
+    });
+    bad.forEach(function (f) {
+      rows.push([m.date, m.name, f.field, String(f.mine) + f.unit, String(f.theirs) + f.unit,
+                 f.verdict, f.note]);
+    });
+  });
+
+  var sh = ss.getSheetByName('Gemini check') || ss.insertSheet('Gemini check');
+  sh.clear();
+  var all = 0, misread = 0;
+  var order = ['distance', 'time', 'heart rate', 'cadence', 'ascent', 'GAP', 'temperature',
+               'laps', 'lap distance', 'lap time', 'lap heart rate'];
+  var summary = order.filter(function (k) { return tally[k]; }).map(function (k) {
+    var t = tally[k], n = t.exact + t.rounding + t['different measure'] + t['not pasted'] + t.misread;
+    all += n; misread += t.misread;
+    return [k, n, t.exact, t.rounding, t['different measure'], t['not pasted'], t.misread];
+  });
+  var out = [
+    ['Gemini check', new Date().toISOString(), '', '', '', '', ''],
+    [cut ? 'Stopped early (time limit) \u2014 press Run again for the rest.' :
+      compared + ' pasted runs compared with Garmin\u2019s file. ' + clean + ' matched on every figure.', '', '', '', '', '', ''],
+    ['Real misreads: ' + misread + ' of ' + all + ' figures' +
+      (all ? ' (' + Math.round(misread / all * 1000) / 10 + '%)' : ''), '', '', '', '', '', ''],
+    ['', '', '', '', '', '', ''],
+    ['Figure', 'Compared', 'Exact', 'Rounding', 'Different measure', 'Not pasted', 'Misread']
+  ].concat(summary).concat([['', '', '', '', '', '', ''],
+    ['Date', 'Run', 'Figure', 'Pasted', 'Garmin', 'Verdict', 'Note']]).concat(rows);
+  sh.getRange(1, 1, out.length, 7).setValues(out);
+  Logger.log(out[1][0] + ' ' + out[2][0] + ' See the "Gemini check" tab.');
+  return { compared: compared, clean: clean, misread: misread, figures: all, cut: cut };
+}
