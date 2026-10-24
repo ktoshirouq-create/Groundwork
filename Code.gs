@@ -441,7 +441,7 @@ function garminGet(path, params, raw) {
   var res = UrlFetchApp.fetch(GARMIN_BASE + path + q, {
     muteHttpExceptions: true,
     headers: { 'Authorization': 'Bearer ' + garminToken(),
-               'Accept': raw ? 'application/zip, application/octet-stream' : 'application/json' }
+               'Accept': raw ? 'application/zip, application/x-zip-compressed, application/octet-stream' : 'application/json' }
   });
   var code = res.getResponseCode();
   if (code === 401 || code === 403) {
@@ -566,6 +566,15 @@ function fitDecode(input) {
 var MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function r2(x) { return Math.round(x * 100) / 100; }
 
+/* A name you gave the run in Garmin Connect ("Oslo Marathon") is kept, so
+   races are easy to find and tag. Garmin's automatic names ("Oslo Running",
+   "Treadmill Running") are not — the app's own format reads better. */
+function garminName(n) {
+  n = String(n || '').trim();
+  if (!n || /(^|\s)(trail |treadmill |track |indoor |virtual )?(running|run)$/i.test(n)) return '';
+  return n.slice(0, 80);
+}
+
 function garminActivity(j, fit) {
   var gid = String(j.activityId);
   var date = String(j.startTimeLocal || j.startTimeGMT || '').slice(0, 10);
@@ -588,7 +597,7 @@ function garminActivity(j, fit) {
   return {
     id: 'run-' + date + '-g' + gid,
     type: 'run', date: date,
-    name: 'Run \u00b7 ' + (+date.slice(8)) + ' ' + MON3[+date.slice(5, 7) - 1],
+    name: garminName(j.activityName) || 'Run \u00b7 ' + (+date.slice(8)) + ' ' + MON3[+date.slice(5, 7) - 1],
     source: 'tracked',
     distance_km: dist,
     elapsed_s: timer,
@@ -622,6 +631,54 @@ function isoDay(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(),
 
 /* ------------------------------------------------------------ the import -- */
 
+/* Everything both the hourly check and the history import need to decide,
+   for one activity, whether it is new, already known, or a run you pasted. */
+function garminContext(ash) {
+  var rows = readAll(ash, ACT_COLS);
+  var known = {};
+  rows.forEach(function (r) { if (r.garmin_id) known[String(r.garmin_id)] = true; });
+  (garminProps().getProperty('GARMIN_SKIP') || '').split(',').forEach(function (g) { if (g) known[g] = true; });
+  return { ash: ash, rows: rows, known: known, hm: headerMap(ash), added: 0, linked: 0 };
+}
+
+function garminHandle(j, cx) {
+  var gid = String(j.activityId);
+  if (cx.known[gid]) return 'known';
+  /* match on the list's own figures first — no download for a run you pasted */
+  var probe = { date: String(j.startTimeLocal || '').slice(0, 10),
+                distance_km: j.distance != null ? r2(j.distance / 1000) : null,
+                elapsed_s: j.duration != null ? Math.round(j.duration) : null };
+  var mine = garminMatch(probe, cx.rows);
+  var act = null;
+  if (!mine) {
+    act = garminActivity(j, garminFit(gid));
+    if (!act) {
+      /* the file says it isn't a run: never download it again */
+      garminSkip(gid); cx.known[gid] = true;
+      return 'skip';
+    }
+    mine = garminMatch(act, cx.rows);
+  }
+  if (mine && mine.garmin_id && String(mine.garmin_id) !== gid) {
+    /* the same run uploaded twice to Garmin: keep the first link */
+    garminSkip(gid); cx.known[gid] = true;
+    return 'skip';
+  }
+  if (mine) {
+    /* link only: your figures and timestamps stay as they are */
+    var at = findRowById(cx.ash, 'id', mine.id);
+    if (at > 0) cx.ash.getRange(at, cx.hm.garmin_id + 1).setNumberFormat('@').setValue(gid);
+    mine.garmin_id = gid;
+    cx.linked++;
+  } else {
+    putActivity(act);
+    cx.rows.push(act);
+    cx.added++;
+  }
+  cx.known[gid] = true;
+  return mine ? 'linked' : 'added';
+}
+
 /** Hourly. Also safe to run by hand from the editor. */
 function garminSync() {
   if (!garminProps().getProperty('GARMIN_KEY')) return garminSetStatus({ state: 'off' });
@@ -629,56 +686,72 @@ function garminSync() {
   if (!lock.tryLock(30000)) return garminStatus();
   try {
     var props = garminProps();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var ash = ss.getSheetByName(SHEETS.activities);
+    var ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities);
     addMissingHeaders(ash, ACT_COLS);
-
     var today = new Date();
     var since = props.getProperty('GARMIN_SINCE') ||
       isoDay(new Date(today.getTime() - GARMIN_FIRST_DAYS * 864e5));
     var found = garminSearch(since, isoDay(today)).filter(garminIsRun);
-
-    var rows = readAll(ash, ACT_COLS);
-    var known = {};
-    rows.forEach(function (r) { if (r.garmin_id) known[String(r.garmin_id)] = true; });
-    (props.getProperty('GARMIN_SKIP') || '').split(',').forEach(function (g) { if (g) known[g] = true; });
-
-    var added = 0, linked = 0, hm = headerMap(ash);
-    found.forEach(function (j) {
-      var gid = String(j.activityId);
-      if (known[gid]) return;
-      /* match on the list's own figures first — no download for a run you pasted */
-      var probe = { date: String(j.startTimeLocal || '').slice(0, 10),
-                    distance_km: j.distance != null ? r2(j.distance / 1000) : null,
-                    elapsed_s: j.duration != null ? Math.round(j.duration) : null };
-      var mine = garminMatch(probe, rows);
-      var act = null;
-      if (!mine) {
-        act = garminActivity(j, garminFit(gid));
-        if (!act) return;
-        mine = garminMatch(act, rows);
-      }
-      if (mine) {
-        /* link only: your figures and timestamps stay as they are */
-        var at = findRowById(ash, 'id', mine.id);
-        if (at > 0) ash.getRange(at, hm.garmin_id + 1).setNumberFormat('@').setValue(gid);
-        mine.garmin_id = gid;
-        linked++;
-      } else {
-        putActivity(act);
-        rows.push(act);
-        added++;
-      }
-      known[gid] = true;
-    });
-
+    var cx = garminContext(ash);
+    found.forEach(function (j) { garminHandle(j, cx); });
     props.setProperty('GARMIN_SINCE',
       isoDay(new Date(today.getTime() - GARMIN_OVERLAP_DAYS * 864e5)));
-    return garminSetStatus({ state: 'ok', added: added, linked: linked, seen: found.length });
+    return garminSetStatus({ state: 'ok', added: cx.added, linked: cx.linked, seen: found.length });
   } catch (e) {
     var kind = e instanceof GarminError ? e.kind : 'error';
     return garminSetStatus({ state: kind === 'key' ? 'key' : 'error',
                              message: String(e.message || e) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ------------------------------------------------------- history import --
+
+   Run garminImportHistory() from the editor. It walks every year Garmin can
+   see, oldest first, through the same rules as the hourly check: pasted runs
+   are linked, never overwritten; nothing doubles; deleted runs stay deleted.
+
+   Google stops any run after six minutes, so it stops itself well before
+   that and says how far it got. Press Run again and it carries on — finished
+   years are skipped, and runs already in the sheet are never downloaded
+   twice. When it says "History complete", it's done. */
+
+var HISTORY_FROM_YEAR = 2010;
+var HISTORY_BUDGET_MS = 4.5 * 60 * 1000;
+
+function garminImportHistory() {
+  var started = Date.now();
+  var props = garminProps();
+  if (!props.getProperty('GARMIN_KEY')) throw new Error('Put GARMIN_KEY in Script properties first.');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(60000)) throw new Error('The hourly check is running \u2014 try again in a minute.');
+  try {
+    var ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities);
+    addMissingHeaders(ash, ACT_COLS);
+    var cx = garminContext(ash);
+    var done = (props.getProperty('GARMIN_HISTORY_DONE') || '').split(',').filter(String);
+    var thisYear = new Date().getFullYear();
+    var stoppedAt = null;
+
+    for (var y = HISTORY_FROM_YEAR; y <= thisYear && !stoppedAt; y++) {
+      if (done.indexOf(String(y)) >= 0) continue;
+      var runs = garminSearch(y + '-01-01', y + '-12-31').filter(garminIsRun)
+        .sort(function (a, b) { return String(a.startTimeLocal).localeCompare(String(b.startTimeLocal)); });
+      for (var i = 0; i < runs.length; i++) {
+        if (Date.now() - started > HISTORY_BUDGET_MS) { stoppedAt = y; break; }
+        garminHandle(runs[i], cx);
+      }
+      /* the current year stays open: the hourly check owns it */
+      if (!stoppedAt && y < thisYear) { done.push(String(y)); props.setProperty('GARMIN_HISTORY_DONE', done.join(',')); }
+    }
+
+    var msg = stoppedAt
+      ? 'Stopped in ' + stoppedAt + ' to stay inside Google\u2019s time limit. This run: ' +
+        cx.added + ' added, ' + cx.linked + ' linked. Press Run again to carry on.'
+      : 'History complete. This run: ' + cx.added + ' added, ' + cx.linked + ' linked to runs you had pasted.';
+    Logger.log(msg);
+    return { complete: !stoppedAt, added: cx.added, linked: cx.linked, message: msg };
   } finally {
     lock.releaseLock();
   }

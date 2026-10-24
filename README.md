@@ -792,6 +792,25 @@ per year it can see, whether grade-adjusted pace arrives, and whether the
 `.FIT` file and its laps read correctly. Whether to import 2024–2025 from
 Garmin is decided from that tab, not guessed.
 
+### Importing the history (once)
+
+In the Apps Script editor, choose **garminImportHistory** and press **Run**. It
+walks every year Garmin can see, oldest first, using the same rules as the
+hourly check: pasted runs are linked and never overwritten, nothing doubles,
+and deleted runs stay deleted.
+
+Google stops any script after six minutes, so the import stops itself at about
+four and a half and logs how far it got. **Press Run again until the log says
+"History complete".** Finished years are skipped, and runs already in the
+sheet are never downloaded twice, so running it once too often does nothing.
+The current year is left to the hourly check.
+
+Imported runs are untagged, so tag races and sessions in the app. A run you
+named yourself in Garmin Connect ("Holmenkollstafetten") keeps that name, so
+races are easy to find. Garmin's automatic names ("Oslo Running") are replaced
+by the app's own format. Activities the watch file says aren't runs, and runs
+uploaded to Garmin twice, are skipped for good.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.
