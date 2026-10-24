@@ -927,8 +927,10 @@ of chosen dates when a gap looks wrong.
 
 The **RESTING** screen (home, beside Bests) shows this week's average, the
 change against three months and a year ago (lower is fitter), the lowest and
-highest month, and a chart in three views: every night for 30 days, weekly
-averages for a year, monthly averages for all years. A stretch with no
+highest month, and a chart in three views: **Month** (the default, every
+night of a calendar month), **Year** (weekly averages of a calendar year) and
+**All years** (monthly averages). Month and Year step back and forth with the
+arrows or by swiping the chart. A stretch with no
 readings breaks the line. It's context only and moves nothing.
 
 ## The year's pictures
@@ -969,6 +971,20 @@ written at import for new runs and copied from the HR check tab once by
 
 Separate zones for 2017–18 were considered and dropped: Garmin only gives
 today's watch zones, and the 2017 heart rate was mostly genuine, just higher.
+
+## Chart lines are revealed by a wipe
+
+Lines used to draw in with a dash of fixed length (400px). Any line longer than
+that on screen, such as a zig-zagging month of resting HR, stopped partway and
+looked like missing data. They now appear with a left-to-right wipe, which
+doesn't depend on the line's length, and a point that can't be placed is
+skipped rather than ending the line.
+
+## No add button
+
+Runs arrive from Garmin, so the floating + is gone. For the odd run Garmin
+doesn't have, **Paste a run by hand** in Setup opens the paste screen. The run
+screen no longer labels where a run came from.
 
 ## Settings that matter
 

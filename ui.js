@@ -1134,10 +1134,24 @@
      Garmin's daily resting HR as context. It moves nothing: zones come from
      the watch. Pure presentation of Calc.restingModel. */
 
-  let restingView = 'year';
+  let restingView = 'month', restingKey = null;
+  const MONTH_NAMES = ['January','February','March','April','May','June',
+                       'July','August','September','October','November','December'];
+
+  /* one step back or forward through months or years */
+  function restingStep(dir) {
+    const m = Calc.restingModel(Store.resting(), restingView, today(), restingKey);
+    const P = m.period;
+    if (!P || (dir < 0 && !P.hasPrev) || (dir > 0 && !P.hasNext)) return;
+    if (restingView === 'month') {
+      const d = new Date(Date.UTC(+P.key.slice(0, 4), +P.key.slice(5, 7) - 1 + dir, 1));
+      restingKey = d.toISOString().slice(0, 7);
+    } else restingKey = String(+P.key + dir);
+    renderResting();
+  }
 
   function renderResting() {
-    const m = Calc.restingModel(Store.resting(), restingView, today());
+    const m = Calc.restingModel(Store.resting(), restingView, today(), restingKey);
     let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Resting HR</div>' +
       '<div class="sub">' + (m.count ? m.count + ' NIGHTS \u00b7 FROM ' + fmtDate(m.first).toUpperCase() : 'NO DATA YET') + '</div>';
     if (!m.count) {
@@ -1160,30 +1174,56 @@
       if (m.highestMonth && m.highestMonth.month !== (m.lowestMonth || {}).month) h += cmp('Highest month',
         bpm(m.highestMonth.bpm) + ' bpm', MON[+m.highestMonth.month.slice(5) - 1] + ' ' + m.highestMonth.month.slice(0, 4));
 
-      h += '<div class="bar" id="r-view">' + [['30d', '30 days'], ['year', 'Year'], ['all', 'All years']].map(v =>
+      h += '<div class="bar" id="r-view">' + [['month', 'Month'], ['year', 'Year'], ['all', 'All years']].map(v =>
         '<button class="chip" type="button" data-rv="' + v[0] + '" aria-pressed="' + (v[0] === restingView) + '">' +
         v[1] + '</button>').join('') + '</div>';
+
+      const P = m.period;
+      if (P) {
+        const label = restingView === 'month' ? MONTH_NAMES[+P.key.slice(5, 7) - 1] + ' ' + P.key.slice(0, 4) : P.key;
+        h += '<div class="rnav"><button type="button" class="rstep" data-step="-1"' + (P.hasPrev ? '' : ' disabled') +
+          ' aria-label="Earlier">\u2039</button><div class="rlab"><b>' + label + '</b><span>' +
+          (P.nights ? P.nights + ' night' + (P.nights === 1 ? '' : 's') + ' \u00b7 average ' + bpm(P.avg) + ' bpm' : 'no nights') +
+          '</span></div><button type="button" class="rstep" data-step="1"' + (P.hasNext ? '' : ' disabled') +
+          ' aria-label="Later">\u203a</button></div>';
+      }
       const chart = m.shown ? lineChart(m.segments, {
-        uniform: true, height: 150,
+        uniform: true, height: 150, from: P ? P.from : undefined, to: P ? P.to : undefined,
         format: v => bpm(v), anchorLabels: ['highest', 'lowest'],
-        label: 'Resting heart rate, ' + (restingView === '30d' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
-        xax: [fmtDate(m.segments[0][0].date).toUpperCase(), '',
-              fmtDate(m.segments[m.segments.length - 1].slice(-1)[0].date).toUpperCase()]
+        label: 'Resting heart rate, ' + (restingView === 'month' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
+        xax: P ? [fmtDate(P.from).toUpperCase(), '', fmtDate(P.to).toUpperCase()]
+               : [fmtDate(m.segments[0][0].date).toUpperCase(), '', fmtDate(m.segments[m.segments.length - 1].slice(-1)[0].date).toUpperCase()]
       }) : null;
-      h += chart || '<div class="est">No nights in this range.</div>';
+      h += '<div id="r-chart">' + (chart || '<div class="est rnone">No nights in this ' + (restingView === 'month' ? 'month' : 'year') + '.</div>') + '</div>';
+      h += '<div class="est">' + (restingView === 'month' ? 'Every night.' : restingView === 'year'
+        ? 'Each point is a week\u2019s average, so one bad night doesn\u2019t spike the line.'
+        : 'Each point is a month\u2019s average.') +
+        (P ? ' Swipe the chart, or use the arrows, for ' + (restingView === 'month' ? 'other months.' : 'other years.') : '') +
+        ' A break is a stretch with no readings. Context only \u2014 your zones come from your watch.</div>';
       if (m.bad) h += '<div class="flag"><i>!</i><div>' + m.bad + ' night' + (m.bad === 1 ? '' : 's') +
         ' couldn\u2019t be read and ' + (m.bad === 1 ? 'is' : 'are') + ' left out (for example \u201c' +
         esc(String(m.badSample).slice(0, 40)) + '\u201d). Send me this line.</div></div>';
-      h += '<div class="est">' + (restingView === '30d' ? 'Every night.' : restingView === 'year'
-        ? 'Each point is a week\u2019s average, so one bad night doesn\u2019t spike the line.'
-        : 'Each point is a month\u2019s average.') +
-        ' A break is a stretch with no readings. Context only \u2014 your zones come from your watch.</div>';
     }
     el('view-resting').innerHTML = h;
     $('#view-resting [data-back]').onclick = () => go('home');
     document.querySelectorAll('#r-view [data-rv]').forEach(b => {
-      b.onclick = () => { restingView = b.dataset.rv; renderResting(); };
+      b.onclick = () => { restingView = b.dataset.rv; restingKey = null; renderResting(); };
     });
+    document.querySelectorAll('#view-resting [data-step]').forEach(b => {
+      b.onclick = () => restingStep(+b.dataset.step);
+    });
+    /* swipe: right for earlier, left for later, like turning pages back */
+    const area = el('r-chart');
+    if (area && m.period) {
+      let x0 = null, y0 = null;
+      area.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+      area.addEventListener('touchend', e => {
+        if (x0 == null) return;
+        const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+        x0 = null;
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) restingStep(dx > 0 ? -1 : 1);
+      }, { passive: true });
+    }
   }
 
   /* -------------------------------------------------------------- bests ---
@@ -1279,7 +1319,6 @@
     h += '<div class="ttl">' + esc(a.name) + '</div>';
     const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase()];
     if (a.session) sub.push(Calc.sessionLabel(a.session).toUpperCase());
-    sub.push(a.source.toUpperCase());
     if (Calc.isTrail(a)) sub.push('TRAIL');
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
@@ -1612,6 +1651,9 @@
     }
 
     h += garminHTML(sy);
+    /* Runs arrive from Garmin, so there's no add button any more. For the odd
+       run Garmin doesn't have, pasting still works from here. */
+    h += '<button class="btn ghost" id="s-paste">Paste a run by hand</button>';
 
     /* whether the browser has actually promised to keep the data */
     h += '<div class="sec"><span>Storage</span><span id="persist-state">checking</span></div>';
@@ -1681,6 +1723,9 @@
         else toast('Connected and in sync', 'ok');
       });
     });
+    const paste = el('s-paste');
+    if (paste) paste.onclick = () => go('import');
+
     once(el('s-push'), 'Pushing\u2026', () =>
       Store.pushAll().then(count => {
         renderSettings();
@@ -1987,7 +2032,6 @@
 
   function render(view, param) {
     VIEWS.forEach(v => { el('view-' + v).hidden = (v !== view); });
-    el('fab').hidden = (view !== 'home' && view !== 'detail');
     window.scrollTo(0, 0);
     try {
       if (view === 'home') renderHome();
@@ -2032,26 +2076,6 @@
     render(s.view, s.param);
     popping = false;
   });
-
-  el('fab').onclick = () => go('import');
-
-  /* The add button floats over whatever row happens to be beneath it. Tuck it
-     away while you're scrolling down through content, bring it back the moment
-     you stop or scroll up. */
-  (function () {
-    const fab = el('fab');
-    let last = 0, idle = null;
-    window.addEventListener('scroll', function () {
-      const y = window.scrollY || 0;
-      const down = y > last + 4;
-      const up = y < last - 4;
-      if (down) fab.classList.add('tucked');
-      else if (up) fab.classList.remove('tucked');
-      last = y;
-      clearTimeout(idle);
-      idle = setTimeout(() => fab.classList.remove('tucked'), 550);
-    }, { passive: true });
-  })();
 
   /* Android evicts localStorage from sites that aren't installed. Asking for
      persistence is usually granted once the app is on the home screen, and it

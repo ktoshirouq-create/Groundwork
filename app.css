@@ -61,25 +61,6 @@ body {
 }
 .view[hidden] { display: none; }
 
-/* ---------- add button ---------- */
-
-#fab {
-  position: fixed; right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom));
-  width: 50px; height: 50px; border-radius: 50%;
-  background: var(--z2); color: #0B1113; border: none;
-  font-size: var(--t-title); font-weight: 600; line-height: 1; cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0,0,0,.45); z-index: 15;
-  transition: transform .22s cubic-bezier(.22,1,.36,1), opacity .22s;
-}
-/* out of the way while you read, back the instant you stop */
-#fab.tucked { transform: translateY(96px); opacity: 0; }
-@media (prefers-reduced-motion: reduce) {
-  #fab { transition: opacity .12s; }
-  #fab.tucked { transform: none; opacity: .25; }
-}
-#fab[hidden] { display: none; }
-
 /* ---------- header ---------- */
 
 .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -452,15 +433,16 @@ label > span {
 /* ---------- motion: once, on load, and never in the way ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  .cplot polyline.draw {
-    stroke-dasharray: 400; stroke-dashoffset: 400;
-    animation: gw-draw 1.1s cubic-bezier(.22, 1, .36, 1) forwards;
-  }
+  /* Revealed left to right by a wipe, not drawn with a dash. A dash of fixed
+     length (it was 400px) cut any line longer than that: a busy month of
+     resting HR stopped a third of the way across and looked like missing
+     nights. A wipe doesn't care how long the line is. */
+  .cplot svg { animation: gw-wipe 1.1s cubic-bezier(.22, 1, .36, 1) both; }
   .cplot circle.tip { animation: gw-pop .4s .85s cubic-bezier(.16, 1, .3, 1) both; }
   .track .dot { animation: gw-slide .6s cubic-bezier(.22, 1, .36, 1) both; }
   .hnum { animation: gw-fade .45s cubic-bezier(.22, 1, .36, 1) both; }
 }
-@keyframes gw-draw  { to { stroke-dashoffset: 0; } }
+@keyframes gw-wipe  { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 @keyframes gw-pop   { from { transform: scale(0); transform-origin: center; opacity: 0; }
                       to { transform: scale(1); opacity: 1; } }
 @keyframes gw-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
@@ -768,3 +750,13 @@ label > span {
 .sd.prev { background: var(--mute); opacity: .55; }
 .sya { position: relative; width: 38px; flex: none; font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); }
 .sya span { position: absolute; right: 0; }
+
+.rnav { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 2px; }
+.rlab { text-align: center; }
+.rlab b { display: block; font-weight: 500; color: var(--ink); }
+.rlab span { font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); }
+.rstep { background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 999px;
+         width: 36px; height: 36px; font-size: var(--t-strong); cursor: pointer; }
+.rstep:disabled { opacity: .25; cursor: default; }
+#r-chart { touch-action: pan-y; }
+.rnone { padding: 40px 0; text-align: center; }

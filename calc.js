@@ -1896,12 +1896,10 @@
      each averaging enough nights that one bad night doesn't spike the line:
      every night for 30 days, weekly averages for a year, monthly for all. */
 
-  const RESTING_VIEWS = ['30d', 'year', 'all'];
-
   /* A night's date, however it arrived: a 'YYYY-MM-DD' string (possibly with
      stray characters around it), a full ISO timestamp, or something a
      spreadsheet turned into a date. Anything that can't be read is counted,
-     never drawn: one malformed date used to end the chart line where it sat. */
+     never drawn. */
   function nightDate(v) {
     if (v == null) return null;
     const s = String(v).replace(/[^0-9T:.\-Z+]/g, '');
@@ -1914,7 +1912,12 @@
     return isNaN(t.getTime()) ? null : t.toISOString().slice(0, 10);
   }
 
-  function restingModel(days, view, today) {
+  /* Month (every night, a calendar month at a time) is the default; Year is a
+     calendar year of weekly averages; All is every year, monthly. Month and
+     Year step back and forth through time by `key`. */
+  const RESTING_VIEWS = ['month', 'year', 'all'];
+
+  function restingModel(days, view, today, key) {
     let bad = 0, badSample = null;
     const seen = {};
     (days || []).forEach(x => {
@@ -1929,18 +1932,25 @@
     const back = n => { const x = new Date(t + 'T12:00:00'); x.setDate(x.getDate() - n); return x.toISOString().slice(0, 10); };
     const mean = arr => arr.length ? Math.round(arr.reduce((a, x) => a + x.bpm, 0) / arr.length * 10) / 10 : null;
 
-    let pts = [], gapDays;
-    if (view === '30d') {
-      pts = d.filter(x => x.date > back(30)).map(x => ({ date: x.date, value: x.bpm }));
+    let pts = [], gapDays, from = null, to = null, k = null;
+    if (view === 'month') {
+      k = /^\d{4}-\d\d$/.test(key || '') ? key : t.slice(0, 7);
+      from = k + '-01';
+      to = new Date(Date.UTC(+k.slice(0, 4), +k.slice(5, 7), 0)).toISOString().slice(0, 10);
+      pts = d.filter(x => x.date >= from && x.date <= to).map(x => ({ date: x.date, value: x.bpm }));
       gapDays = 3;
-    } else {
-      const keyOf = view === 'year' ? (x => weekStart(x.date)) : (x => x.date.slice(0, 7) + '-15');
-      const src = view === 'year' ? d.filter(x => x.date > back(365)) : d;
+    } else if (view === 'year') {
+      k = /^\d{4}$/.test(key || '') ? key : t.slice(0, 4);
+      from = k + '-01-01'; to = k + '-12-31';
       const g = {};
-      src.forEach(x => { (g[keyOf(x)] = g[keyOf(x)] || []).push(x); });
-      pts = Object.keys(g).sort().filter(k => g[k].length >= (view === 'year' ? 3 : 7))
-        .map(k => ({ date: k, value: mean(g[k]), n: g[k].length }));
-      gapDays = view === 'year' ? 15 : 62;
+      d.filter(x => x.date >= from && x.date <= to).forEach(x => { (g[weekStart(x.date)] = g[weekStart(x.date)] || []).push(x); });
+      pts = Object.keys(g).sort().filter(w => g[w].length >= 3).map(w => ({ date: w, value: mean(g[w]), n: g[w].length }));
+      gapDays = 15;
+    } else {
+      const g = {};
+      d.forEach(x => { const m = x.date.slice(0, 7) + '-15'; (g[m] = g[m] || []).push(x); });
+      pts = Object.keys(g).sort().filter(m => g[m].length >= 7).map(m => ({ date: m, value: mean(g[m]), n: g[m].length }));
+      gapDays = 62;
     }
     /* a gap in the record breaks the line rather than drawing across it */
     const segments = [];
@@ -1948,6 +1958,9 @@
       if (i && daysBetween(pts[i - 1].date, p.date) <= gapDays) segments[segments.length - 1].push(p);
       else segments.push([p]);
     });
+    const inRange = from ? d.filter(x => x.date >= from && x.date <= to) : d;
+    const period = from ? { key: k, from: from, to: to, nights: inRange.length, avg: mean(inRange),
+      hasPrev: d[0].date < from, hasNext: to < t } : null;
 
     const now = mean(d.filter(x => x.date > back(7)));
     const at = n => { const end = back(n); const w = d.filter(x => x.date > back(n + 7) && x.date <= end); return w.length >= 3 ? mean(w) : null; };
@@ -1956,7 +1969,7 @@
     const full = Object.keys(months).filter(k => months[k].length >= 10)
       .map(k => ({ month: k, bpm: mean(months[k]) })).sort((a, b) => a.bpm - b.bpm);
     return {
-      bad: bad, badSample: badSample,
+      bad: bad, badSample: badSample, period: period,
       count: d.length, first: d[0].date, last: d[d.length - 1].date, view: view,
       segments: segments, shown: pts.length,
       now: now, ago3m: at(91), ago1y: at(365),
