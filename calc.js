@@ -1525,6 +1525,9 @@
       gap: r.gap_pace_s != null ? r.gap_pace_s : null,
       halves: halves(r.laps),
       drift: driftOf(r),
+      /* pace and heart rate kilometre by kilometre: the race as a story */
+      splits: fullLaps(r.laps).filter(l => l.time_s && l.distance_km)
+        .map((l, i) => ({ km: i + 1, pace: l.time_s / l.distance_km, hr: l.avg_hr != null ? l.avg_hr : null })),
       build: raceBuild(r, runs)
     }));
 
@@ -1609,8 +1612,12 @@
       };
     })();
 
+    /* ---- a year's pictures: only for a year ---- */
+    const pictures = scope === 'year' ? yearPictures(runs, c, key) : null;
+
     return {
       mode: 'review',
+      pictures: pictures,
       period: { key: key, scope: scope, label: label, word: word,
                 isCurrent: false, start: start, end: end },
       runs: inP,
@@ -1637,6 +1644,43 @@
       ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
       gapBefore: emptyRunBefore(runs, scope, key)
     };
+  }
+
+  /* The year review's charts, all from logged runs. Pace against heart rate
+     uses only aerobic measurements (no races, no trail): a race or a
+     technical trail would sit off the cloud for reasons that aren't fitness. */
+  function yearPictures(runs, c, key) {
+    const prevKey = String(+key - 1);
+    const runPace = a => a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
+    const dots = y => runs.filter(a => a.date.slice(0, 4) === y && isAerobicMeasure(a) && a.avg_hr != null)
+      .map(a => ({ id: a.id, date: a.date, hr: a.avg_hr, pace: runPace(a) })).filter(p => p.pace > 0);
+
+    /* cumulative km, every year on one January-to-December axis */
+    const years = Array.from(new Set(runs.map(a => a.date.slice(0, 4)))).sort();
+    const cumulative = years.map(y => {
+      let sum = 0;
+      const pts = runs.filter(a => a.date.slice(0, 4) === y).sort((a, b) => a.date.localeCompare(b.date))
+        .map(a => { sum += a.distance_km || 0; return { date: '2000' + a.date.slice(4), value: Math.round(sum * 10) / 10 }; });
+      return { year: y, points: pts, total: Math.round(sum) };
+    }).filter(y => y.points.length);
+
+    /* every day of the year: a dot per run, sized by distance */
+    const days = {};
+    runs.filter(a => a.date.slice(0, 4) === key).forEach(a => {
+      const d = days[a.date] = days[a.date] || { km: 0, race: false, id: a.id };
+      d.km += a.distance_km || 0;
+      if (isRace(a)) d.race = true;
+    });
+
+    /* aerobic pace, the median of each year's measurements, every year */
+    const aerobicByYear = years.map(y => {
+      const v = runs.filter(a => a.date.slice(0, 4) === y && isAerobicMeasure(a) && a.avg_hr != null)
+        .map(a => aerobicPace(a, c)).filter(x => x != null);
+      return v.length >= 3 ? { year: y, value: median(v), n: v.length } : null;
+    }).filter(Boolean);
+
+    return { year: key, scatter: { now: dots(key), prev: dots(prevKey), prevYear: prevKey },
+             cumulative: cumulative, days: days, aerobicByYear: aerobicByYear };
   }
 
   /* ---------- what counts as a measurement of aerobic fitness ----------

@@ -602,7 +602,9 @@ function fitDecode(input) {
     if (d.gnum === 18) out.sessions.push(rec);
     if (d.gnum === 19) out.laps.push(rec);
     if (d.gnum === 20 && rec[253] != null)
-      out.records.push({ t: rec[253], d: rec[5] != null ? rec[5] / 100 : null, hr: rec[3] != null ? rec[3] : null });
+      out.records.push({ t: rec[253], d: rec[5] != null ? rec[5] / 100 : null, hr: rec[3] != null ? rec[3] : null,
+        /* cadence: strides a minute in the file, steps a minute here */
+        spm: rec[4] != null ? Math.round((rec[4] + (rec[53] || 0) / 128) * 2) : null });
     return at;
   }
   return out;
@@ -1406,4 +1408,87 @@ function garminEnrich() {
   } finally {
     lock.releaseLock();
   }
+}
+
+
+/* ============================================================== HR check ===
+
+   Run garminHrCheck() from the editor. Read-only: it writes an "HR check" tab
+   and changes nothing else — not your runs, not the app.
+
+   Wrist sensors of the Forerunner 235's era could lock onto the rhythm of your
+   stride and report your cadence as your heart rate. For every run with a
+   watch file it measures how much of the running time had heart rate within
+   3 beats of cadence (or of half cadence), and lists runs worst first, with a
+   year-by-year summary on top. What to do with locked runs is decided after
+   seeing it. Stops before Google's time limit; press Run until it says done. */
+
+var LOCK_BPM = 3;
+
+/* Pure: share of running seconds where HR followed cadence. */
+function lockOf(records) {
+  var r = (records || []).filter(function (x) { return x.t != null; });
+  var both = 0, locked = 0, hrSum = 0, spmSum = 0;
+  for (var i = 1; i < r.length; i++) {
+    var dt = r[i].t - r[i - 1].t, x = r[i];
+    if (!(dt > 0 && dt <= PAUSE_S) || x.hr == null || !(x.spm > 100)) continue;
+    both += dt; hrSum += x.hr * dt; spmSum += x.spm * dt;
+    if (Math.abs(x.hr - x.spm) <= LOCK_BPM || Math.abs(x.hr - x.spm / 2) <= LOCK_BPM) locked += dt;
+  }
+  if (both < 120) return null;
+  return { share: locked / both, hr: Math.round(hrSum / both), spm: Math.round(spmSum / both), seconds: both };
+}
+
+function garminHrCheck() {
+  var started = Date.now(), props = garminProps();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var acts = readAll(ss.getSheetByName(SHEETS.activities), ACT_COLS)
+    .filter(function (a) { return a.garmin_id; })
+    .sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+  var done = {};
+  try { done = JSON.parse(props.getProperty('HR_CHECK') || '{}'); } catch (e) {}
+  var cut = false;
+  for (var i = 0; i < acts.length; i++) {
+    var a = acts[i];
+    if (done[a.id]) continue;
+    if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
+    var L = null;
+    try { L = lockOf(garminFit(String(a.garmin_id)).records); }
+    catch (e) { if (e && e.kind === 'key') throw e; }
+    /* kept small: Script properties hold 9 KB a value */
+    done[a.id] = L ? [Math.round(L.share * 100), L.hr, L.spm] : [null];
+    props.setProperty('HR_CHECK', JSON.stringify(done));
+  }
+
+  var byId = {};
+  acts.forEach(function (a) { byId[a.id] = a; });
+  var rows = Object.keys(done).filter(function (k) { return byId[k]; }).map(function (k) {
+    var v = done[k];
+    return [byId[k].date, byId[k].name, v[0], v[1] == null ? null : v[1], v[2] == null ? null : v[2]];
+  });
+  var years = {};
+  rows.forEach(function (r) {
+    if (r[2] == null) return;
+    var y = String(r[0]).slice(0, 4), Y = years[y] = years[y] || { n: 0, over30: 0, sum: 0 };
+    Y.n++; Y.sum += r[2]; if (r[2] >= 30) Y.over30++;
+  });
+  var sh = ss.getSheetByName('HR check') || ss.insertSheet('HR check');
+  sh.clear();
+  var out = [['HR check', new Date().toISOString(), '', '', ''],
+    [cut ? 'Not finished \u2014 press Run again.' : rows.length + ' runs checked. Locked = heart rate within ' + LOCK_BPM +
+      ' beats of cadence (or half cadence).', '', '', '', ''], ['', '', '', '', ''],
+    ['Year', 'Runs', 'Average locked share', 'Runs 30%+ locked', '']];
+  Object.keys(years).sort().forEach(function (y) {
+    var Y = years[y];
+    out.push([y, Y.n, Math.round(Y.sum / Y.n) + '%', Y.over30, '']);
+  });
+  out.push(['', '', '', '', ''], ['Date', 'Run', 'Locked share', 'Avg HR', 'Avg cadence']);
+  rows.sort(function (a, b) { return (b[2] == null ? -1 : b[2]) - (a[2] == null ? -1 : a[2]); })
+    .forEach(function (r) { out.push([r[0], r[1], r[2] == null ? 'no HR or cadence' : r[2] + '%', r[3] == null ? '' : r[3], r[4] == null ? '' : r[4]]); });
+  sh.getRange(1, 1, out.length, 5).setValues(out);
+  if (!cut) props.deleteProperty('HR_CHECK');
+  var msg = cut ? 'HR check: ' + rows.length + ' of ' + acts.length + ' runs so far. Press Run again.'
+                : 'HR check complete: ' + rows.length + ' runs. See the "HR check" tab.';
+  Logger.log(msg);
+  return { complete: !cut, checked: rows.length, years: years, message: msg };
 }

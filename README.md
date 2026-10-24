@@ -926,6 +926,34 @@ highest month, and a chart in three views: every night for 30 days, weekly
 averages for a year, monthly averages for all years. A stretch with no
 readings breaks the line. It's context only and moves nothing.
 
+## The year's pictures
+
+A past year's review also draws, from logged runs only:
+
+- **Each race kilometre by kilometre**: pace above, heart rate below, on the
+  same kilometres, so where one gave way you can see what the other did.
+- **The year at a glance**: twelve rows of days, a dot per run sized by
+  distance, a ring for a race. Tap a dot for the run.
+- **Against your other years**: kilometres accumulated through the year,
+  every year on one January-to-December axis, this year in colour.
+- **Pace against heart rate**: a dot per run, last year in grey behind. A
+  cloud sitting higher at the same heart rate is a fitter year. Races and
+  trail runs are left out (`isAerobicMeasure`).
+- **Aerobic pace by year**: the median of each year's measurements, every
+  year with at least three, gaps breaking the line.
+
+Charts with too little behind them are absent, not drawn from one or two
+runs. Colour still means zone or "this year" only.
+
+## HR check (read-only)
+
+`garminHrCheck()` reads every run's watch file and measures how much of the
+running time had heart rate within 3 beats of cadence (or half cadence),
+the signature of a wrist sensor locked onto your stride, which was common on
+the Forerunner 235. It writes an **HR check** tab, year-by-year summary on
+top and runs worst first, and changes nothing else. What to do with locked
+runs is decided after reading it.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.

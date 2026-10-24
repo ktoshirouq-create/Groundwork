@@ -825,7 +825,25 @@
       ? plural(B.count, 'run') + ' \u00b7 ' + B.distance_km.toFixed(1) + ' km' : 'nothing logged',
       B.count ? 'longest ' + B.longest.distance_km.toFixed(1) + ' km, ' +
         (B.longestWeeksOut <= 1 ? 'race week' : B.longestWeeksOut + ' weeks out') : '');
+    h += splitsHTML(R.splits);
     return h;
+  }
+
+  /* A race kilometre by kilometre: pace above, heart rate below, on the same
+     kilometres, so where one gave way you can see what the other did. The
+     chart component takes dates, so each kilometre is handed over as a day. */
+  function splitsHTML(S) {
+    if (!S || S.length < 4) return '';
+    const day = i => { const d = new Date(Date.UTC(2000, 0, 1 + i)); return d.toISOString().slice(0, 10); };
+    const pace = lineChart([S.map((k, i) => ({ date: day(i), value: k.pace }))], {
+      invert: true, uniform: true, height: 90, format: v => Calc.fmtPace(v), anchorLabels: ['fastest', 'slowest'],
+      label: 'Pace each kilometre. Faster is higher.', xax: ['KM 1', '', 'KM ' + S.length] });
+    const withHr = S.filter(k => k.hr != null);
+    const hr = withHr.length >= 4 ? lineChart([S.map((k, i) => ({ date: day(i), value: k.hr })).filter(p => p.value != null)], {
+      uniform: true, height: 70, format: v => Math.round(v) + '', anchorLabels: ['bpm', 'bpm'],
+      label: 'Heart rate each kilometre.', from: day(0), to: day(S.length - 1), xax: ['KM 1', '', 'KM ' + S.length] }) : '';
+    return '<div class="pl2">Pace each kilometre</div>' + (pace || '') +
+      (hr ? '<div class="pl2">Heart rate each kilometre</div>' + hr : '');
   }
 
   function monthsHTML(M) {
@@ -868,6 +886,84 @@
     return h;
   }
 
+  /* ------------------------------------------------- the year's pictures */
+
+  function calendarHTML(P) {
+    const keys = Object.keys(P.days);
+    if (keys.length < 2) return '';
+    const max = Math.max.apply(null, keys.map(k => P.days[k].km).concat([1]));
+    let h = '<div class="sec"><span>The year at a glance</span><span>a dot a run</span></div><div class="cal">';
+    for (let m = 0; m < 12; m++) {
+      const n = new Date(Date.UTC(+P.year, m + 1, 0)).getUTCDate();
+      h += '<div class="crow"><span class="cm">' + MON[m][0] + '</span>';
+      for (let d = 1; d <= 31; d++) {
+        const k = P.year + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const r = d <= n ? P.days[k] : null;
+        h += d > n ? '<i class="cd off"></i>' : !r ? '<i class="cd"></i>'
+          : '<i class="cd run' + (r.race ? ' race' : '') + '" data-id="' + esc(r.id) + '" title="' + r.km.toFixed(1) +
+            ' km"><b style="width:' + Math.round(4 + 6 * Math.sqrt(r.km / max)) + 'px;height:' +
+            Math.round(4 + 6 * Math.sqrt(r.km / max)) + 'px"></b></i>';
+      }
+      h += '</div>';
+    }
+    return h + '</div><div class="est">Bigger is longer. A ring is a race. Tap a dot for the run.</div>';
+  }
+
+  function cumulativeHTML(P) {
+    if (P.cumulative.length < 2) return '';
+    const mine = P.cumulative.find(y => y.year === P.year);
+    if (!mine) return '';
+    /* this year drawn last, so the chart gives it the colour */
+    const order = P.cumulative.filter(y => y.year !== P.year).concat([mine]);
+    const chart = lineChart(order.map(y => y.points), {
+      height: 140, from: '2000-01-01', to: '2000-12-31', format: v => Math.round(v) + '',
+      anchorLabels: ['km', 'km'], label: 'Kilometres through the year, every year.',
+      xax: ['JAN', 'JUL', 'DEC'] });
+    return '<div class="sec"><span>Against your other years</span><span>km through the year</span></div>' + (chart || '') +
+      '<div class="mix">' + P.cumulative.map(y => '<span' + (y.year === P.year ? ' class="top"' : '') + '>' +
+        esc(y.year) + ' <b>' + y.total + ' km</b></span>').join('') + '</div>' +
+      '<div class="est">' + esc(P.year) + ' in colour, the rest in grey, all on one January-to-December line.</div>';
+  }
+
+  function scatterHTML(P) {
+    const S = P.scatter;
+    if (S.now.length < 3) return '';
+    const all = S.now.concat(S.prev);
+    const hrLo = Math.min.apply(null, all.map(p => p.hr)) - 2, hrHi = Math.max.apply(null, all.map(p => p.hr)) + 2;
+    const pLo = Math.min.apply(null, all.map(p => p.pace)), pHi = Math.max.apply(null, all.map(p => p.pace));
+    const pad = (pHi - pLo) * 0.08 || 10;
+    const x = hr => ((hr - hrLo) / (hrHi - hrLo) * 100).toFixed(2);
+    const y = pace => ((pace - (pLo - pad)) / (pHi - pLo + 2 * pad) * 100).toFixed(2);    // faster is higher
+    const dot = (p, cls) => '<i class="sd ' + cls + '" data-id="' + esc(p.id) + '" style="left:' + x(p.hr) + '%;top:' + y(p.pace) + '%"></i>';
+    return '<div class="sec"><span>Pace against heart rate</span><span>' + esc(P.year) +
+      (S.prev.length ? ' over ' + esc(S.prevYear) : '') + '</span></div>' +
+      '<div class="scat"><div class="splot">' + S.prev.map(p => dot(p, 'prev')).join('') + S.now.map(p => dot(p, 'now')).join('') +
+      '</div><div class="sya"><span style="top:0">' + Calc.fmtPace(pLo) + '</span><span style="bottom:0">' + Calc.fmtPace(pHi) + '</span></div></div>' +
+      '<div class="xax"><span>' + Math.round(hrLo) + ' BPM</span><span></span><span>' + Math.round(hrHi) + ' BPM</span></div>' +
+      '<div class="est">Each dot is a run: heart rate across, pace up (faster is higher). ' +
+      (S.prev.length ? esc(S.prevYear) + ' in grey behind. A cloud that sits higher at the same heart rate is a fitter year. ' : '') +
+      'Races and trail runs left out.</div>';
+  }
+
+  function aerobicYearsHTML(P) {
+    const A = P.aerobicByYear;
+    if (A.length < 2) return '';
+    const segs = [];
+    A.forEach((a, i) => {
+      const pt = { date: a.year + '-07-01', value: a.value };
+      if (i && +a.year - +A[i - 1].year === 1) segs[segs.length - 1].push(pt); else segs.push([pt]);
+    });
+    const chart = lineChart(segs, { invert: true, uniform: true, height: 100, from: A[0].year + '-01-01',
+      to: A[A.length - 1].year + '-12-31', format: v => Calc.fmtPace(v), anchorLabels: ['best', 'slowest'],
+      label: 'Aerobic pace, the middle of each year.', xax: [A[0].year, '', A[A.length - 1].year] });
+    const me = A.find(a => a.year === P.year);
+    return '<div class="sec"><span>Aerobic pace by year</span><span>every year</span></div>' + (chart || '') +
+      '<div class="mix">' + A.map(a => '<span' + (a.year === P.year ? ' class="top"' : '') + '>' + esc(a.year) +
+        ' <b>' + Calc.fmtPace(a.value) + '</b></span>').join('') + '</div>' +
+      '<div class="est">The middle value of each year\u2019s aerobic pace' + (me ? '' : ' (' + esc(P.year) + ' had too few runs with heart rate)') +
+      '. Faster is higher; a break is a year without enough runs.</div>';
+  }
+
   function reviewHTML(m, bounds) {
     if (!m.count) return '';
     const s = m.summary, P = m.previous;
@@ -898,6 +994,7 @@
     h += '</div>';
 
     h += monthsHTML(m.months);
+    if (m.pictures) h += calendarHTML(m.pictures) + cumulativeHTML(m.pictures);
     h += bestsHTML(m.bests, m.period.word);
 
     if (m.mix) {
@@ -921,6 +1018,7 @@
         leftOutText(m.leftOut) +
         '. ' + plural(T.shown, 'run') + (T.days >= 2 ? ' over ' + T.days + ' days' : '') + '.</div>';
     }
+    if (m.pictures) h += scatterHTML(m.pictures) + aerobicYearsHTML(m.pictures);
     return h;
   }
 

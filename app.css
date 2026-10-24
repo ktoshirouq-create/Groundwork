@@ -746,3 +746,25 @@ label > span {
 .hero1 .big { font-family: var(--f-display); font-size: var(--t-display); font-weight: 700; color: var(--ink); line-height: 1; }
 .hero1 .big s { text-decoration: none; font-size: var(--t-label); color: var(--mute); margin-left: 4px; }
 #r-view { margin: 14px 0 8px; }
+
+/* ---------- the year's pictures ---------- */
+
+.pl2 { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .12em; text-transform: uppercase;
+       color: var(--dim); margin: 10px 0 2px; }
+.cal { display: flex; flex-direction: column; gap: 3px; margin: 6px 0 4px; }
+.crow { display: flex; align-items: center; gap: 1px; }
+.crow .cm { width: 12px; flex: none; font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim); }
+.cd { flex: 1; height: 11px; display: flex; align-items: center; justify-content: center; border-radius: 2px;
+      background: color-mix(in srgb, var(--line) 35%, transparent); }
+.cd.off { background: none; }
+.cd.run { cursor: pointer; background: none; }
+.cd.run b { display: block; border-radius: 50%; background: var(--mute); }
+.cd.race b { background: none; box-shadow: 0 0 0 1.5px var(--ink); }
+.mix span.top b { color: var(--ink); }
+.scat { position: relative; display: flex; gap: 6px; margin-top: 6px; }
+.splot { position: relative; flex: 1; height: 170px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.sd { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; cursor: pointer; }
+.sd.now { background: var(--z2); }
+.sd.prev { background: var(--mute); opacity: .55; }
+.sya { position: relative; width: 38px; flex: none; font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); }
+.sya span { position: absolute; right: 0; }
