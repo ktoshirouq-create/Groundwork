@@ -865,21 +865,39 @@ function garminSync() {
 var RESTING_CHUNK_DAYS = 28;
 var RESTING_FROM_YEAR = 2010;
 
-/* The value from one day's summary, whatever Garmin names it. */
+/* One day's resting HR from Garmin's v2 daily summary, where it sits at
+   heartRate.restingValue (per Garmin's own response model). Garmin falls back
+   to the day's lowest reading when it has no true resting value, and a day
+   the watch wasn't worn (includesWellnessData false) has nothing worth
+   keeping. The older flat restingHeartRate is read too. Never the 7-day
+   average: each row is one night. */
 function restingOfDay(e) {
-  if (!e) return null;
-  var v = e.restingHeartRate != null ? e.restingHeartRate
-        : e.restingHeartRateValue != null ? e.restingHeartRateValue
-        : e.restingHR != null ? e.restingHR : null;
+  if (!e || typeof e !== 'object') return null;
+  if (e.includesWellnessData === false) return null;
+  var v = e.heartRate && typeof e.heartRate === 'object' ? e.heartRate.restingValue : null;
+  if (v == null) v = e.restingHeartRate;
   v = Number(v);
   return v >= 25 && v <= 120 ? Math.round(v) : null;
 }
 
+function dateOfDay(e) {
+  var d = e && (e.calendarDate || e.date || e.summaryDate || (e.dailySummary && e.dailySummary.calendarDate));
+  return String(d || '').slice(0, 10);
+}
+
 /* Pure: a summary list as [date, bpm] rows, days without a value left out. */
 function restingDays(list) {
-  return (list || []).map(function (e) {
-    return [String(e.calendarDate || e.date || '').slice(0, 10), restingOfDay(e)];
-  }).filter(function (d) { return d[1] != null && /^\d{4}-\d\d-\d\d$/.test(d[0]); });
+  return (list || []).map(function (e) { return [dateOfDay(e), restingOfDay(e)]; })
+    .filter(function (d) { return d[1] != null && /^\d{4}-\d\d-\d\d$/.test(d[0]); });
+}
+
+/* Whatever shape the answer came in, the list of days inside it. */
+function summaryList(res) {
+  if (Array.isArray(res)) return res;
+  if (!res || typeof res !== 'object') return [];
+  var keys = Object.keys(res);
+  for (var i = 0; i < keys.length; i++) if (Array.isArray(res[keys[i]])) return res[keys[i]];
+  return dateOfDay(res) ? [res] : [];
 }
 
 function restingSheet() {
@@ -918,8 +936,15 @@ function restingRows() {
 }
 
 function garminRestingRange(from, to) {
-  var res = garminGet('/usersummary-service/v2/dailysummaries', { startDate: from, endDate: to });
-  return restingDays(Array.isArray(res) ? res : (res && Array.isArray(res.data) ? res.data : []));
+  var list = summaryList(garminGet('/usersummary-service/v2/dailysummaries', { startDate: from, endDate: to }));
+  var days = restingDays(list);
+  /* days came back but none carried a resting HR: remember what they did carry */
+  if (list.length && !days.length && !garminRestingRange.seen) {
+    var keys = {};
+    list.slice(0, 3).forEach(function (e) { Object.keys(e || {}).forEach(function (k) { keys[k] = true; }); });
+    garminRestingRange.seen = Object.keys(keys).sort();
+  }
+  return days;
 }
 
 function garminResting() {
@@ -952,10 +977,24 @@ function garminRestingHistory() {
     props.setProperty('GARMIN_RESTING_CURSOR', cursor);
   }
   var rows = restingRows();
+  /* nothing found: say what Garmin sent instead, and whether the per-day heart-rate record has it */
+  var why = '';
+  if (!cut && !rows.length) {
+    why = garminRestingRange.seen
+      ? ' Garmin\u2019s daily summaries came back without a resting heart rate. Fields they did have: ' +
+        garminRestingRange.seen.join(', ') + '.'
+      : ' Garmin\u2019s daily summaries came back empty for every stretch.';
+    try {
+      var dh = garminGet('/wellness-service/wellness/dailyHeartRate', { date: isoDay(new Date(Date.now() - 864e5)) });
+      var v = restingOfDay(dh);
+      why += v != null ? ' The per-day heart-rate record does have it (' + v + ' bpm yesterday), so the import can use that instead.'
+        : ' The per-day heart-rate record has none either; its fields: ' + Object.keys(dh || {}).sort().join(', ') + '.';
+    } catch (e) { why += ' The per-day heart-rate record failed too: ' + (e && e.message || e); }
+  }
   var msg = (cut ? 'Resting HR: ' + added + ' days added this run, up to ' + cursor + '. Press Run again to carry on.'
     : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') + '.') +
     (refused.length ? ' Garmin refused ' + refused.length + ' stretch' + (refused.length === 1 ? '' : 'es') +
-      '; first: ' + refused[0] : '');
+      '; first: ' + refused[0] : '') + why;
   if (!cut) props.deleteProperty('GARMIN_RESTING_CURSOR');
   Logger.log(msg);
   return { complete: !cut, days: rows.length, refused: refused, message: msg };
