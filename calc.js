@@ -179,7 +179,7 @@
   /* Drift for one run: measured on the file's second-by-second record when the
      run has one, from lap averages when it hasn't. Same definition either way. */
   function driftOf(act) {
-    if (!act) return null;
+    if (!act || hrLocked(act)) return null;
     if (act.drift_bpm != null && act.drift_bpm !== '') return Number(act.drift_bpm);
     return drift(act.laps);
   }
@@ -345,7 +345,7 @@
     distance_km: null, elapsed_s: null, moving_s: null,
     ascent_m: null, descent_m: null, ele_min_m: null, ele_max_m: null,
     temp_c: null, avg_hr: null, resting_hr: null, gap_pace_s: null, cadence_spm: null,
-    rpe: null, feel: null, session: null, note: null, terrain: null,
+    rpe: null, feel: null, session: null, note: null, terrain: null, hr_trust: null,
     laps: [], created_at: null, updated_at: null
   };
 
@@ -1090,7 +1090,7 @@
      heart-rate bucket is handed on as a lap-shaped piece of time, which is all
      the zone arithmetic needs. */
   function zoneLaps(act) {
-    if (!act) return [];
+    if (!act || hrLocked(act)) return [];
     const h = act.hr_hist;
     if (h && typeof h === 'string') {
       const out = [];
@@ -1704,7 +1704,16 @@
      different brief, and a technical trail is slow for reasons that have
      nothing to do with fitness, so neither is one. Every aerobic-pace figure
      in the app asks here. */
-  function isAerobicMeasure(a) { return !!a && !isRace(a) && !isTrail(a); }
+  /* Heart rate that followed cadence for a third or more of the run (a wrist
+     sensor locked onto the stride, as the Forerunner 235 did) says nothing
+     about the heart. Such a run stays out of everything built on heart rate,
+     unless you've said to trust it. */
+  const HR_LOCK_LIMIT = 30;
+  function hrLocked(a) {
+    return !!a && a.hr_trust !== 'trust' && a.hr_lock != null && a.hr_lock !== '' && Number(a.hr_lock) >= HR_LOCK_LIMIT;
+  }
+
+  function isAerobicMeasure(a) { return !!a && !isRace(a) && !isTrail(a) && !hrLocked(a); }
 
   function aerobicSamples(acts) {
     return (acts || []).filter(isAerobicMeasure);
@@ -1714,19 +1723,20 @@
   function leftOutOf(acts) {
     const runs = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
     return { races: runs.filter(isRace).length,
-             trail: runs.filter(a => isTrail(a) && !isRace(a)).length };
+             trail: runs.filter(a => isTrail(a) && !isRace(a)).length,
+             locked: runs.filter(a => hrLocked(a) && !isRace(a) && !isTrail(a)).length };
   }
 
   /* Runs to rank this one against: a similar distance (within 20%) on the
      same kind of ground. A technical trail ranked against road runs comes
      last for reasons that aren't fitness. */
   function lengthPeers(act, all, cfg) {
-    if (!act || act.distance_km == null) return null;
+    if (!act || act.distance_km == null || hrLocked(act)) return null;
     const mine = aerobicPace(act, cfg);
     if (mine == null) return null;
     const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2, trail = isTrail(act);
     const peers = (all || [])
-      .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null &&
+      .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null && !hrLocked(x) &&
                    x.distance_km >= lo && x.distance_km <= hi && isTrail(x) === trail)
       .map(x => ({ act: x, pace: aerobicPace(x, cfg) }))
       .filter(x => x.pace != null)
@@ -1943,7 +1953,7 @@
 
   function load(act, cfg) {
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
-    if (!act || act.avg_hr == null || !act.elapsed_s) return null;
+    if (!act || act.avg_hr == null || !act.elapsed_s || hrLocked(act)) return null;
     const reserve = c.max_hr - c.resting_hr;
     if (reserve <= 0) return null;
     const r = Math.max(0, Math.min(1, (act.avg_hr - c.resting_hr) / reserve));
@@ -2014,7 +2024,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

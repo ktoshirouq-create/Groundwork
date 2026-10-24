@@ -920,6 +920,11 @@ hourly check adds the last fortnight from then on, since Garmin sometimes
 settles a day's value late. The app gets the days with every sync and keeps a
 copy for offline use.
 
+A worn day whose summary carries no resting value is filled from that day's
+own heart-rate record (`dailyHeartRate`), one call per such day. Days Garmin
+marks as not worn are not asked about. `garminRestingProbe()` logs both views
+of chosen dates when a gap looks wrong.
+
 The **RESTING** screen (home, beside Bests) shows this week's average, the
 change against three months and a year ago (lower is fitter), the lowest and
 highest month, and a chart in three views: every night for 30 days, weekly
@@ -945,14 +950,25 @@ A past year's review also draws, from logged runs only:
 Charts with too little behind them are absent, not drawn from one or two
 runs. Colour still means zone or "this year" only.
 
-## HR check (read-only)
+## HR check, and locked runs
 
 `garminHrCheck()` reads every run's watch file and measures how much of the
-running time had heart rate within 3 beats of cadence (or half cadence),
-the signature of a wrist sensor locked onto your stride, which was common on
-the Forerunner 235. It writes an **HR check** tab, year-by-year summary on
-top and runs worst first, and changes nothing else. What to do with locked
-runs is decided after reading it.
+running time had heart rate within 3 beats of cadence (or half cadence), the
+signature of a wrist sensor locked onto your stride, and writes an **HR check**
+tab. On Jack's history (Oct 2026): 2017 averaged 10% locked, 2018 20%, 2024–26
+1–3% (coincidence on hard stretches); six runs, all 2017–18, were 30%+.
+
+A run **30% or more locked** (`hrLocked`, `HR_LOCK_LIMIT`) is left out of
+everything built on heart rate: time in zone, drift, load, aerobic pace (so
+the hero, trend, scatter, records and "against runs this length"). It still
+counts for distance, time, pace and best efforts. Its run screen says why,
+with a **Trust this heart rate anyway** button (`hr_trust`), and chart
+captions count it among what was left out. The share lives in `hr_lock`,
+written at import for new runs and copied from the HR check tab once by
+`garminHrLockApply()`.
+
+Separate zones for 2017–18 were considered and dropped: Garmin only gives
+today's watch zones, and the 2017 heart rate was mostly genuine, just higher.
 
 ## Settings that matter
 

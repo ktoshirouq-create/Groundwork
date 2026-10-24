@@ -22,7 +22,7 @@
 
   /* Fields that until Oct 2026 lived only on the phone, because the sheet had
      no column for them. Sent up once, as a fill, when the script has them. */
-  const FILL_FIELDS = ['session', 'subtype', 'value', 'protocol_note', 'resting_hr', 'terrain'];
+  const FILL_FIELDS = ['session', 'subtype', 'value', 'protocol_note', 'resting_hr', 'terrain', 'hr_trust'];
 
   function readJSON(k, fallback) {
     try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(fallback)); }

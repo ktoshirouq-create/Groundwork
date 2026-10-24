@@ -138,9 +138,10 @@
       (caption ? '<div class="g-c">' + esc(caption) + '</div>' : '') + '</div>';
   }
 
+  /* aside is text, escaped; pass { html } for markup built here (a delta) */
   function cmp(k, v, aside, id) {
     return '<div class="cmp"' + (id ? ' data-id="' + esc(id) + '"' : '') + '><span class="k">' + esc(k) + '</span><span class="v">' + v +
-      (aside ? '<s>' + esc(aside) + '</s>' : '') + '</span></div>';
+      (aside ? '<s>' + (aside.html != null ? aside.html : esc(aside)) + '</s>' : '') + '</span></div>';
   }
 
   /* Reads the model. The zone split per bar arrives with it, so this function
@@ -229,12 +230,13 @@
      the honest picture and needs no gutter at all. */
   /* What an aerobic-pace chart leaves out, said once for every chart. */
   function leftOutText(L) {
-    if (!L || (!L.races && !L.trail)) return '';
+    if (!L || (!L.races && !L.trail && !L.locked)) return '';
     const parts = [];
     if (L.races) parts.push(L.races + ' race' + (L.races === 1 ? '' : 's'));
     if (L.trail) parts.push(L.trail + ' trail run' + (L.trail === 1 ? '' : 's'));
-    return '. ' + parts.join(' and ') + ' left out \u2014 ' +
-      (L.races && L.trail ? 'neither is' : 'not') + ' a measurement of aerobic pace';
+    if (L.locked) parts.push(L.locked + ' run' + (L.locked === 1 ? '' : 's') + ' whose heart rate followed cadence');
+    return '. ' + (parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0]) +
+      ' left out \u2014 ' + (parts.length > 1 ? 'none is' : 'not') + ' a measurement of aerobic pace';
   }
 
   function lineChart(segments, opt) {
@@ -1143,8 +1145,8 @@
         if (now == null || then == null) return '';
         const d = Calc.delta(now, then, 'down');
         return cmp('Against ' + label, bpm(then) + ' bpm', !d || d.dir === 'flat' ? 'about the same'
-          : '<span class="delta ' + d.tone + '">' + (d.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
-            bpm(Math.abs(d.diff)) + ' bpm ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>');
+          : { html: '<span class="delta ' + d.tone + '">' + (d.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
+            bpm(Math.abs(d.diff)) + ' bpm ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>' });
       };
       h += '<div class="hero1"><div class="big">' + bpm(m.now) + '<s> bpm</s></div>' +
         '<div class="est">Average of the last 7 nights. Lower is fitter.</div></div>';
@@ -1278,6 +1280,16 @@
 
     h += noticedHTML(a);
 
+    /* heart rate that followed cadence: said, and overridable */
+    if (a.hr_lock != null && a.hr_lock !== '' && Number(a.hr_lock) >= Calc.HR_LOCK_LIMIT) {
+      const out = Calc.hrLocked(a);
+      h += '<div class="callout' + (out ? ' warn' : '') + '">Heart rate followed your cadence for <b>' +
+        Math.round(a.hr_lock) + '%</b> of this run \u2014 a wrist sensor locked onto your stride. ' +
+        (out ? 'It\u2019s left out of zones, drift, aerobic pace and load. Distance, pace and best efforts still count.'
+             : 'You\u2019ve chosen to trust it, so it counts everywhere.') + '</div>' +
+        '<button class="btn ghost" id="d-trust">' + (out ? 'Trust this heart rate anyway' : 'Leave it out again') + '</button>';
+    }
+
     if (Calc.fullLaps(a.laps).length) {
       h += '<div class="sec"><span>Per kilometre</span></div>';
       h += stripHTML(a, bounds, true);
@@ -1295,7 +1307,7 @@
         '</div><div class="est">Measured after the opening kilometre, and read as flat ' +
         'within ' + Calc.DRIFT_FLAT + ' bpm \u2014 a hill in the first or last third moves it ' +
         'about that much on its own.</div>';
-    } else if (Calc.hasLapHr(a.laps)) {
+    } else if (Calc.hasLapHr(a.laps) && !Calc.hrLocked(a)) {
       const need = Calc.driftNeeds(a.laps);
       h += '<div class="est">Drift needs ' + need + ' more full kilometre' + (need === 1 ? '' : 's') +
         ' \u2014 the opening one is dropped, and three are needed after that.</div>';
@@ -1347,6 +1359,11 @@
 
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
+    const trust = el('d-trust');
+    if (trust) trust.onclick = () => {
+      const next = Object.assign({}, a, { hr_trust: Calc.hrLocked(a) ? 'trust' : null, updated_at: new Date().toISOString() });
+      Store.put(next).then(() => { renderDetail(a.id); toast(next.hr_trust ? 'Heart rate trusted' : 'Heart rate left out', 'ok'); });
+    };
     $('#view-detail [data-edit]').onclick = () => go('edit', a.id);
     $('#view-detail [data-replace]').onclick = () => go('replace', a.id);
     once($('#view-detail [data-delete]'), 'Deleting\u2026', () => {

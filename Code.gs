@@ -53,11 +53,14 @@ var ACT_COLS = [
      stream_v says which version of the reader produced them. */
   'max_hr', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v',
   /* road (empty) or trail: from Garmin's activity type, or set in the app */
-  'terrain'
+  'terrain',
+  /* share of the run (%) where heart rate followed cadence, from the watch
+     file; and your override, 'trust', when you know the heart rate was fine */
+  'hr_lock', 'hr_trust'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
-var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v'];
+var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock'];
 
 var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
 
@@ -65,13 +68,13 @@ var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
   ele_min_m: 1, ele_max_m: 1, temp_c: 1, avg_hr: 1, gap_pace_s: 1,
   cadence_spm: 1, rpe: 1, n: 1, time_s: 1, resting_hr: 1, value: 1,
-  max_hr: 1, drift_bpm: 1, stream_v: 1
+  max_hr: 1, drift_bpm: 1, stream_v: 1, hr_lock: 1
 };
 
 /* ------------------------------------------------------------------ setup */
@@ -773,6 +776,7 @@ function garminActivity(j, fit) {
     drift_bpm: st ? st.drift_bpm : null,
     stream_v: STREAM_V,
     terrain: garminTerrain(j),
+    hr_lock: (function (L) { return L ? Math.round(L.share * 100) : null; })(lockOf(fit && fit.records)),
     laps: laps,
     created_at: now, updated_at: now
   };
@@ -961,6 +965,18 @@ function restingRows() {
 function garminRestingRange(from, to) {
   var list = summaryList(garminGet('/usersummary-service/v2/dailysummaries', { startDate: from, endDate: to }));
   var days = restingDays(list);
+  /* A day the watch was worn whose summary carries no resting value: ask the
+     day's own heart-rate record, which has a resting figure of its own. Days
+     Garmin marks as not worn are not asked about (years of them would cost
+     thousands of calls for nothing). */
+  var have = {};
+  days.forEach(function (d) { have[d[0]] = true; });
+  list.forEach(function (e) {
+    var date = dateOfDay(e);
+    if (!/^\d{4}-\d\d-\d\d$/.test(date) || have[date] || e.includesWellnessData === false) return;
+    var v = restingFromHeartRateDay(date);
+    if (v != null) { days.push([date, v]); have[date] = true; }
+  });
   /* days came back but none carried a resting HR: remember what they did carry */
   if (list.length && !days.length && !garminRestingRange.seen) {
     var keys = {};
@@ -968,6 +984,38 @@ function garminRestingRange(from, to) {
     garminRestingRange.seen = Object.keys(keys).sort();
   }
   return days;
+}
+
+function restingFromHeartRateDay(date) {
+  try {
+    var dh = garminGet('/wellness-service/wellness/dailyHeartRate', { date: date });
+    var v = Number(dh && (dh.restingHeartRate != null ? dh.restingHeartRate : dh.restingHeartRateValue));
+    return v >= 25 && v <= 120 ? Math.round(v) : null;
+  } catch (e) {
+    if (e && e.kind === 'key') throw e;
+    return null;
+  }
+}
+
+/** For a puzzle: what Garmin holds for one day. Logs the day's summary
+    (heart-rate block and the worn flags) and its heart-rate record's resting
+    value. Change the dates below to the ones that look wrong, then Run. */
+var PROBE_DATES = ['2026-10-15', '2026-06-15'];
+function garminRestingProbe() {
+  var out = PROBE_DATES.map(function (date) {
+    var list = summaryList(garminGet('/usersummary-service/v2/dailysummaries', { startDate: date, endDate: date }));
+    var e = list[0] || {};
+    var dh = null;
+    try { dh = garminGet('/wellness-service/wellness/dailyHeartRate', { date: date }); } catch (err) { dh = { error: String(err.message || err) }; }
+    return date + ' \u2014 summary: ' + (list.length ? JSON.stringify({
+        includesWellnessData: e.includesWellnessData, includesActivityData: e.includesActivityData,
+        heartRate: e.heartRate, restingHeartRate: e.restingHeartRate }) : 'no entry') +
+      ' \u2014 heart-rate record: ' + JSON.stringify(dh && { restingHeartRate: dh.restingHeartRate,
+        lastSevenDaysAvgRestingHeartRate: dh.lastSevenDaysAvgRestingHeartRate, error: dh.error,
+        keys: Object.keys(dh || {}).slice(0, 12) });
+  });
+  out.forEach(function (l) { Logger.log(l); });
+  return out;
 }
 
 function garminResting() {
@@ -1491,4 +1539,41 @@ function garminHrCheck() {
                 : 'HR check complete: ' + rows.length + ' runs. See the "HR check" tab.';
   Logger.log(msg);
   return { complete: !cut, checked: rows.length, years: years, message: msg };
+}
+
+
+/** Once, from the editor, after garminHrCheck: copy each run's locked share
+    from the "HR check" tab into the Activities sheet, where the app reads it.
+    Matched by date and name; a run that can't be matched uniquely is left
+    alone and counted. New runs get their share at import from now on. */
+function garminHrLockApply() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var tab = ss.getSheetByName('HR check');
+  if (!tab) throw new Error('Run garminHrCheck first.');
+  var ash = ss.getSheetByName(SHEETS.activities);
+  addMissingHeaders(ash, ACT_COLS);
+  var hm = headerMap(ash);
+  var acts = readAll(ash, ACT_COLS);
+  var key = function (d, n) { return String(d).slice(0, 10) + '|' + String(n); };
+  var byKey = {};
+  acts.forEach(function (a) { var k = key(a.date, a.name); (byKey[k] = byKey[k] || []).push(a); });
+  var vals = tab.getDataRange().getValues(), start = -1;
+  for (var i = 0; i < vals.length; i++) if (vals[i][0] === 'Date' && vals[i][2] === 'Locked share') { start = i + 1; break; }
+  if (start < 0) throw new Error('The HR check tab has no run list.');
+  var set = 0, unmatched = 0, now = new Date().toISOString();
+  for (var r = start; r < vals.length; r++) {
+    var share = parseInt(String(vals[r][2]), 10);
+    if (isNaN(share)) continue;
+    var d = vals[r][0] instanceof Date ? isoDay(vals[r][0]) : vals[r][0];
+    var hits = byKey[key(d, vals[r][1])] || [];
+    if (hits.length !== 1) { unmatched++; continue; }
+    var at = findRowById(ash, 'id', hits[0].id);
+    if (at < 0) { unmatched++; continue; }
+    ash.getRange(at, hm.hr_lock + 1).setValue(share);
+    ash.getRange(at, hm.updated_at + 1).setNumberFormat('@').setValue(now);   // so the app takes it
+    set++;
+  }
+  var msg = 'Locked shares written to ' + set + ' runs' + (unmatched ? '; ' + unmatched + ' could not be matched' : '') + '.';
+  Logger.log(msg);
+  return { set: set, unmatched: unmatched, message: msg };
 }
