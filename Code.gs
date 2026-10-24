@@ -45,11 +45,15 @@ var ACT_COLS = [
      may be missing from this list — tests check it against the app's fields. */
   'resting_hr', 'session', 'subtype', 'value', 'protocol_note',
   /* written by the Garmin import only; the app never sets it */
-  'garmin_id'
+  'garmin_id',
+  /* from the watch file's second-by-second record (Oct 2026): best efforts at
+     standard distances, seconds spent at each heart rate, drift, max HR.
+     stream_v says which version of the reader produced them. */
+  'max_hr', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
-var SERVER_COLS = ['garmin_id'];
+var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v'];
 
 var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
 
@@ -57,12 +61,13 @@ var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
   ele_min_m: 1, ele_max_m: 1, temp_c: 1, avg_hr: 1, gap_pace_s: 1,
-  cadence_spm: 1, rpe: 1, n: 1, time_s: 1, resting_hr: 1, value: 1
+  cadence_spm: 1, rpe: 1, n: 1, time_s: 1, resting_hr: 1, value: 1,
+  max_hr: 1, drift_bpm: 1, stream_v: 1
 };
 
 /* ------------------------------------------------------------------ setup */
@@ -503,7 +508,7 @@ function fitDecode(input) {
     throw new GarminError('fit', 'Not a FIT file.');
   var dataSize = b[4] | (b[5] << 8) | (b[6] << 16) | (b[7] * 16777216);
   var p = hdr, end = Math.min(b.length, hdr + dataSize);
-  var defs = {}, out = { sessions: [], laps: [] };
+  var defs = {}, out = { sessions: [], laps: [], records: [] }, lastTs = null;
   var SIZES = { 0: 1, 1: 1, 2: 1, 0x83: 2, 0x84: 2, 0x85: 4, 0x86: 4, 0x07: 1, 0x88: 4,
                 0x89: 8, 0x0a: 1, 0x8b: 2, 0x8c: 4, 0x0d: 1, 0x8e: 8, 0x8f: 8, 0x90: 8 };
   function uint(off, size, le) {
@@ -516,7 +521,7 @@ function fitDecode(input) {
     if (h & 0x80) {                                   // compressed timestamp
       var d = defs[(h >> 5) & 0x03];
       if (!d) throw new GarminError('fit', 'FIT data before its definition.');
-      p = readData(d, p);
+      p = readData(d, p, h & 0x1f);
       continue;
     }
     var local = h & 0x0f;
@@ -536,7 +541,7 @@ function fitDecode(input) {
       p = readData(dd, p);
     }
   }
-  function readData(d, at) {
+  function readData(d, at, offset) {
     var rec = {};
     d.fields.forEach(function (fd) {
       var bt = fd.base & 0x9f, unit = SIZES[fd.base] || SIZES[bt] || 1;
@@ -554,11 +559,90 @@ function fitDecode(input) {
       at += fd.size;
     });
     at += d.devSize;
+    if (offset != null && lastTs != null)                       // compressed timestamp
+      rec[253] = lastTs + ((offset - (lastTs & 0x1f)) & 0x1f);
+    if (rec[253] != null) lastTs = rec[253];
     if (d.gnum === 18) out.sessions.push(rec);
     if (d.gnum === 19) out.laps.push(rec);
+    if (d.gnum === 20 && rec[253] != null)
+      out.records.push({ t: rec[253], d: rec[5] != null ? rec[5] / 100 : null, hr: rec[3] != null ? rec[3] : null });
     return at;
   }
   return out;
+}
+
+/* ------------------------------------------------- the second-by-second --
+
+   From the file's records: distance and heart rate, once a second or so.
+   - Best efforts: the fastest stretch of exactly each distance, starting
+     anywhere — not tied to lap boundaries. Interpolated at the start so a
+     window covers the distance exactly. A window faster than 2:00/km is a
+     GPS jump, not running, and is ignored.
+   - Seconds at each heart rate, so the app can work out time in zone exactly
+     for whatever zones you set, now or later.
+   - Drift, the app's own definition (last third against first third, opening
+     kilometre dropped), measured on the stream rather than on lap averages.
+   Gaps over 10 s are pauses and count as no time. */
+
+var STREAM_V = 1;
+var EFFORT_M = [400, 1000, 1609, 5000, 10000, 21097, 42195];
+var FASTEST_S_PER_KM = 120;
+var PAUSE_S = 10;
+
+function streamFigures(records) {
+  var r = (records || []).filter(function (x) { return x.t != null; });
+  if (r.length < 10) return null;
+  /* time with pauses taken out, so an effort is running time */
+  var tt = [0], dd = [], hh = [];
+  for (var i = 0; i < r.length; i++) {
+    if (i) { var dt = r[i].t - r[i - 1].t; tt.push(tt[i - 1] + (dt > 0 && dt <= PAUSE_S ? dt : 0)); }
+    dd.push(r[i].d); hh.push(r[i].hr);
+  }
+
+  var efforts = {};
+  var di = [], ti = [];
+  for (var k = 0; k < r.length; k++) if (dd[k] != null) { di.push(dd[k]); ti.push(tt[k]); }
+  EFFORT_M.forEach(function (D) {
+    if (!di.length || di[di.length - 1] - di[0] < D) return;
+    var best = null, a = 0;
+    for (var j = 1; j < di.length; j++) {
+      if (di[j] - di[0] < D) continue;
+      while (a + 1 < j && di[j] - di[a + 1] >= D) a++;
+      /* start part-way between a and a+1 so the window is exactly D */
+      var over = di[j] - di[a] - D, seg = di[a + 1] - di[a];
+      var start = ti[a] + (seg > 0 ? over / seg * (ti[a + 1] - ti[a]) : 0);
+      var sec = ti[j] - start;
+      if (sec > 0 && sec / (D / 1000) >= FASTEST_S_PER_KM && (best == null || sec < best)) best = sec;
+    }
+    if (best != null) efforts[D] = Math.round(best);
+  });
+
+  var hist = {};
+  for (var m = 1; m < r.length; m++) {
+    var gap = r[m].t - r[m - 1].t;
+    if (gap <= 0 || gap > PAUSE_S || hh[m - 1] == null) continue;
+    hist[hh[m - 1]] = (hist[hh[m - 1]] || 0) + gap;
+  }
+  var histStr = Object.keys(hist).map(Number).sort(function (x, y) { return x - y; })
+    .map(function (b) { return b + ':' + hist[b]; }).join(',');
+
+  /* drift: drop the first kilometre, compare the last third with the first */
+  var driftBpm = null;
+  var startD = (dd[0] || 0) + 1000, endD = null;
+  for (var q = r.length - 1; q >= 0; q--) if (dd[q] != null) { endD = dd[q]; break; }
+  if (endD != null && endD - startD >= 3000) {
+    var third = (endD - startD) / 3, sums = [0, 0], secs = [0, 0];
+    for (var z = 1; z < r.length; z++) {
+      var g = r[z].t - r[z - 1].t;
+      if (g <= 0 || g > PAUSE_S || hh[z] == null || dd[z] == null) continue;
+      var part = dd[z] < startD ? -1 : dd[z] < startD + third ? 0 : dd[z] >= endD - third ? 1 : -1;
+      if (part < 0) continue;
+      sums[part] += hh[z] * g; secs[part] += g;
+    }
+    if (secs[0] && secs[1]) driftBpm = Math.round(sums[1] / secs[1] - sums[0] / secs[0]);
+  }
+  return { efforts: Object.keys(efforts).length ? JSON.stringify(efforts) : '',
+           hr_hist: histStr, drift_bpm: driftBpm };
 }
 
 /* ---------------------------------------------------- one Garmin run → row */
@@ -586,6 +670,7 @@ function garminActivity(j, fit) {
             : (j.duration != null ? Math.round(j.duration) : null);
   var cad = s[18] != null ? Math.round((s[18] + (s[92] || 0) / 128) * 2) : null;
   var gapSpeed = j.avgGradeAdjustedSpeed;
+  var st = streamFigures(fit && fit.records);
   var laps = ((fit && fit.laps) || []).map(function (l, i) {
     return { n: i + 1,
              distance_km: l[9] != null ? r2(l[9] / 100000) : null,
@@ -604,11 +689,18 @@ function garminActivity(j, fit) {
     moving_s: j.movingDuration != null ? Math.round(j.movingDuration) : null,
     ascent_m: s[22] != null ? s[22] : (j.elevationGain != null ? Math.round(j.elevationGain) : null),
     descent_m: s[23] != null ? s[23] : (j.elevationLoss != null ? Math.round(j.elevationLoss) : null),
-    temp_c: s[57] != null ? s[57] : null,
+    /* the watch's own sensor sits against your wrist and reads warm; your
+       pasted runs hold the weather, so the two must not share a column */
+    temp_c: null,
     avg_hr: s[16] != null ? s[16] : (j.averageHR != null ? Math.round(j.averageHR) : null),
     gap_pace_s: gapSpeed > 0 ? Math.round(1000 / gapSpeed) : null,
     cadence_spm: cad,
     garmin_id: gid,
+    max_hr: s[17] != null ? s[17] : null,
+    efforts: st ? st.efforts : '',
+    hr_hist: st ? st.hr_hist : '',
+    drift_bpm: st ? st.drift_bpm : null,
+    stream_v: STREAM_V,
     laps: laps,
     created_at: now, updated_at: now
   };
@@ -971,4 +1063,83 @@ function garminCompare() {
   sh.getRange(1, 1, out.length, 7).setValues(out);
   Logger.log(out[1][0] + ' ' + out[2][0] + ' See the "Gemini check" tab.');
   return { compared: compared, clean: clean, misread: misread, figures: all, cut: cut };
+}
+
+/* ================================================================ enrich ===
+
+   Run garminEnrich() from the editor, once. Every run linked to Garmin gets
+   what its file offers:
+   - laps from the file, replacing transcribed ones on pasted runs;
+   - best efforts, seconds at each heart rate, drift and max HR from the
+     second-by-second record;
+   - any figure the paste left out (moving time, ascent, descent, cadence,
+     GAP, heart rate) — filled only where empty, never overwritten.
+   Yours stays yours: name, tags, RPE, feel, notes, and the weather
+   temperatures you pasted. Imported runs lose the wrist-sensor temperature
+   the first import stored.
+
+   It stops itself before Google's six-minute limit; press Run again until it
+   says it's done. A run already enriched is skipped. Each enriched run gets a
+   new updated_at, which is how the app knows to take the new version. */
+
+var ENRICH_BUDGET_MS = 4.5 * 60 * 1000;
+var FILL_IF_EMPTY = ['moving_s', 'ascent_m', 'descent_m', 'cadence_spm', 'gap_pace_s', 'avg_hr', 'max_hr'];
+
+function garminEnrich() {
+  var started = Date.now();
+  if (!garminProps().getProperty('GARMIN_KEY')) throw new Error('Put GARMIN_KEY in Script properties first.');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(60000)) throw new Error('The hourly check is running \u2014 try again in a minute.');
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ash = ss.getSheetByName(SHEETS.activities), lsh = ss.getSheetByName(SHEETS.laps);
+    addMissingHeaders(ash, ACT_COLS);
+    var hm = headerMap(ash);
+    var todo = readAll(ash, ACT_COLS).filter(function (a) {
+      return a.garmin_id && !(Number(a.stream_v) >= STREAM_V);
+    });
+    var lists = {}, done = 0, cut = false;
+    function listed(a) {
+      var y = String(a.date).slice(0, 4);
+      if (!lists[y]) {
+        lists[y] = {};
+        garminSearch(y + '-01-01', y + '-12-31').forEach(function (j) { lists[y][String(j.activityId)] = j; });
+      }
+      return lists[y][String(a.garmin_id)] || { activityId: a.garmin_id, startTimeLocal: a.date + ' 00:00:00' };
+    }
+    for (var i = 0; i < todo.length; i++) {
+      if (Date.now() - started > ENRICH_BUDGET_MS) { cut = true; break; }
+      var a = todo[i];
+      var g = garminActivity(listed(a), garminFit(String(a.garmin_id)));
+      var at = findRowById(ash, 'id', a.id);
+      if (at < 0) continue;
+      var row = ash.getRange(at, 1, 1, ash.getLastColumn()).getValues()[0];
+      var put = function (c, v) { if (hm[c] != null) row[hm[c]] = v == null ? '' : v; };
+      var empty = function (c) { return hm[c] == null || row[hm[c]] === '' || row[hm[c]] == null; };
+      if (g) {
+        FILL_IF_EMPTY.forEach(function (c) { if (empty(c) && g[c] != null) put(c, g[c]); });
+        put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm);
+        if (String(a.id).indexOf('-g' + a.garmin_id) >= 0) put('temp_c', null);   // imported: wrist sensor out
+        if (g.laps.length) {
+          clearLaps(lsh, a.id);
+          var rows = g.laps.map(function (l) {
+            return objToRow(lsh, LAP_COLS, { activity_id: a.id, n: l.n, distance_km: l.distance_km,
+              time_s: l.time_s, avg_hr: l.avg_hr, role: 'main' });
+          });
+          lsh.getRange(lsh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+        }
+      }
+      put('stream_v', STREAM_V);
+      put('updated_at', new Date().toISOString());
+      ash.getRange(at, 1, 1, row.length).setValues([row]);
+      done++;
+    }
+    var left = todo.length - done;
+    var msg = cut ? 'Enriched ' + done + ' runs; ' + left + ' to go. Press Run again to carry on.'
+                  : 'Enrich complete: ' + done + ' runs. Open the app to see them.';
+    Logger.log(msg);
+    return { done: done, left: left, complete: !cut, message: msg };
+  } finally {
+    lock.releaseLock();
+  }
 }

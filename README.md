@@ -226,20 +226,24 @@ are the part worth seeing.
 
 ## Best efforts
 
-Fastest 1, 2, 3, 5, 10, 15, 21.1 and 42.2 km, taken from per-kilometre laps.
-Shown on each run with the laps they came from, and marked **PB** where the
-run holds the all-time best.
+**One source for every best in the app**: the Best-of page, the year reviews,
+the run screen and the PB tags all ask `bestEffortOf`, so they can't disagree.
 
-Three things worth knowing about the method:
+A run with its watch file is measured on the **second-by-second record**: the
+fastest stretch of exactly each distance (400 m, 1 km, mile, 5 km, 10 km, half,
+marathon), starting anywhere. That's the Garmin and Strava method. It sees a
+stretch that began mid-kilometre, ignores stray lap presses, and gives a
+21.46 km trail half a Half. Pauses over 10 s are not running time. A window
+faster than 2:00/km is a GPS jump and is ignored. 100 m and 200 m are left out
+on purpose: over those distances GPS error is most of the answer.
 
-- **Laps, not a rolling window.** Strava reads a GPS stream, so its best 5 km
-  can start mid-kilometre. This is the fastest five *consecutive laps*, which
-  is a shade slower. The app says so on screen rather than claiming a number it
-  does not have.
-- **Only whole laps count.** A 0.43 km final lap is not a kilometre, and
-  counting partials would make nearly every run look like a personal best.
-- **Races count here**, unlike aerobic pace. The fastest you have run 10 km is
-  the fastest you have run it, however you came by it.
+A run without a file falls back to **whole laps**: the fastest consecutive full
+kilometres, at whole-kilometre distances only, since laps can't give a fair
+400 m or mile. The two methods are never mixed for one run.
+
+Distance is GPS distance either way, so a race that measured long (Oslo
+Marathon: 42.87 km) shows a quicker marathon effort than its finish time.
+That's stated on the run screen rather than corrected.
 
 ## Bounds: impossible blocks, unusual warns
 
@@ -823,6 +827,44 @@ Garmin shows), **different measure** (a real Garmin figure, just not the one
 stored, such as elapsed time instead of timer time, or Connect's corrected
 ascent), **not pasted**, or **misread**. A misread lap time that matches its
 neighbour is named as a swap.
+
+## Best of
+
+A page of its own (**BESTS**, beside Setup), all-time and independent of the
+period selected on the home screen:
+
+- **All time**: each distance's best, with this year's best beside it.
+- **Year by year**: the best at each distance in every year that has one, the
+  fastest year highlighted. This answers "am I faster than I was?" distance by
+  distance.
+- **Records**: best aerobic pace, longest run, biggest week, month and year,
+  most climbing, lowest drift. No streaks, by the rule in "A count, not a
+  streak".
+- **Races**: every race across every year.
+
+## What the watch file adds
+
+`garminEnrich()`, run once from the editor (press Run until it says
+complete), gives every Garmin-linked run what its file offers. The hourly
+import does the same for new runs from then on.
+
+- **Laps from the file.** On pasted runs these replace the transcribed laps;
+  the Gemini check found lap lists were where transcription went wrong.
+- **Figures the paste left out** (moving time, ascent, descent, cadence, GAP,
+  heart rate, max HR) are filled **only where empty**, never overwritten.
+- **Seconds at each heart rate.** Time in zone is counted from these
+  (`zoneLaps`) instead of lap averages, which hide the minutes above a zone
+  inside a lap that averages below it. They're stored per bpm, not per zone,
+  so changing your zones later is still exact.
+- **Drift on the stream**, same definition as on laps (last third against
+  first, opening kilometre dropped), through `driftOf`.
+- **Best efforts**, as above.
+
+Yours stays yours: name, tags, RPE, feel, notes and pasted weather
+temperatures. **Temperature:** the watch's own sensor sits against your wrist
+and reads warm, so imported runs store none, rather than mixing wrist readings
+with the weather temperatures in your pasted runs. Enriched runs get a new
+`updated_at`, which is how the app knows to take them.
 
 ## Settings that matter
 

@@ -172,6 +172,14 @@
      anything inside this is reported as flat rather than as a figure. */
   const DRIFT_FLAT = 3;
 
+  /* Drift for one run: measured on the file's second-by-second record when the
+     run has one, from lap averages when it hasn't. Same definition either way. */
+  function driftOf(act) {
+    if (!act) return null;
+    if (act.drift_bpm != null && act.drift_bpm !== '') return Number(act.drift_bpm);
+    return drift(act.laps);
+  }
+
   function driftIsFlat(d) { return d != null && Math.abs(d) <= DRIFT_FLAT; }
 
   /* How many more full laps a run needs before drift can be computed. */
@@ -544,10 +552,8 @@
       const v = metric === 'load'
         ? inK.reduce((t, a) => t + (load(a, cfgFor(metric)) || 0), 0)
         : s.distance_km;
-      const laps = [];
-      inK.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
       return { key: k, value: v, count: s.count, distance_km: s.distance_km,
-               zones: timeInZone(laps, zoneBounds(cfgFor())),
+               zones: timeInZone(lapsOf(inK), zoneBounds(cfgFor())),
                selected: k === selectedKey };
     });
   }
@@ -756,7 +762,8 @@
 
   /* ---------- records ---------- */
 
-  function records(acts, cfg) {
+  function records(acts, cfg) { return recordsOf(acts, cfg); }
+  function recordsOf(acts, cfg) {
     const mine = acts.filter(a => a.type === 'run');
     if (!mine.length) return [];
     const out = [];
@@ -773,7 +780,7 @@
     mine.forEach(a => { const k = weekStart(a.date); weeks[k] = (weeks[k] || 0) + (a.distance_km || 0); });
     const bw = Object.keys(weeks).sort((a, b) => weeks[b] - weeks[a])[0];
     if (bw) out.push({ label: 'Biggest week', value: weeks[bw].toFixed(1), unit: 'km', when: bw });
-    const drifts = mine.map(a => ({ a: a, d: drift(a.laps) })).filter(x => x.d != null);
+    const drifts = mine.map(a => ({ a: a, d: driftOf(a) })).filter(x => x.d != null);
     if (drifts.length) {
       const low = drifts.sort((x, y) => x.d - y.d)[0];
       out.push({ label: 'Lowest drift', value: (low.d >= 0 ? '+' : '') + low.d, unit: 'bpm',
@@ -977,7 +984,7 @@
              range: rangeOf(paces), band: paces.length >= 3 ? rangeOf(paces.slice(-3)) : null,
              bestLabel: 'best', worstLabel: '' });
 
-      const drifts = mine.map(a => drift(a.laps)).filter(v => v != null);
+      const drifts = mine.map(a => driftOf(a)).filter(v => v != null);
       const dw = windowStats(drifts);
       push({ n: count(drifts), key: 'drift', label: 'Drift', unit: 'bpm', kind: 'bpm',
              window: 'last 3 measured', deltaAs: 'bpm',
@@ -1043,9 +1050,7 @@
     let k = shiftKey(selectedKey, scope, -1);
     for (let i = 0; i < 12 && vals.length < 8; i++) {
       const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
-      const laps = [];
-      inK.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
-      const s = z2Of(laps, cfg);
+      const s = z2Of(lapsOf(inK), cfg);
       if (s) vals.push(s.pct);
       k = shiftKey(k, scope, -1);
     }
@@ -1073,11 +1078,33 @@
     };
   }
 
+  /* What time in zone is counted from, for one run: the seconds the watch
+     recorded at each heart rate when the run has its file (exact), or its lap
+     averages when it hasn't (a 1 km lap averaging 144 hides the minutes at
+     155). Every zone figure in the app comes through here, so a run is never
+     counted one way on one screen and the other way on the next. Each
+     heart-rate bucket is handed on as a lap-shaped piece of time, which is all
+     the zone arithmetic needs. */
+  function zoneLaps(act) {
+    if (!act) return [];
+    const h = act.hr_hist;
+    if (h && typeof h === 'string') {
+      const out = [];
+      h.split(',').forEach(part => {
+        const kv = part.split(':');
+        const bpm = +kv[0], sec = +kv[1];
+        if (bpm > 0 && sec > 0) out.push({ avg_hr: bpm, time_s: sec, role: 'main' });
+      });
+      if (out.length) return out;
+    }
+    return act.laps || [];
+  }
+
   function lapsOf(acts) {
     const laps = [];
     (acts || []).forEach(a => {
       if (ACTIVITY_TYPES.indexOf(a.type) < 0) return;
-      (a.laps || []).forEach(l => laps.push(l));
+      zoneLaps(a).forEach(l => laps.push(l));
     });
     return laps;
   }
@@ -1144,7 +1171,7 @@
   function intentCheck(act, cfg) {
     const s = sessionOf(act && act.session);
     if (!s) return null;
-    const share = z2Of(act.laps, cfg);
+    const share = z2Of(zoneLaps(act), cfg);
     if (!share) return null;
     const target = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
     const above = share.above;
@@ -1173,7 +1200,7 @@
   }
 
   function sessionNote(act, cfg) {
-    const share = z2Of(act && act.laps, cfg);
+    const share = z2Of(zoneLaps(act), cfg);
     if (!share) return null;
     const target = (cfg && cfg.z2_target) || DEFAULT_CONFIG.z2_target;
     const s = sessionOf(act && act.session);
@@ -1431,7 +1458,8 @@
   const REVIEW_MIN = { bests: 2, mix: 3, months: 2 };
   const BUILD_DAYS = 84;
   const EVEN_SPLIT_S = 5;
-  const REVIEW_EFFORTS = [1, 5, 10, 21.1, 42.2];
+  /* the same distances as everywhere else; a function because they are declared further down */
+  const reviewEfforts = () => EFFORT_DISTANCES;
 
   function runPace(a) {
     return a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
@@ -1491,7 +1519,7 @@
       pace: paceSecPerKm(r.distance_km, r.elapsed_s),
       gap: r.gap_pace_s != null ? r.gap_pace_s : null,
       halves: halves(r.laps),
-      drift: drift(r.laps),
+      drift: driftOf(r),
       build: raceBuild(r, runs)
     }));
 
@@ -1527,10 +1555,10 @@
       const byLength = inP.slice().sort((a, b) => b.distance_km - a.distance_km);
       const longest = byLength[0];
       const training = byLength.find(a => !isRace(a)) || null;
-      const allBoard = bestEffortBoard(runs, REVIEW_EFFORTS);
+      const allBoard = bestEffortBoard(runs, reviewEfforts());
       const held = {};
       allBoard.forEach(b => { held[b.km] = b.run.id; });
-      const efforts = bestEffortBoard(inP, REVIEW_EFFORTS)
+      const efforts = bestEffortBoard(inP, reviewEfforts())
         .map(e => Object.assign({}, e, { pb: held[e.km] === e.run.id }));
       const aer = inP.filter(a => a.avg_hr != null && !isRace(a))
         .map(a => ({ run: a, pace: aerobicPace(a, c) })).filter(x => x.pace != null)
@@ -1624,16 +1652,22 @@
 
   /* ---------- best efforts ----------
 
-     Strava computes these from a GPS stream. This has per-kilometre laps, so a
-     "best 5 km" is the fastest five CONSECUTIVE LAPS — marginally slower than
-     a true rolling window, which could start anywhere. That is a real
-     difference and the app says so rather than pretending to be the same
-     number.
+     One source for every best in the app. A run with its watch file carries
+     efforts measured on the second-by-second record (worked out in the Apps
+     Script at import): the fastest stretch of exactly each distance, starting
+     anywhere, so a stretch that began 300 m into a lap counts, a stray lap
+     button doesn't matter, and a 21.46 km trail half yields a Half.
 
-     Only full laps count: a 0.43 km final lap is not a kilometre, and a
-     partial would otherwise make every run look like a personal best. */
+     A run without a file falls back to whole laps: the fastest run of
+     consecutive full kilometres, only at whole-kilometre distances. Laps can't
+     give a fair 400 m or mile, so those come from files only. Two methods are
+     never mixed for the same run: a run with a file is measured from the file
+     at every distance. */
 
-  const EFFORT_DISTANCES = [1, 2, 3, 5, 10, 15, 21.1, 42.2];
+  const EFFORT_DISTANCES = [0.4, 1, 1.609, 5, 10, 21.1, 42.2];
+  /* how each distance is keyed in the file-measured efforts */
+  const EFFORT_METERS = { 0.4: 400, 1: 1000, 1.609: 1609, 5: 5000, 10: 10000, 21.1: 21097, 42.2: 42195 };
+  const LAP_EFFORTS = [1, 5, 10, 21.1, 42.2];
 
   /* Fastest run of `km` consecutive full laps, or null if the run is shorter.
      Laps are rarely exactly 1 km, so distance is accumulated rather than
@@ -1652,7 +1686,7 @@
           const pace = time / dist;
           if (best == null || pace < best.pace)
             best = { pace: pace, seconds: Math.round(pace * km),
-                     from: full[i].n, to: full[j].n,
+                     from: full[i].n, to: full[j].n, source: 'laps',
                      overDistance: Math.round((dist - km) * 100) / 100 };
           break;
         }
@@ -1661,11 +1695,31 @@
     return best;
   }
 
-  /* Every distance this run is long enough for. */
+  function streamEfforts(act) {
+    if (!act || !(Number(act.stream_v) >= 1)) return null;
+    const e = act.efforts;
+    if (e && typeof e === 'object') return e;
+    try { return e ? JSON.parse(e) : {}; } catch (err) { return {}; }
+  }
+
+  /* One run, one distance, whichever way the run can be measured. */
+  function bestEffortOf(act, km) {
+    const st = streamEfforts(act);
+    if (st) {
+      const sec = st[EFFORT_METERS[km]];
+      if (!(sec > 0)) return null;
+      const realKm = EFFORT_METERS[km] / 1000;
+      return { seconds: Math.round(sec), pace: sec / realKm, source: 'stream' };
+    }
+    if (LAP_EFFORTS.indexOf(km) < 0) return null;
+    return bestEffort(act && act.laps, km);
+  }
+
+  /* Every distance this run has an effort for. */
   function effortsOf(act, distances) {
     const out = [];
     (distances || EFFORT_DISTANCES).forEach(km => {
-      const e = bestEffort(act && act.laps, km);
+      const e = bestEffortOf(act, km);
       if (e) out.push(Object.assign({ km: km }, e));
     });
     return out;
@@ -1678,12 +1732,63 @@
     return (distances || EFFORT_DISTANCES).map(km => {
       let best = null;
       runs.forEach(a => {
-        const e = bestEffort(a.laps, km);
-        if (e && (best == null || e.pace < best.pace))
+        const e = bestEffortOf(a, km);
+        if (e && (best == null || e.seconds < best.seconds))
           best = Object.assign({ km: km, run: a }, e);
       });
       return best;
     }).filter(Boolean);
+  }
+
+  /* ---------- the Best-of page ----------
+
+     Everything here is all-time, so nothing depends on which period the home
+     screen has selected. "This year" is the calendar year of today. */
+
+  function bestOfModel(acts, cfg, today) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    if (!runs.length) return { count: 0, board: [], progression: [], records: [], races: [] };
+    const year = String(today).slice(0, 4);
+    const thisYear = runs.filter(a => a.date.slice(0, 4) === year);
+    const years = Array.from(new Set(runs.map(a => a.date.slice(0, 4)))).sort();
+
+    const all = bestEffortBoard(runs);
+    const now = {};
+    bestEffortBoard(thisYear).forEach(b => { now[b.km] = b; });
+    const board = all.map(b => ({ km: b.km, best: b, thisYear: now[b.km] || null }));
+
+    /* each distance, its best in every year that has one */
+    const progression = EFFORT_DISTANCES.map(km => {
+      const per = years.map(y => {
+        const b = bestEffortBoard(runs.filter(a => a.date.slice(0, 4) === y), [km])[0];
+        return b ? { year: y, seconds: b.seconds, pace: b.pace, run: b.run } : null;
+      }).filter(Boolean);
+      if (!per.length) return null;
+      const fastest = per.slice().sort((x, y) => x.seconds - y.seconds)[0].year;
+      return { km: km, years: per.map(p => Object.assign({ fastest: p.year === fastest }, p)) };
+    }).filter(Boolean);
+
+    /* records: the existing set, plus climbing and the biggest month and year */
+    const records = recordsOf(runs, cfg);
+    const climb = runs.filter(a => a.ascent_m != null).sort((a, b) => b.ascent_m - a.ascent_m)[0];
+    if (climb) records.push({ label: 'Most climbing', value: String(Math.round(climb.ascent_m)),
+      unit: 'm', when: climb.date, id: climb.id });
+    const sumBy = keyOf => {
+      const m = {};
+      runs.forEach(a => { const k = keyOf(a); m[k] = (m[k] || 0) + (a.distance_km || 0); });
+      const k = Object.keys(m).sort((x, y) => m[y] - m[x])[0];
+      return k ? { key: k, km: m[k] } : null;
+    };
+    const bm = sumBy(a => a.date.slice(0, 7));
+    if (bm) records.push({ label: 'Biggest month', value: bm.km.toFixed(1), unit: 'km', when: bm.key });
+    const by = sumBy(a => a.date.slice(0, 4));
+    if (by) records.push({ label: 'Biggest year', value: by.km.toFixed(0), unit: 'km', when: by.key });
+
+    const races = runs.filter(isRace).sort((a, b) => b.date.localeCompare(a.date)).map(r => ({
+      run: r, seconds: r.elapsed_s, pace: paceSecPerKm(r.distance_km, r.elapsed_s) }));
+
+    return { count: runs.length, year: year, years: years, board: board,
+             progression: progression, records: records, races: races };
   }
 
   /* Which distances this run holds the record for, as of the whole history. */
@@ -1745,9 +1850,7 @@
       const date = d.toISOString().slice(0, 10);
       const onDay = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && a.date === date);
       const total = onDay.reduce((t, a) => t + (load(a, cfg) || 0), 0);
-      const laps = [];
-      onDay.forEach(a => (a.laps || []).forEach(l => laps.push(l)));
-      const tz = timeInZone(laps, zoneBounds(cfg));
+      const tz = timeInZone(lapsOf(onDay), zoneBounds(cfg));
       let top = null, best = 0;
       [1, 2, 3, 4, 5].forEach(z => { if (tz[z] > best) { best = tz[z]; top = z; } });
       out.push({ date: date, dow: i, count: onDay.length, load: total, zone: top,
@@ -1771,7 +1874,8 @@
     load, sessionRpe, z2Typical, z2Share, z2Record, z2Tone,
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
-    EFFORT_DISTANCES, bestEffort, effortsOf, bestEffortBoard, recordsSetBy,
+    EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
+    zoneLaps, driftOf, bestOfModel,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

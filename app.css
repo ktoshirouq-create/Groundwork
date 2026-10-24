@@ -731,3 +731,12 @@ label > span {
 .mix { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 0 2px;
        font-size: var(--t-body); color: var(--mute); }
 .mix b { color: var(--ink); font-family: var(--f-data); font-weight: 500; }
+
+/* ---------- bests ---------- */
+
+.corners { display: flex; gap: 6px; flex: none; }
+.prog { padding: 7px 0; border-top: 1px solid var(--line); }
+.prog .pl { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .12em;
+            text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+.prog .mix span { cursor: pointer; }
+.prog .mix span.top b { color: var(--z2); }

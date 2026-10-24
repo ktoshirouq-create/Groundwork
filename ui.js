@@ -320,10 +320,8 @@
     return '<span class="delta ' + cls + '">' + arrow + ' ' + Calc.deltaText(d, as) + '</span>';
   }
 
-  function recordsHTML() {
-    const cfg = Store.config();
-    const recs = Calc.records(Store.all(), cfg);
-    if (!recs.length) return '';
+  function recordsHTML(recs) {
+    if (!recs || !recs.length) return '';
     return '<div class="sec"><span>Records</span><span>all time</span></div>' +
       '<div class="recs">' + recs.map(r =>
         '<div class="rec"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '>' +
@@ -594,7 +592,8 @@
     let h = '<div class="top"><div>' +
       '<div class="ttl">' + esc(m.period.label) + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
-      '</div><button class="corner" data-go="settings">SETUP</button></div>';
+      '</div><div class="corners"><button class="corner" data-go="bests">BESTS</button>' +
+      '<button class="corner" data-go="settings">SETUP</button></div></div>';
 
     h += '<div class="bar">' + SCOPES.map(s =>
       '<button class="chip" data-scope="' + s + '" aria-pressed="' + (s === scope) + '">' +
@@ -787,7 +786,7 @@
      marked present or absent. Nothing here can reach today, because a
      finished year should read the same whenever you look at it. */
 
-  const EFFORT_NAME = { 21.1: 'Half', 42.2: 'Marathon' };
+  const EFFORT_NAME = { 0.4: '400 m', 1.609: 'Mile', 21.1: 'Half', 42.2: 'Marathon' };
   const MONTH = ['January','February','March','April','May','June',
                  'July','August','September','October','November','December'];
   const effortName = km => EFFORT_NAME[km] || km + ' km';
@@ -855,8 +854,8 @@
     });
     if (B.aerobic) h += cmp('Best aerobic pace', Calc.fmtPace(B.aerobic.pace) + '/km',
       fmtDate(B.aerobic.run.date), B.aerobic.run.id);
-    if (B.efforts.length) h += '<div class="est">Efforts are the fastest consecutive ' +
-      'kilometres from laps. PB marks one that still stands as your all-time best.</div>';
+    if (B.efforts.length) h += '<div class="est">Efforts are the fastest stretch of each ' +
+      'distance inside a run. PB marks one that still stands as your all-time best.</div>';
     return h;
   }
 
@@ -918,7 +917,7 @@
 
   function runRow(a, bounds, withMonth) {
     const c = Calc.aerobicCost(a);
-    const d = Calc.drift(a.laps);
+    const d = Calc.driftOf(a);
     const meta = [];
     const pace = a.gap_pace_s != null ? a.gap_pace_s : Calc.paceSecPerKm(a.distance_km, a.elapsed_s);
     meta.push(Calc.fmtPace(pace) + (a.gap_pace_s != null ? ' GAP' : ''));
@@ -1004,17 +1003,74 @@
     h += efforts.map(e =>
       '<div class="cmp' + (heldKm[e.km] ? ' pb' : '') + '">' +
       '<span class="k">' + (heldKm[e.km] ? '<i class="pbtag">PB</i> ' : '') +
-      e.km + ' km</span>' +
+      esc(effortName(e.km)) + '</span>' +
       '<span class="v">' + Calc.fmtDuration(e.seconds) +
-      '<s>' + Calc.fmtPace(e.pace) + '/km \u00b7 km ' + e.from +
-      (e.to !== e.from ? '\u2013' + e.to : '') + '</s></span></div>').join('');
+      '<s>' + Calc.fmtPace(e.pace) + '/km' +
+      (e.source === 'laps' ? ' \u00b7 km ' + e.from + (e.to !== e.from ? '\u2013' + e.to : '') : '') +
+      '</s></span></div>').join('');
 
-    h += '<div class="est">The fastest run of consecutive kilometres in this run. ' +
-      'Laps, not a rolling window \u2014 a true best could start mid-kilometre and ' +
-      'would be a little quicker.</div>';
+    h += '<div class="est">' + (efforts[0].source === 'stream'
+      ? 'The fastest stretch of each distance anywhere in this run, from the watch\u2019s ' +
+        'second-by-second record. Distance is GPS distance, so a race that measured long ' +
+        'shows a quicker time here than your finish time.'
+      : 'This run has no watch file, so these are the fastest runs of consecutive whole ' +
+        'kilometres \u2014 a stretch starting mid-kilometre can\u2019t be seen.') + '</div>';
     return h;
   }
 
+
+  /* -------------------------------------------------------------- bests ---
+
+     All-time, from one model. Every best here comes through the same effort
+     source as the year reviews and the PB tags, so the three never disagree. */
+
+  function renderBests() {
+    const m = Calc.bestOfModel(Store.all(), Store.config(), today());
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Bests</div>' +
+      '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
+        (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
+
+    if (m.board.length) {
+      h += '<div class="sec"><span>All time</span><span>beside ' + esc(m.year) + '</span></div>';
+      h += m.board.map(b => {
+        const T = b.thisYear, same = T && T.run.id === b.best.run.id;
+        return '<div class="cmp" data-id="' + esc(b.best.run.id) + '"><span class="k">' +
+          esc(effortName(b.km)) + '</span><span class="v">' + Calc.fmtDuration(b.best.seconds) +
+          '<s>' + fmtDate(b.best.run.date) +
+          (same ? ' \u00b7 this year' : T ? ' \u00b7 ' + esc(m.year) + ' best ' + Calc.fmtDuration(T.seconds) : '') +
+          '</s></span></div>';
+      }).join('');
+      h += '<div class="est">The fastest stretch of each distance inside any run, races included. ' +
+        'Distance is GPS distance.</div>';
+    }
+
+    if (m.progression.some(p => p.years.length > 1)) {
+      h += '<div class="sec"><span>Year by year</span><span>best each year</span></div>';
+      m.progression.forEach(p => {
+        h += '<div class="prog"><div class="pl">' + esc(effortName(p.km)) + '</div><div class="mix">' +
+          p.years.map(y => '<span data-id="' + esc(y.run.id) + '"' + (y.fastest ? ' class="top"' : '') + '>' +
+            esc(y.year) + ' <b>' + Calc.fmtDuration(y.seconds) + '</b></span>').join('') + '</div></div>';
+      });
+      h += '<div class="est">Highlighted: the fastest year at that distance.</div>';
+    }
+
+    h += recordsHTML(m.records);
+
+    if (m.races.length) {
+      h += '<div class="sec"><span>Races</span><span>' + m.races.length + '</span></div>';
+      h += m.races.map(R => '<div class="cmp" data-id="' + esc(R.run.id) + '"><span class="k">' +
+        esc(R.run.name) + '</span><span class="v">' + Calc.fmtDuration(R.seconds) + '<s>' +
+        fmtDate(R.run.date) + ' \u00b7 ' + R.run.distance_km.toFixed(2) + ' km \u00b7 ' +
+        Calc.fmtPace(R.pace) + '/km</s></span></div>').join('');
+    }
+
+    el('view-bests').innerHTML = h;
+    $('#view-bests [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#view-bests [data-id]').forEach(r => {
+      r.style.cursor = 'pointer';
+      r.onclick = () => go('detail', r.dataset.id);
+    });
+  }
 
   /* ---------------------------------------------------------------- detail */
 
@@ -1024,8 +1080,8 @@
     const cfg = Store.config();
     const bounds = Calc.zoneBounds(cfg);
     const c = Calc.aerobicCost(a);
-    const d = Calc.drift(a.laps);
-    const tz = Calc.timeInZone(a.laps, bounds);
+    const d = Calc.driftOf(a);
+    const tz = Calc.timeInZone(Calc.zoneLaps(a), bounds);
     const zTotal = [1,2,3,4,5].reduce((t, z) => t + tz[z], 0) + tz.unknown;
 
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
@@ -1150,7 +1206,7 @@
     const bounds = Calc.zoneBounds(Store.config());
     const a = draft;
     const c = Calc.aerobicCost(a);
-    const d = Calc.drift(a.laps);
+    const d = Calc.driftOf(a);
     const dup = a.date && a.distance_km ? Model.findDuplicate(a, Store.all()) : null;
 
     let h = '<div class="rule"></div><div class="eyebrow">Check it</div>';
@@ -1346,11 +1402,15 @@
     const n = Store.all().length;
     const last = Store.config().exported_at || null;
     const days = last ? Calc.daysBetween(last.slice(0, 10), today()) : null;
+    /* Where the runs live is what the sync says, not whether a backup file was
+       ever made: with the spreadsheet in step, this phone is not the only copy. */
+    const inSheet = Store.sheetsConfigured() && Store.sync.state === 'ok' && !Store.sync.outdated;
     h += '<div class="sec"><span>Your data</span><span>' +
       (days == null ? 'never exported' : days + ' days since export') + '</span></div>';
     h += '<div class="small muted">' + n + ' activit' + (n === 1 ? 'y' : 'ies') +
-      ', on this device only.</div>';
-    if (days == null || days >= 14) {
+      (inSheet ? ', in the spreadsheet and on this phone. An export is an extra copy you keep yourself.'
+               : ', on this device only.') + '</div>';
+    if (!inSheet && (days == null || days >= 14)) {
       h += '<div class="flag"><i>!</i><div>' +
         (days == null
           ? 'Nothing has been exported yet. Android can clear a browser\u2019s storage without warning.'
@@ -1661,9 +1721,11 @@
     });
     const setup = $('#view-home [data-go="settings"]');
     if (setup) setup.onclick = () => go('settings');
+    const bests = $('#view-home [data-go="bests"]');
+    if (bests) bests.onclick = () => go('bests');
   }
 
-  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace'];
+  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests'];
 
   /* Navigation writes to browser history, so Android's back button and its
      edge-swipe both go back a screen instead of leaving the app. */
@@ -1680,6 +1742,7 @@
       if (view === 'settings') renderSettings();
       if (view === 'edit') renderEdit(param);
       if (view === 'replace') renderReplace(param);
+      if (view === 'bests') renderBests();
     } catch (err) {
       /* Whatever went wrong, there must still be a way to Setup, an export,
          and the error itself. A blank screen tells you nothing and traps you. */
