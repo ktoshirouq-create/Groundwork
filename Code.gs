@@ -454,16 +454,26 @@ function garminToken() {
   return token;
 }
 
+/* Garmin allows about 100 requests in a short window and answers the 101st
+   with HTTP 429 and how long to wait. That is a pause, not a failure: wait as
+   told and ask again, up to three times. */
+var RATE_TRIES = 3, RATE_MAX_WAIT_S = 70;
+
 function garminGet(path, params, raw) {
   var q = params ? '?' + Object.keys(params).map(function (k) {
     return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
   }).join('&') : '';
-  var res = UrlFetchApp.fetch(GARMIN_BASE + path + q, {
-    muteHttpExceptions: true,
-    headers: { 'Authorization': 'Bearer ' + garminToken(),
-               'Accept': raw ? 'application/zip, application/x-zip-compressed, application/octet-stream' : 'application/json' }
-  });
-  var code = res.getResponseCode();
+  var res, code;
+  for (var attempt = 0; ; attempt++) {
+    res = UrlFetchApp.fetch(GARMIN_BASE + path + q, {
+      muteHttpExceptions: true,
+      headers: { 'Authorization': 'Bearer ' + garminToken(),
+                 'Accept': raw ? 'application/zip, application/x-zip-compressed, application/octet-stream' : 'application/json' }
+    });
+    code = res.getResponseCode();
+    if (code !== 429 || attempt >= RATE_TRIES) break;
+    Utilities.sleep(rateWait(res) * 1000);
+  }
   if (code === 401 || code === 403) {
     CacheService.getScriptCache().remove('GARMIN_BEARER');
     throw new GarminError('key', 'Garmin refused the key \u2014 it has probably expired. ' +
@@ -472,6 +482,17 @@ function garminGet(path, params, raw) {
   if (code >= 300) throw new GarminError('http', 'Garmin did not answer (HTTP ' + code + ' on ' +
     path.split('/')[1] + ')' + (raw ? '' : ': ' + String(res.getContentText() || '').slice(0, 160)) + '.', code);
   return raw ? res.getBlob() : JSON.parse(res.getContentText() || 'null');
+}
+
+/* Seconds to wait after a 429: Garmin's own retryInSeconds, else Retry-After, else 30. */
+function rateWait(res) {
+  var s = null;
+  try { s = Number(JSON.parse(res.getContentText() || '{}').retryInSeconds); } catch (e) {}
+  if (!(s > 0)) {
+    try { var h = res.getHeaders ? res.getHeaders() : {}; s = Number(h['Retry-After'] || h['retry-after']); } catch (e) {}
+  }
+  if (!(s > 0)) s = 30;
+  return Math.min(RATE_MAX_WAIT_S, Math.ceil(s) + 1);
 }
 
 /* The list comes back either bare or wrapped, depending on the endpoint version. */
@@ -964,10 +985,21 @@ function garminRestingHistory() {
     cursor = dates.length ? dates[0].slice(0, 7) + '-01' : RESTING_FROM_YEAR + '-01-01';
   }
   var today = isoDay(new Date()), added = 0, cut = false, refused = [];
+  /* a stretch that already has most of its nights is not asked for again,
+     so running this a second time only fills what is missing */
+  var have = {};
+  restingRows().forEach(function (r) { have[r[0]] = true; });
+  var recent = isoDay(new Date(Date.now() - 14 * 864e5));
   while (cursor <= today) {
     if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
     var end = isoDay(new Date(new Date(cursor + 'T12:00:00Z').getTime() + (RESTING_CHUNK_DAYS - 1) * 864e5));
     if (end > today) end = today;
+    var got = 0, span = 0;
+    for (var t = new Date(cursor + 'T12:00:00Z'); isoDay(t) <= end; t = new Date(t.getTime() + 864e5)) { span++; if (have[isoDay(t)]) got++; }
+    if (end < recent && got >= span * 0.8) {
+      cursor = isoDay(new Date(new Date(end + 'T12:00:00Z').getTime() + 864e5));
+      continue;
+    }
     try { added += restingUpsert(garminRestingRange(cursor, end)); }
     catch (e) {
       if (e && e.kind === 'key') throw e;                 // a dead key stops everything, and says so
@@ -992,7 +1024,8 @@ function garminRestingHistory() {
     } catch (e) { why += ' The per-day heart-rate record failed too: ' + (e && e.message || e); }
   }
   var msg = (cut ? 'Resting HR: ' + added + ' days added this run, up to ' + cursor + '. Press Run again to carry on.'
-    : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') + '.') +
+    : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') +
+      ' (' + added + ' new this run).') +
     (refused.length ? ' Garmin refused ' + refused.length + ' stretch' + (refused.length === 1 ? '' : 'es') +
       '; first: ' + refused[0] : '') + why;
   if (!cut) props.deleteProperty('GARMIN_RESTING_CURSOR');
