@@ -227,6 +227,16 @@
 
      Now x is the date. A gap is blank because nothing happened then, which is
      the honest picture and needs no gutter at all. */
+  /* What an aerobic-pace chart leaves out, said once for every chart. */
+  function leftOutText(L) {
+    if (!L || (!L.races && !L.trail)) return '';
+    const parts = [];
+    if (L.races) parts.push(L.races + ' race' + (L.races === 1 ? '' : 's'));
+    if (L.trail) parts.push(L.trail + ' trail run' + (L.trail === 1 ? '' : 's'));
+    return '. ' + parts.join(' and ') + ' left out \u2014 ' +
+      (L.races && L.trail ? 'neither is' : 'not') + ' a measurement of aerobic pace';
+  }
+
   function lineChart(segments, opt) {
     opt = opt || {};
     const all = [].concat.apply([], segments).map(p => p.value).filter(v => v != null);
@@ -274,17 +284,19 @@
       const w = lead ? 2.2 : 1.6;
       const pts = seg.map(p => xOf(p.date).toFixed(2) + ',' + yOf(p.value).toFixed(2));
 
+      if (opt.allDots) seg.forEach(p => dots.push({ x: xOf(p.date), y: yOf(p.value),
+        cls: 'now', r: 6, id: p.id }));
       if (seg.length > 1) {
         svg += '<polyline class="draw" fill="none" stroke="' + col + '" stroke-width="' + w +
           '" vector-effect="non-scaling-stroke" points="' + pts.join(' ') + '"/>';
-      } else {
+      } else if (!opt.allDots) {
         /* A block of one run has no line to draw. The marker goes in the HTML
            layer, not the SVG: the viewBox is stretched to the plot's width, so
            a <circle> in here comes out as a wide ellipse and reads as a smudge. */
         dots.push({ x: xOf(seg[0].date), y: yOf(seg[0].value),
                     cls: si === last ? 'now' : 'prev', r: 4 });
       }
-      if (si === last) {
+      if (si === last && !opt.allDots) {
         const p = seg[seg.length - 1];
         dots.push({ x: xOf(p.date), y: yOf(p.value), cls: 'tip', r: 5 });
       }
@@ -292,7 +304,7 @@
     svg += '</svg>';
 
     const dotHTML = dots.map(d =>
-      '<i class="cdot ' + d.cls + '" style="left:' + d.x.toFixed(2) + '%; top:' +
+      '<i class="cdot ' + d.cls + '"' + (d.id ? ' data-id="' + esc(d.id) + '"' : '') + ' style="left:' + d.x.toFixed(2) + '%; top:' +
       d.y.toFixed(2) + '%; width:' + d.r + 'px; height:' + d.r + 'px"></i>').join('');
 
     const fmt = opt.format || (v => Math.round(v));
@@ -721,10 +733,8 @@
         legend: '<span><i class="sw now"></i>this block</span>' +
                 (segs.length > 1 ? '<span><i class="sw prev"></i>earlier blocks</span>' : '')
       });
-      const raced = m.races.length;
       h += '<div class="est">Faster is higher, spaced by date \u2014 a gap is time off' +
-        (raced ? '. ' + raced + ' race' + (raced === 1 ? '' : 's') +
-          ' left out, a race is not a measurement of aerobic pace' : '') +
+        leftOutText(m.leftOut) +
         (m.trend.mark != null ? '. Dashed rule is your previous best, ' +
           Calc.fmtPace(m.trend.mark) : '') +
         '. ' + m.trend.shown + ' run' + (m.trend.shown === 1 ? '' : 's') +
@@ -900,7 +910,7 @@
     h += zonesHTML(m.zones, bounds);
 
     if (!m.trend.absent) {
-      const T = m.trend, raced = m.races.length;
+      const T = m.trend;
       h += '<div class="sec"><span>Aerobic pace</span><span>' + esc(m.period.word) + '</span></div>';
       h += lineChart(T.segments, {
         invert: true, uniform: true, height: 150, from: T.from, to: T.to,
@@ -909,7 +919,7 @@
         xax: [fmtDate(T.from).toUpperCase(), '', fmtDate(T.to).toUpperCase()]
       });
       h += '<div class="est">Faster is higher, spaced by date \u2014 a gap is nothing logged' +
-        (raced ? '. ' + plural(raced, 'race') + ' left out, a race is not a measurement of aerobic pace' : '') +
+        leftOutText(m.leftOut) +
         '. ' + plural(T.shown, 'run') + (T.days >= 2 ? ' over ' + T.days + ' days' : '') + '.</div>';
     }
     return h;
@@ -952,17 +962,14 @@
   /* A pace means nothing until you know what it's relative to. Grouped by
      distance within 20%, because a 3 km and a 12 km are not the same job. */
   function bandHTML(a) {
-    const cfg = Store.config();
-    const mine = Calc.aerobicPace(a, cfg);
-    if (mine == null) return '';
-    const lo = a.distance_km * 0.8, hi = a.distance_km * 1.2;
-    const peers = Store.all()
-      .filter(x => x.type === 'run' && x.id !== a.id && x.avg_hr != null &&
-                   x.distance_km >= lo && x.distance_km <= hi)
-      .map(x => ({ act: x, pace: Calc.aerobicPace(x, cfg) }))
-      .filter(x => x.pace != null)
-      .sort((p, q) => p.pace - q.pace);
-    if (!peers.length) return '';
+    const P = Calc.lengthPeers(a, Store.all(), Store.config());
+    if (!P) return '';
+    const mine = P.mine, peers = P.peers, lo = P.lo, hi = P.hi;
+    if (!peers.length) return P.trail
+      ? '<div class="sec"><span>Against trail runs this length</span><span>' + lo.toFixed(1) +
+        '\u2013' + hi.toFixed(1) + ' km</span></div><div class="est">No other trail run this ' +
+        'length yet. A trail run is only ranked against trail runs.</div>'
+      : '';
 
     const all = peers.concat([{ act: a, pace: mine }]).sort((p, q) => p.pace - q.pace);
     const rank = all.findIndex(x => x.act.id === a.id) + 1;
@@ -973,7 +980,7 @@
       n + (n === 2 ? 'nd' : n === 3 ? 'rd' : n % 10 === 1 && n !== 11 ? 'st' :
            n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th') + ' fastest';
 
-    let h = '<div class="sec"><span>Against runs this length</span><span>' +
+    let h = '<div class="sec"><span>Against ' + (P.trail ? 'trail ' : '') + 'runs this length</span><span>' +
       lo.toFixed(1) + '\u2013' + hi.toFixed(1) + ' km</span></div>';
     h += '<div class="cmp"><span class="k">' + ordinal(rank) + ' of ' + all.length +
       '</span><span class="v">' + Calc.fmtPace(mine) +
@@ -1047,11 +1054,28 @@
     if (m.progression.some(p => p.years.length > 1)) {
       h += '<div class="sec"><span>Year by year</span><span>best each year</span></div>';
       m.progression.forEach(p => {
-        h += '<div class="prog"><div class="pl">' + esc(effortName(p.km)) + '</div><div class="mix">' +
-          p.years.map(y => '<span data-id="' + esc(y.run.id) + '"' + (y.fastest ? ' class="top"' : '') + '>' +
-            esc(y.year) + ' <b>' + Calc.fmtDuration(y.seconds) + '</b></span>').join('') + '</div></div>';
+        /* a line within a run of consecutive years; a gap year breaks it */
+        const segs = [];
+        p.years.forEach((y, i) => {
+          const pt = { date: y.run.date, value: y.pace, id: y.run.id };
+          if (i && +y.year - +p.years[i - 1].year === 1) segs[segs.length - 1].push(pt);
+          else segs.push([pt]);
+        });
+        const fast = p.years.find(y => y.fastest), last = p.years[p.years.length - 1];
+        h += '<div class="prog"><div class="pl">' + esc(effortName(p.km)) + '</div>' +
+          lineChart(segs, {
+            invert: true, uniform: true, allDots: true, height: 84,
+            from: p.years[0].year + '-01-01', to: last.year + '-12-31',
+            format: v => Calc.fmtPace(v), anchorLabels: ['best', 'slowest'],
+            label: effortName(p.km) + ', best pace each year. Faster is higher.',
+            xax: [p.years[0].year, '', last.year]
+          }) +
+          '<div class="est">Fastest ' + esc(fast.year) + ', ' + Calc.fmtDuration(fast.seconds) +
+          (last.year !== fast.year ? ' \u00b7 ' + esc(last.year) + ', ' + Calc.fmtDuration(last.seconds) : '') +
+          '</div></div>';
       });
-      h += '<div class="est">Highlighted: the fastest year at that distance.</div>';
+      h += '<div class="est">Each dot is that year\u2019s best; tap one for the run. Faster is higher. ' +
+        'A break in the line is a year with no runs.</div>';
     }
 
     h += recordsHTML(m.records);
@@ -1089,6 +1113,7 @@
     const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase()];
     if (a.session) sub.push(Calc.sessionLabel(a.session).toUpperCase());
     sub.push(a.source.toUpperCase());
+    if (Calc.isTrail(a)) sub.push('TRAIL');
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
@@ -1216,6 +1241,10 @@
     h += '<div class="bar wrap" id="p-session">' + Calc.SESSIONS.map(s =>
       '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
       (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
+    h += '<label><span>Where</span></label>';
+    h += '<div class="bar wrap" id="p-terrain">' + [['road', 'Road'], ['trail', 'Trail']].map(t =>
+      '<button class="chip" type="button" data-terr="' + t[0] + '" aria-pressed="' +
+      ((a.terrain === 'trail') === (t[0] === 'trail')) + '">' + t[1] + '</button>').join('') + '</div>';
     h += '<label><span>Call it something else (optional)</span>' +
       '<input type="text" id="p-name" value="' + esc(a.name || '') +
       '" placeholder="Furuset loop"></label>';
@@ -1275,6 +1304,13 @@
       };
     });
 
+    document.querySelectorAll('#p-terrain [data-terr]').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('#p-terrain [data-terr]').forEach(x =>
+          x.setAttribute('aria-pressed', String(x === b)));
+        if (draft) draft.terrain = b.dataset.terr === 'trail' ? 'trail' : 'road';
+      };
+    });
     const save = el('save');
     if (save && !errors.length) once(save, dup ? 'Replacing\u2026' : 'Saving\u2026', () => {
       draft.name = el('p-name').value.trim();
@@ -1536,6 +1572,10 @@
     h += '<div class="bar wrap" id="e-session">' + Calc.SESSIONS.map(s =>
       '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
       (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
+    h += '<label><span>Where</span></label>';
+    h += '<div class="bar wrap" id="e-terrain">' + [['road', 'Road'], ['trail', 'Trail']].map(t =>
+      '<button class="chip" type="button" data-terr="' + t[0] + '" aria-pressed="' +
+      ((a.terrain === 'trail') === (t[0] === 'trail')) + '">' + t[1] + '</button>').join('') + '</div>';
     h += '<label><span>Note</span><input type="text" data-f="note" data-kind="text" value="' +
       esc(a.note || '') + '"></label>';
 
@@ -1559,6 +1599,15 @@
     document.querySelectorAll('#view-edit [data-back]').forEach(b => b.onclick = () => go('detail', id));
 
     let editSession = a.session || null;
+    let editTerrain = a.terrain || null;
+    document.querySelectorAll('#e-terrain [data-terr]').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('#e-terrain [data-terr]').forEach(x =>
+          x.setAttribute('aria-pressed', String(x === b)));
+        editTerrain = b.dataset.terr === 'trail' ? 'trail' : 'road';
+      };
+    });
+
     document.querySelectorAll('#e-session [data-sess]').forEach(b => {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') === 'true';
@@ -1599,6 +1648,7 @@
       if (errors.length) { toast('Fix the highlighted fields', 'bad'); return; }
 
       next.session = editSession;
+      next.terrain = editTerrain;
       next.updated_at = new Date().toISOString();
       return Store.put(next).then(() => { go('detail', next.id); toast('Saved', 'ok'); });
     });

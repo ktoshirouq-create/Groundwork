@@ -341,7 +341,7 @@
     distance_km: null, elapsed_s: null, moving_s: null,
     ascent_m: null, descent_m: null, ele_min_m: null, ele_max_m: null,
     temp_c: null, avg_hr: null, resting_hr: null, gap_pace_s: null, cadence_spm: null,
-    rpe: null, feel: null, session: null, note: null,
+    rpe: null, feel: null, session: null, note: null, terrain: null,
     laps: [], created_at: null, updated_at: null
   };
 
@@ -650,7 +650,7 @@
      about the running. */
   function paceSeries(acts, cfg, from, to) {
     let runs = (acts || [])
-      .filter(a => a.type === 'run' && a.avg_hr != null && !isRace(a))
+      .filter(a => a.type === 'run' && a.avg_hr != null && isAerobicMeasure(a))
       .sort((a, b) => a.date.localeCompare(b.date));
 
     const total = runs.length;
@@ -1316,12 +1316,12 @@
     /* ---- the run the heroes describe: from the period, or nothing ----
        A race is not an aerobic-pace measurement, so it never becomes the
        exemplar. It stays in the list, the totals and the zone split. */
-    const inPHr = inP.filter(a => a.avg_hr != null && !isRace(a));
+    const inPHr = inP.filter(a => a.avg_hr != null && isAerobicMeasure(a));
     const lastRun = inPHr.length ? inPHr[0] : (isCurrent ? null : null);
     const pace = lastRun ? aerobicPace(lastRun, c) : null;
 
     /* ---- what that run is measured against: all history, never the period ---- */
-    const hist = upTo.filter(a => a.avg_hr != null && !isRace(a))
+    const hist = upTo.filter(a => a.avg_hr != null && isAerobicMeasure(a))
       .sort((a, b) => b.date.localeCompare(a.date));
     let peers = [], band = null, prevRun = null;
     if (lastRun) {
@@ -1421,6 +1421,7 @@
       form: { rows: rows, label: isCurrent ? null : label },
 
       races: inP.filter(isRace),
+      leftOut: leftOutOf(inP),
 
       ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
       gapBefore: emptyRunBefore(runs, scope, key),
@@ -1560,7 +1561,7 @@
       allBoard.forEach(b => { held[b.km] = b.run.id; });
       const efforts = bestEffortBoard(inP, reviewEfforts())
         .map(e => Object.assign({}, e, { pb: held[e.km] === e.run.id }));
-      const aer = inP.filter(a => a.avg_hr != null && !isRace(a))
+      const aer = inP.filter(a => a.avg_hr != null && isAerobicMeasure(a))
         .map(a => ({ run: a, pace: aerobicPace(a, c) })).filter(x => x.pace != null)
         .sort((a, b) => a.pace - b.pace)[0] || null;
       bests = {
@@ -1613,6 +1614,7 @@
       summary: summary,
       previous: previous,
       races: races,
+      leftOut: leftOutOf(inP),
       months: months,
       bests: bests,
       mix: mix,
@@ -1646,8 +1648,42 @@
 
   function isRace(a) { return !!a && a.session === 'race'; }
 
+  /* Terrain: road unless said otherwise. Set from Garmin's "Trail Run" type
+     at import, or by hand on the run. */
+  function isTrail(a) { return !!a && a.terrain === 'trail'; }
+
+  /* What counts as a measurement of aerobic pace. A race is run to a
+     different brief, and a technical trail is slow for reasons that have
+     nothing to do with fitness, so neither is one. Every aerobic-pace figure
+     in the app asks here. */
+  function isAerobicMeasure(a) { return !!a && !isRace(a) && !isTrail(a); }
+
   function aerobicSamples(acts) {
-    return (acts || []).filter(a => !isRace(a));
+    return (acts || []).filter(isAerobicMeasure);
+  }
+
+  /* What a period's aerobic-pace caption has to own up to leaving out. */
+  function leftOutOf(acts) {
+    const runs = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
+    return { races: runs.filter(isRace).length,
+             trail: runs.filter(a => isTrail(a) && !isRace(a)).length };
+  }
+
+  /* Runs to rank this one against: a similar distance (within 20%) on the
+     same kind of ground. A technical trail ranked against road runs comes
+     last for reasons that aren't fitness. */
+  function lengthPeers(act, all, cfg) {
+    if (!act || act.distance_km == null) return null;
+    const mine = aerobicPace(act, cfg);
+    if (mine == null) return null;
+    const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2, trail = isTrail(act);
+    const peers = (all || [])
+      .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null &&
+                   x.distance_km >= lo && x.distance_km <= hi && isTrail(x) === trail)
+      .map(x => ({ act: x, pace: aerobicPace(x, cfg) }))
+      .filter(x => x.pace != null)
+      .sort((p, q) => p.pace - q.pace);
+    return { mine: mine, peers: peers, lo: lo, hi: hi, trail: trail };
   }
 
   /* ---------- best efforts ----------
@@ -1875,7 +1911,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel,
+    zoneLaps, driftOf, bestOfModel, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

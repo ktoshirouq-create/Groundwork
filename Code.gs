@@ -49,7 +49,9 @@ var ACT_COLS = [
   /* from the watch file's second-by-second record (Oct 2026): best efforts at
      standard distances, seconds spent at each heart rate, drift, max HR.
      stream_v says which version of the reader produced them. */
-  'max_hr', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v'
+  'max_hr', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v',
+  /* road (empty) or trail: from Garmin's activity type, or set in the app */
+  'terrain'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
@@ -61,7 +63,7 @@ var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
@@ -584,24 +586,54 @@ function fitDecode(input) {
      kilometre dropped), measured on the stream rather than on lap averages.
    Gaps over 10 s are pauses and count as no time. */
 
-var STREAM_V = 1;
+/* v2 (Oct 2026): v1 treated every gap over 10 s as a pause and dropped its
+   time but kept its distance. Older watches record "smart", a point every few
+   seconds and sometimes 15-20 s apart, so hundreds of metres took no time at
+   all and 2017 showed a 1 km in 2:16. A gap is now a pause only if you barely
+   moved during it; otherwise it is running time however long it is. And a
+   step between two points faster than any runner (a GPS jump) adds no
+   distance. */
+var STREAM_V = 2;
 var EFFORT_M = [400, 1000, 1609, 5000, 10000, 21097, 42195];
 var FASTEST_S_PER_KM = 120;
-var PAUSE_S = 10;
+var PAUSE_S = 10;            // a gap longer than this might be a pause...
+var PAUSE_MPS = 0.5;         // ...and is one if you moved slower than this during it
+var JUMP_MPS = 8;            // faster than this between two points is GPS, not legs
+
+/* Clean the record into running time and trustworthy distance. */
+function streamClean(records) {
+  var r = (records || []).filter(function (x) { return x.t != null; });
+  var out = [];
+  var time = 0, dist = null, prevD = null;
+  for (var i = 0; i < r.length; i++) {
+    var hasD = r[i].d != null;
+    if (i) {
+      var dt = r[i].t - r[i - 1].t;
+      var step = hasD && prevD != null ? r[i].d - prevD : null;
+      var paused = dt > PAUSE_S && (step == null || step < PAUSE_MPS * dt);
+      var run = dt > 0 && !paused ? dt : 0;
+      time += run;
+      if (step != null && dist != null) {
+        var jump = step < 0 || (dt > 0 ? step / dt > JUMP_MPS : step > 0);
+        if (!jump) dist += step;
+      }
+      out.push({ t: time, d: dist, hr: r[i].hr, dt: run, hrPrev: r[i - 1].hr });
+    } else {
+      dist = hasD ? 0 : null;
+      out.push({ t: 0, d: dist, hr: r[i].hr, dt: 0, hrPrev: null });
+    }
+    if (hasD) { prevD = r[i].d; if (dist == null) dist = 0; }
+  }
+  return out;
+}
 
 function streamFigures(records) {
-  var r = (records || []).filter(function (x) { return x.t != null; });
-  if (r.length < 10) return null;
-  /* time with pauses taken out, so an effort is running time */
-  var tt = [0], dd = [], hh = [];
-  for (var i = 0; i < r.length; i++) {
-    if (i) { var dt = r[i].t - r[i - 1].t; tt.push(tt[i - 1] + (dt > 0 && dt <= PAUSE_S ? dt : 0)); }
-    dd.push(r[i].d); hh.push(r[i].hr);
-  }
+  var c = streamClean(records);
+  if (c.length < 10) return null;
 
   var efforts = {};
   var di = [], ti = [];
-  for (var k = 0; k < r.length; k++) if (dd[k] != null) { di.push(dd[k]); ti.push(tt[k]); }
+  c.forEach(function (x) { if (x.d != null) { di.push(x.d); ti.push(x.t); } });
   EFFORT_M.forEach(function (D) {
     if (!di.length || di[di.length - 1] - di[0] < D) return;
     var best = null, a = 0;
@@ -618,31 +650,33 @@ function streamFigures(records) {
   });
 
   var hist = {};
-  for (var m = 1; m < r.length; m++) {
-    var gap = r[m].t - r[m - 1].t;
-    if (gap <= 0 || gap > PAUSE_S || hh[m - 1] == null) continue;
-    hist[hh[m - 1]] = (hist[hh[m - 1]] || 0) + gap;
-  }
+  c.forEach(function (x) {
+    if (x.dt > 0 && x.hrPrev != null) hist[x.hrPrev] = (hist[x.hrPrev] || 0) + x.dt;
+  });
   var histStr = Object.keys(hist).map(Number).sort(function (x, y) { return x - y; })
     .map(function (b) { return b + ':' + hist[b]; }).join(',');
 
   /* drift: drop the first kilometre, compare the last third with the first */
   var driftBpm = null;
-  var startD = (dd[0] || 0) + 1000, endD = null;
-  for (var q = r.length - 1; q >= 0; q--) if (dd[q] != null) { endD = dd[q]; break; }
+  var endD = di.length ? di[di.length - 1] : null, startD = 1000;
   if (endD != null && endD - startD >= 3000) {
     var third = (endD - startD) / 3, sums = [0, 0], secs = [0, 0];
-    for (var z = 1; z < r.length; z++) {
-      var g = r[z].t - r[z - 1].t;
-      if (g <= 0 || g > PAUSE_S || hh[z] == null || dd[z] == null) continue;
-      var part = dd[z] < startD ? -1 : dd[z] < startD + third ? 0 : dd[z] >= endD - third ? 1 : -1;
-      if (part < 0) continue;
-      sums[part] += hh[z] * g; secs[part] += g;
-    }
+    c.forEach(function (x) {
+      if (!(x.dt > 0) || x.hr == null || x.d == null || x.d < startD) return;
+      var part = x.d < startD + third ? 0 : x.d >= endD - third ? 1 : -1;
+      if (part < 0) return;
+      sums[part] += x.hr * x.dt; secs[part] += x.dt;
+    });
     if (secs[0] && secs[1]) driftBpm = Math.round(sums[1] / secs[1] - sums[0] / secs[0]);
   }
   return { efforts: Object.keys(efforts).length ? JSON.stringify(efforts) : '',
            hr_hist: histStr, drift_bpm: driftBpm };
+}
+
+/* Trail by Garmin's own activity type; anything else is left for you. */
+function garminTerrain(j) {
+  var t = String(j && j.activityType && (j.activityType.typeKey || j.activityType.key) || '');
+  return /trail/i.test(t) ? 'trail' : '';
 }
 
 /* ---------------------------------------------------- one Garmin run → row */
@@ -701,6 +735,7 @@ function garminActivity(j, fit) {
     hr_hist: st ? st.hr_hist : '',
     drift_bpm: st ? st.drift_bpm : null,
     stream_v: STREAM_V,
+    terrain: garminTerrain(j),
     laps: laps,
     created_at: now, updated_at: now
   };
@@ -1118,6 +1153,8 @@ function garminEnrich() {
       var empty = function (c) { return hm[c] == null || row[hm[c]] === '' || row[hm[c]] == null; };
       if (g) {
         FILL_IF_EMPTY.forEach(function (c) { if (empty(c) && g[c] != null) put(c, g[c]); });
+        /* Garmin's trail type only where you haven't said road or trail yourself */
+        if (empty('terrain') && g.terrain) put('terrain', g.terrain);
         put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm);
         if (String(a.id).indexOf('-g' + a.garmin_id) >= 0) put('temp_c', null);   // imported: wrist sensor out
         if (g.laps.length) {

@@ -738,5 +738,6 @@ label > span {
 .prog { padding: 7px 0; border-top: 1px solid var(--line); }
 .prog .pl { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .12em;
             text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
-.prog .mix span { cursor: pointer; }
-.prog .mix span.top b { color: var(--z2); }
+.prog .chart { margin-top: 2px; }
+.prog .est { margin-top: 2px; }
+.cdot[data-id] { pointer-events: auto; cursor: pointer; }

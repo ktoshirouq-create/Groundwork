@@ -21,7 +21,7 @@
 
   /* Fields that until Oct 2026 lived only on the phone, because the sheet had
      no column for them. Sent up once, as a fill, when the script has them. */
-  const FILL_FIELDS = ['session', 'subtype', 'value', 'protocol_note', 'resting_hr'];
+  const FILL_FIELDS = ['session', 'subtype', 'value', 'protocol_note', 'resting_hr', 'terrain'];
 
   function readJSON(k, fallback) {
     try { return JSON.parse(localStorage.getItem(k) || JSON.stringify(fallback)); }
@@ -303,7 +303,9 @@
         }
         self.sync.garmin = data.garmin || null;
         /* an Apps Script deployed before the new columns can't keep tags */
-        self.sync.outdated = !(data.columns && data.columns.indexOf('session') >= 0);
+        /* out of date if the sheet lacks a column for anything this app stores */
+        self.sync.columns = data.columns || [];
+        self.sync.outdated = FILL_FIELDS.some(k => self.sync.columns.indexOf(k) < 0);
         return self.adapter.saveAll(self.bundle)
           .then(() => self.fillFields())
           .then(() => ({ merged: remote.length }));
@@ -328,20 +330,25 @@
        laps and moves no timestamps, and never overwrites a value already in
        the sheet. Retried on every sync until it succeeds. */
     fillFields: function () {
-      if (this.sync.outdated || localStorage.getItem(KEY.fieldsUp)) return Promise.resolve(0);
+      /* The fill is remembered per field, so a column added later (terrain)
+         gets its own fill without resending the ones already done. */
+      let done = [];
+      try { const v = JSON.parse(localStorage.getItem(KEY.fieldsUp) || '[]'); done = Array.isArray(v) ? v : FILL_FIELDS.filter(k => k !== 'terrain'); }
+      catch (e) { done = FILL_FIELDS.filter(k => k !== 'terrain'); }   // an old date stamp: everything but terrain went up
+      const todo = FILL_FIELDS.filter(k => done.indexOf(k) < 0 && (this.sync.columns || []).indexOf(k) >= 0);
+      if (this.sync.outdated && !todo.length) return Promise.resolve(0);
+      if (!todo.length) return Promise.resolve(0);
+      const mark = () => localStorage.setItem(KEY.fieldsUp, JSON.stringify(done.concat(todo)));
       const fields = {};
       this.all().forEach(a => {
         const f = {};
-        FILL_FIELDS.forEach(k => { if (a[k] != null && a[k] !== '') f[k] = a[k]; });
+        todo.forEach(k => { if (a[k] != null && a[k] !== '') f[k] = a[k]; });
         if (Object.keys(f).length) fields[a.id] = f;
       });
-      if (!Object.keys(fields).length) {
-        localStorage.setItem(KEY.fieldsUp, new Date().toISOString());
-        return Promise.resolve(0);
-      }
+      if (!Object.keys(fields).length) { mark(); return Promise.resolve(0); }
       return Sheets.post({ action: 'fields', fields: fields }).then(r => {
         if (!r || r.error) return 0;
-        localStorage.setItem(KEY.fieldsUp, new Date().toISOString());
+        mark();
         return r.filled || 0;
       }).catch(() => 0);
     },

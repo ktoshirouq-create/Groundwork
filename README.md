@@ -834,9 +834,13 @@ A page of its own (**BESTS**, beside Setup), all-time and independent of the
 period selected on the home screen:
 
 - **All time**: each distance's best, with this year's best beside it.
-- **Year by year**: the best at each distance in every year that has one, the
-  fastest year highlighted. This answers "am I faster than I was?" distance by
-  distance.
+- **Year by year**: a small line chart per distance, built with the same
+  component as aerobic pace (faster is higher, years on a real timeline). One
+  dot per year is that year's best; tap it for the run. Consecutive years are
+  joined, and a year with no runs breaks the line, so 2019–2023 reads as time
+  off, not decline. The fastest year and this year are named with their
+  times. It isn't a bar chart: a time has no meaningful zero for a bar to
+  grow from.
 - **Records**: best aerobic pace, longest run, biggest week, month and year,
   most climbing, lowest drift. No streaks, by the rule in "A count, not a
   streak".
@@ -865,6 +869,32 @@ temperatures. **Temperature:** the watch's own sensor sits against your wrist
 and reads warm, so imported runs store none, rather than mixing wrist readings
 with the weather temperatures in your pasted runs. Enriched runs get a new
 `updated_at`, which is how the app knows to take them.
+
+## Road and trail
+
+Every run is **road** unless it is marked **trail**: automatically when
+Garmin's activity type says Trail Run (at import, and for your history by
+`garminEnrich`), or by hand with the Road/Trail switch in Edit and on the
+paste screen. A switch you set by hand is never overridden by Garmin's type.
+
+A technical trail is slow for reasons that aren't fitness, so a trail run is
+**not a measurement of aerobic pace**, the same as a race (`isAerobicMeasure`,
+the one rule every aerobic-pace figure asks). It stays off the aerobic pace
+hero, the trend chart, Form's pace row and the best-aerobic-pace record, and
+the chart caption says how many were left out. **Against runs this length**
+ranks a trail run only against trail runs of a similar distance, and a road run
+only against road runs. Everything else counts as normal: distance, time,
+load, time in zone, drift, totals and best efforts.
+
+## Watch-file gaps (stream v2)
+
+v1 treated every gap over 10 s as a pause and dropped its time **but kept its
+distance**. Older watches record "smart", a point every few seconds and
+sometimes 15–20 s apart, so hundreds of metres took no time at all, and 2017
+showed a 1 km in 2:16. A gap is now a pause only if you moved slower than
+0.5 m/s during it; otherwise it is running time however long it is. A step
+between two points faster than 8 m/s is a GPS jump and adds no distance.
+`STREAM_V` went to 2, so `garminEnrich` re-reads every file once.
 
 ## Settings that matter
 
