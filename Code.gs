@@ -425,7 +425,13 @@ function garminSkip(gid) {
   props.setProperty('GARMIN_SKIP', list.slice(-500).join(','));
 }
 
-function GarminError(kind, message) { this.kind = kind; this.message = message; }
+/* A real Error, so Apps Script's log shows the message instead of
+   "[object Object]"; .kind says which sort of failure it was. */
+function GarminError(kind, message, code) {
+  var e = new Error(message);
+  e.name = 'GarminError'; e.kind = kind; e.code = code || null;
+  return e;
+}
 
 function garminToken() {
   var cache = CacheService.getScriptCache();
@@ -463,7 +469,8 @@ function garminGet(path, params, raw) {
     throw new GarminError('key', 'Garmin refused the key \u2014 it has probably expired. ' +
       'Make a new one in Garmin Connect and replace GARMIN_KEY in Script properties.');
   }
-  if (code >= 300) throw new GarminError('http', 'Garmin did not answer (HTTP ' + code + ' on ' + path.split('/')[1] + ').');
+  if (code >= 300) throw new GarminError('http', 'Garmin did not answer (HTTP ' + code + ' on ' +
+    path.split('/')[1] + ')' + (raw ? '' : ': ' + String(res.getContentText() || '').slice(0, 160)) + '.', code);
   return raw ? res.getBlob() : JSON.parse(res.getContentText() || 'null');
 }
 
@@ -837,7 +844,7 @@ function garminSync() {
     catch (e) { st.zonesNote = String(e.message || e); }
     return garminSetStatus(st);
   } catch (e) {
-    var kind = e instanceof GarminError ? e.kind : 'error';
+    var kind = e && e.kind ? e.kind : 'error';
     return garminSetStatus({ state: kind === 'key' ? 'key' : 'error',
                              message: String(e.message || e) });
   } finally {
@@ -920,25 +927,38 @@ function garminResting() {
   return restingUpsert(garminRestingRange(isoDay(new Date(today.getTime() - 13 * 864e5)), isoDay(today)));
 }
 
-/** Once, from the editor: every day Garmin has. Press Run until it says done. */
+/** Once, from the editor: every day Garmin has. Press Run until it says done.
+    Starts at your first run (there is no resting HR before you had a watch).
+    A stretch Garmin refuses is skipped and named in the log, not fatal. */
 function garminRestingHistory() {
   var started = Date.now(), props = garminProps();
-  var cursor = props.getProperty('GARMIN_RESTING_CURSOR') || (RESTING_FROM_YEAR + '-01-01');
-  var today = isoDay(new Date()), added = 0, cut = false;
+  var cursor = props.getProperty('GARMIN_RESTING_CURSOR');
+  if (!cursor) {
+    var dates = readAll(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities), ACT_COLS)
+      .map(function (a) { return String(a.date || ''); }).filter(function (d) { return /^\d{4}-\d\d-\d\d$/.test(d); }).sort();
+    cursor = dates.length ? dates[0].slice(0, 7) + '-01' : RESTING_FROM_YEAR + '-01-01';
+  }
+  var today = isoDay(new Date()), added = 0, cut = false, refused = [];
   while (cursor <= today) {
     if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
     var end = isoDay(new Date(new Date(cursor + 'T12:00:00Z').getTime() + (RESTING_CHUNK_DAYS - 1) * 864e5));
     if (end > today) end = today;
-    added += restingUpsert(garminRestingRange(cursor, end));
+    try { added += restingUpsert(garminRestingRange(cursor, end)); }
+    catch (e) {
+      if (e && e.kind === 'key') throw e;                 // a dead key stops everything, and says so
+      refused.push(cursor + '\u2013' + end + ': ' + (e && e.message || e));
+    }
     cursor = isoDay(new Date(new Date(end + 'T12:00:00Z').getTime() + 864e5));
     props.setProperty('GARMIN_RESTING_CURSOR', cursor);
   }
   var rows = restingRows();
-  var msg = cut ? 'Resting HR: ' + added + ' days so far, up to ' + cursor + '. Press Run again to carry on.'
-    : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') + '.';
+  var msg = (cut ? 'Resting HR: ' + added + ' days added this run, up to ' + cursor + '. Press Run again to carry on.'
+    : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') + '.') +
+    (refused.length ? ' Garmin refused ' + refused.length + ' stretch' + (refused.length === 1 ? '' : 'es') +
+      '; first: ' + refused[0] : '');
   if (!cut) props.deleteProperty('GARMIN_RESTING_CURSOR');
   Logger.log(msg);
-  return { complete: !cut, days: rows.length, message: msg };
+  return { complete: !cut, days: rows.length, refused: refused, message: msg };
 }
 
 /* --------------------------------------------------------- watch zones --
