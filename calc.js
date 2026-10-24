@@ -1898,10 +1898,33 @@
 
   const RESTING_VIEWS = ['30d', 'year', 'all'];
 
+  /* A night's date, however it arrived: a 'YYYY-MM-DD' string (possibly with
+     stray characters around it), a full ISO timestamp, or something a
+     spreadsheet turned into a date. Anything that can't be read is counted,
+     never drawn: one malformed date used to end the chart line where it sat. */
+  function nightDate(v) {
+    if (v == null) return null;
+    const s = String(v).replace(/[^0-9T:.\-Z+]/g, '');
+    const m = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+    if (m) {
+      const iso = m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+      return isNaN(new Date(iso + 'T12:00:00').getTime()) ? null : iso;
+    }
+    const t = new Date(v);
+    return isNaN(t.getTime()) ? null : t.toISOString().slice(0, 10);
+  }
+
   function restingModel(days, view, today) {
-    const d = (days || []).filter(x => x && x[0] && x[1] > 0)
-      .map(x => ({ date: String(x[0]).slice(0, 10), bpm: +x[1] })).sort((a, b) => a.date.localeCompare(b.date));
-    if (!d.length) return { count: 0 };
+    let bad = 0, badSample = null;
+    const seen = {};
+    (days || []).forEach(x => {
+      if (!x || !(+x[1] > 0)) return;
+      const date = nightDate(x[0]);
+      if (!date) { bad++; if (badSample == null) badSample = String(x[0]); return; }
+      seen[date] = +x[1];                       // one value a night, the last one given
+    });
+    const d = Object.keys(seen).sort().map(k => ({ date: k, bpm: seen[k] }));
+    if (!d.length) return { count: 0, bad: bad, badSample: badSample };
     const t = String(today).slice(0, 10);
     const back = n => { const x = new Date(t + 'T12:00:00'); x.setDate(x.getDate() - n); return x.toISOString().slice(0, 10); };
     const mean = arr => arr.length ? Math.round(arr.reduce((a, x) => a + x.bpm, 0) / arr.length * 10) / 10 : null;
@@ -1933,6 +1956,7 @@
     const full = Object.keys(months).filter(k => months[k].length >= 10)
       .map(k => ({ month: k, bpm: mean(months[k]) })).sort((a, b) => a.bpm - b.bpm);
     return {
+      bad: bad, badSample: badSample,
       count: d.length, first: d[0].date, last: d[d.length - 1].date, view: view,
       segments: segments, shown: pts.length,
       now: now, ago3m: at(91), ago1y: at(365),

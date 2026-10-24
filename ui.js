@@ -244,7 +244,8 @@
     const all = [].concat.apply([], segments).map(p => p.value).filter(v => v != null);
     if (all.length < 1) return null;
 
-    const dates = [].concat.apply([], segments).map(p => p.date).sort();
+    const dates = [].concat.apply([], segments).map(p => p.date)
+      .filter(d => !isNaN(new Date(d + 'T12:00:00').getTime())).sort();
     const t0 = new Date((opt.from || dates[0]) + 'T12:00:00').getTime();
     const t1 = new Date((opt.to || dates[dates.length - 1]) + 'T12:00:00').getTime();
     const spanMs = Math.max(1, t1 - t0);
@@ -284,6 +285,9 @@
       const lead = opt.uniform || si === last;
       const col = lead ? 'var(--z2)' : 'var(--mute)';
       const w = lead ? 2.2 : 1.6;
+      /* a point that can't be placed is left out; one NaN would end the whole line there */
+      seg = seg.filter(p => isFinite(xOf(p.date)) && isFinite(yOf(p.value)));
+      if (!seg.length) return;
       const pts = seg.map(p => xOf(p.date).toFixed(2) + ',' + yOf(p.value).toFixed(2));
 
       if (seg.length > 1) {
@@ -1167,6 +1171,9 @@
               fmtDate(m.segments[m.segments.length - 1].slice(-1)[0].date).toUpperCase()]
       }) : null;
       h += chart || '<div class="est">No nights in this range.</div>';
+      if (m.bad) h += '<div class="flag"><i>!</i><div>' + m.bad + ' night' + (m.bad === 1 ? '' : 's') +
+        ' couldn\u2019t be read and ' + (m.bad === 1 ? 'is' : 'are') + ' left out (for example \u201c' +
+        esc(String(m.badSample).slice(0, 40)) + '\u201d). Send me this line.</div></div>';
       h += '<div class="est">' + (restingView === '30d' ? 'Every night.' : restingView === 'year'
         ? 'Each point is a week\u2019s average, so one bad night doesn\u2019t spike the line.'
         : 'Each point is a month\u2019s average.') +
