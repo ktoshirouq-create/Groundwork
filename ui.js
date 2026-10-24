@@ -284,19 +284,17 @@
       const w = lead ? 2.2 : 1.6;
       const pts = seg.map(p => xOf(p.date).toFixed(2) + ',' + yOf(p.value).toFixed(2));
 
-      if (opt.allDots) seg.forEach(p => dots.push({ x: xOf(p.date), y: yOf(p.value),
-        cls: 'now', r: 6, id: p.id }));
       if (seg.length > 1) {
         svg += '<polyline class="draw" fill="none" stroke="' + col + '" stroke-width="' + w +
           '" vector-effect="non-scaling-stroke" points="' + pts.join(' ') + '"/>';
-      } else if (!opt.allDots) {
+      } else {
         /* A block of one run has no line to draw. The marker goes in the HTML
            layer, not the SVG: the viewBox is stretched to the plot's width, so
            a <circle> in here comes out as a wide ellipse and reads as a smudge. */
         dots.push({ x: xOf(seg[0].date), y: yOf(seg[0].value),
                     cls: si === last ? 'now' : 'prev', r: 4 });
       }
-      if (si === last && !opt.allDots) {
+      if (si === last) {
         const p = seg[seg.length - 1];
         dots.push({ x: xOf(p.date), y: yOf(p.value), cls: 'tip', r: 5 });
       }
@@ -304,7 +302,7 @@
     svg += '</svg>';
 
     const dotHTML = dots.map(d =>
-      '<i class="cdot ' + d.cls + '"' + (d.id ? ' data-id="' + esc(d.id) + '"' : '') + ' style="left:' + d.x.toFixed(2) + '%; top:' +
+      '<i class="cdot ' + d.cls + '" style="left:' + d.x.toFixed(2) + '%; top:' +
       d.y.toFixed(2) + '%; width:' + d.r + 'px; height:' + d.r + 'px"></i>').join('');
 
     const fmt = opt.format || (v => Math.round(v));
@@ -604,7 +602,8 @@
     let h = '<div class="top"><div>' +
       '<div class="ttl">' + esc(m.period.label) + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
-      '</div><div class="corners"><button class="corner" data-go="bests">BESTS</button>' +
+      '</div><div class="corners"><button class="corner" data-go="resting">RESTING</button>' +
+      '<button class="corner" data-go="bests">BESTS</button>' +
       '<button class="corner" data-go="settings">SETUP</button></div></div>';
 
     h += '<div class="bar">' + SCOPES.map(s =>
@@ -1026,10 +1025,66 @@
   }
 
 
+  /* ------------------------------------------------------------ resting ---
+
+     Garmin's daily resting HR as context. It moves nothing: zones come from
+     the watch. Pure presentation of Calc.restingModel. */
+
+  let restingView = 'year';
+
+  function renderResting() {
+    const m = Calc.restingModel(Store.resting(), restingView, today());
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Resting HR</div>' +
+      '<div class="sub">' + (m.count ? m.count + ' NIGHTS \u00b7 FROM ' + fmtDate(m.first).toUpperCase() : 'NO DATA YET') + '</div>';
+    if (!m.count) {
+      h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> in Apps Script once for the ' +
+        'years behind you (README \u2192 Resting HR); after that the hourly check adds each new day.</div>';
+    } else {
+      const bpm = v => v == null ? '\u2014' : (Math.round(v * 10) / 10).toFixed(Math.abs(v % 1) > 0.05 ? 1 : 0);
+      const vs = (now, then, label) => {
+        if (now == null || then == null) return '';
+        const d = Calc.delta(now, then, 'down');
+        return cmp('Against ' + label, bpm(then) + ' bpm', !d || d.dir === 'flat' ? 'about the same'
+          : '<span class="delta ' + d.tone + '">' + (d.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
+            bpm(Math.abs(d.diff)) + ' bpm ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>');
+      };
+      h += '<div class="hero1"><div class="big">' + bpm(m.now) + '<s> bpm</s></div>' +
+        '<div class="est">Average of the last 7 nights. Lower is fitter.</div></div>';
+      h += vs(m.now, m.ago3m, '3 months ago') + vs(m.now, m.ago1y, 'a year ago');
+      if (m.lowestMonth) h += cmp('Lowest month', bpm(m.lowestMonth.bpm) + ' bpm',
+        MON[+m.lowestMonth.month.slice(5) - 1] + ' ' + m.lowestMonth.month.slice(0, 4));
+      if (m.highestMonth && m.highestMonth.month !== (m.lowestMonth || {}).month) h += cmp('Highest month',
+        bpm(m.highestMonth.bpm) + ' bpm', MON[+m.highestMonth.month.slice(5) - 1] + ' ' + m.highestMonth.month.slice(0, 4));
+
+      h += '<div class="bar" id="r-view">' + [['30d', '30 days'], ['year', 'Year'], ['all', 'All years']].map(v =>
+        '<button class="chip" type="button" data-rv="' + v[0] + '" aria-pressed="' + (v[0] === restingView) + '">' +
+        v[1] + '</button>').join('') + '</div>';
+      const chart = m.shown ? lineChart(m.segments, {
+        uniform: true, height: 150,
+        format: v => bpm(v), anchorLabels: ['highest', 'lowest'],
+        label: 'Resting heart rate, ' + (restingView === '30d' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
+        xax: [fmtDate(m.segments[0][0].date).toUpperCase(), '',
+              fmtDate(m.segments[m.segments.length - 1].slice(-1)[0].date).toUpperCase()]
+      }) : null;
+      h += chart || '<div class="est">No nights in this range.</div>';
+      h += '<div class="est">' + (restingView === '30d' ? 'Every night.' : restingView === 'year'
+        ? 'Each point is a week\u2019s average, so one bad night doesn\u2019t spike the line.'
+        : 'Each point is a month\u2019s average.') +
+        ' A break is a stretch with no readings. Context only \u2014 your zones come from your watch.</div>';
+    }
+    el('view-resting').innerHTML = h;
+    $('#view-resting [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#r-view [data-rv]').forEach(b => {
+      b.onclick = () => { restingView = b.dataset.rv; renderResting(); };
+    });
+  }
+
   /* -------------------------------------------------------------- bests ---
 
      All-time, from one model. Every best here comes through the same effort
      source as the year reviews and the PB tags, so the three never disagree. */
+
+  let bestsKm = null;
 
   function renderBests() {
     const m = Calc.bestOfModel(Store.all(), Store.config(), today());
@@ -1051,31 +1106,33 @@
         'Distance is GPS distance.</div>';
     }
 
-    if (m.progression.some(p => p.years.length > 1)) {
+    /* Year by year: one distance at a time, each year against the last year
+       you ran it. A list rather than a chart: the question is "did I get
+       faster or slower", and that answer is a word and a number. */
+    const progs = m.progression.filter(p => p.years.length > 1);
+    if (progs.length) {
+      if (!progs.some(p => p.km === bestsKm)) bestsKm = (progs.find(p => p.km === 5) || progs[0]).km;
+      const P = progs.find(p => p.km === bestsKm);
       h += '<div class="sec"><span>Year by year</span><span>best each year</span></div>';
-      m.progression.forEach(p => {
-        /* a line within a run of consecutive years; a gap year breaks it */
-        const segs = [];
-        p.years.forEach((y, i) => {
-          const pt = { date: y.run.date, value: y.pace, id: y.run.id };
-          if (i && +y.year - +p.years[i - 1].year === 1) segs[segs.length - 1].push(pt);
-          else segs.push([pt]);
-        });
-        const fast = p.years.find(y => y.fastest), last = p.years[p.years.length - 1];
-        h += '<div class="prog"><div class="pl">' + esc(effortName(p.km)) + '</div>' +
-          lineChart(segs, {
-            invert: true, uniform: true, allDots: true, height: 84,
-            from: p.years[0].year + '-01-01', to: last.year + '-12-31',
-            format: v => Calc.fmtPace(v), anchorLabels: ['best', 'slowest'],
-            label: effortName(p.km) + ', best pace each year. Faster is higher.',
-            xax: [p.years[0].year, '', last.year]
-          }) +
-          '<div class="est">Fastest ' + esc(fast.year) + ', ' + Calc.fmtDuration(fast.seconds) +
-          (last.year !== fast.year ? ' \u00b7 ' + esc(last.year) + ', ' + Calc.fmtDuration(last.seconds) : '') +
-          '</div></div>';
-      });
-      h += '<div class="est">Each dot is that year\u2019s best; tap one for the run. Faster is higher. ' +
-        'A break in the line is a year with no runs.</div>';
+      h += '<div class="bar wrap" id="b-dist">' + progs.map(p =>
+        '<button class="chip" type="button" data-km="' + p.km + '" aria-pressed="' + (p.km === bestsKm) + '">' +
+        esc(effortName(p.km)) + '</button>').join('') + '</div>';
+      const gap = s => s < 60 ? Math.round(s) + 's' : Calc.fmtDuration(Math.round(s));
+      h += P.years.map(y => {
+        const c = y.change;
+        const verdict = !c ? (y.vs ? 'same as ' + y.vs : 'first year')
+          : (c.dir === 'flat' ? 'same as ' + y.vs
+            : '<span class="delta ' + c.tone + '">' + (c.dir === 'up' ? '\u25b2' : '\u25bc') + ' ' +
+              gap(Math.abs(c.diff)) + (c.dir === 'up' ? ' slower' : ' faster') + '</span>' +
+              (+y.year - +y.vs > 1 ? ' than ' + esc(y.vs) : ''));
+        return '<div class="cmp yby' + (y.fastest ? ' pb' : '') + '" data-id="' + esc(y.run.id) + '">' +
+          '<span class="k">' + esc(y.year) + (y.fastest ? ' <i class="pbtag">PB</i>' : '') +
+          (y.thisYear ? ' <em>this year</em>' : '') + '</span>' +
+          '<span class="v">' + (y.fastest ? '<b>' : '') + Calc.fmtDuration(y.seconds) + (y.fastest ? '</b>' : '') +
+          '<s>' + verdict + '</s></span></div>';
+      }).join('');
+      h += '<div class="est">Each year\u2019s best ' + esc(effortName(P.km)) +
+        ', against the last year you ran one. PB marks your fastest year. Tap a year for the run.</div>';
     }
 
     h += recordsHTML(m.records);
@@ -1090,6 +1147,9 @@
 
     el('view-bests').innerHTML = h;
     $('#view-bests [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#b-dist [data-km]').forEach(b => {
+      b.onclick = () => { bestsKm = +b.dataset.km; const y = window.scrollY; renderBests(); window.scrollTo(0, y); };
+    });
     document.querySelectorAll('#view-bests [data-id]').forEach(r => {
       r.style.cursor = 'pointer';
       r.onclick = () => go('detail', r.dataset.id);
@@ -1345,8 +1405,20 @@
 
     h += '<div class="sec"><span>Zone anchors \u00b7 Karvonen</span></div>';
     h += '<div class="field-row">' +
-      '<label><span>Max HR</span><input type="number" id="c-max" value="' + cfg.max_hr + '"></label>' +
-      '<label><span>Resting HR</span><input type="number" id="c-rest" value="' + cfg.resting_hr + '"></label></div>';
+      '<label><span>Max HR</span><input type="number" id="c-max" value="' + cfg.max_hr + '"' +
+      (cfg.zones_from === 'watch' ? ' readonly' : '') + '></label>' +
+      '<label><span>Resting HR</span><input type="number" id="c-rest" value="' + cfg.resting_hr + '"' +
+      (cfg.zones_from === 'watch' ? ' readonly' : '') + '></label></div>';
+    if (cfg.garmin_zones) {
+      const W = cfg.garmin_zones;
+      h += '<div class="bar" id="c-zsrc">' +
+        '<button class="chip" type="button" data-zsrc="watch" aria-pressed="' + (cfg.zones_from === 'watch') + '">From my watch</button>' +
+        '<button class="chip" type="button" data-zsrc="manual" aria-pressed="' + (cfg.zones_from !== 'watch') + '">My own</button></div>';
+      h += '<div class="est">' + (cfg.zones_from === 'watch'
+        ? 'Zones are exactly as set on your watch, so the app never disagrees with what you run by. ' +
+          'Change them on the watch and the app follows within the hour.'
+        : 'Using your own anchors. Your watch\u2019s zones start Z2 at ' + W.z2 + ' and Z3 at ' + W.z3 + '.') + '</div>';
+    }
 
     /* Equal segments, not proportional to beats. Z1 spans 79 bpm and Z2 only
        13, so a proportional bar gave three quarters of its width to the zone
@@ -1493,12 +1565,20 @@
         toast(count + ' activities sent to Sheets', 'ok');
       }));
 
-    once(el('c-save'), 'Saving\u2026', () => Store.setConfig({
-      max_hr: +el('c-max').value,
-      resting_hr: +el('c-rest').value,
-      resting_hr_dated: today(),
-      z2_target: Math.max(0, Math.min(100, +el('c-z2').value || 70))
-    }).then(() => { renderSettings(); toast('Zones updated', 'ok'); }));
+    document.querySelectorAll('#c-zsrc [data-zsrc]').forEach(b => {
+      b.onclick = () => Store.setConfig({ zones_source: b.dataset.zsrc }).then(() => {
+        renderSettings(); toast(b.dataset.zsrc === 'watch' ? 'Zones from your watch' : 'Using your own zones', 'ok');
+      });
+    });
+
+    once(el('c-save'), 'Saving\u2026', () => {
+      const patch = { z2_target: Math.max(0, Math.min(100, +el('c-z2').value || 70)) };
+      /* your own anchors are only saved when they're the ones in use */
+      if (Store.config().zones_from !== 'watch') {
+        patch.max_hr = +el('c-max').value; patch.resting_hr = +el('c-rest').value; patch.resting_hr_dated = today();
+      }
+      return Store.setConfig(patch).then(() => { renderSettings(); toast('Zones updated', 'ok'); });
+    });
 
     el('c-export').onclick = () => {
       const blob = new Blob([Store.exportJSON()], { type: 'application/json' });
@@ -1773,9 +1853,11 @@
     if (setup) setup.onclick = () => go('settings');
     const bests = $('#view-home [data-go="bests"]');
     if (bests) bests.onclick = () => go('bests');
+    const rest = $('#view-home [data-go="resting"]');
+    if (rest) rest.onclick = () => go('resting');
   }
 
-  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests'];
+  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting'];
 
   /* Navigation writes to browser history, so Android's back button and its
      edge-swipe both go back a screen instead of leaving the app. */
@@ -1793,6 +1875,7 @@
       if (view === 'edit') renderEdit(param);
       if (view === 'replace') renderReplace(param);
       if (view === 'bests') renderBests();
+      if (view === 'resting') renderResting();
     } catch (err) {
       /* Whatever went wrong, there must still be a way to Setup, an export,
          and the error itself. A blank screen tells you nothing and traps you. */
@@ -1873,7 +1956,9 @@
       (G.added || G.linked
         ? 'Last check: ' + (G.added ? G.added + ' new' : '') + (G.added && G.linked ? ', ' : '') +
           (G.linked ? G.linked + ' matched to runs you had pasted' : '') + '.'
-        : 'Last check found nothing new.') + '</div>';
+        : 'Last check found nothing new.') +
+      (G.zonesNote ? ' Your watch\u2019s zones didn\u2019t come through (' + esc(G.zonesNote) + '), so your own are in use.' : '') +
+      (G.restingNote ? ' Resting HR didn\u2019t update: ' + esc(G.restingNote) + '.' : '') + '</div>';
     else h += '<div class="flag error"><i>\u2715</i><div>' + esc(G.message || 'The Garmin check failed.') +
       (G.state === 'error' ? ' It tries again every hour.' : '') + '</div></div>';
     return h;

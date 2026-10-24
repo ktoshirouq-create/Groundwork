@@ -30,6 +30,10 @@
   function zoneBounds(cfg) {
     const c = Object.assign({}, DEFAULT_CONFIG, cfg || {});
     const hrr = c.max_hr - c.resting_hr;
+    /* the watch's own zones, when the app has them: never recomputed */
+    const w = c.watch_zones;
+    if (w && w.z2 && w.z3 && w.z4 && w.z5)
+      return { hrr: hrr, z2: w.z2, z3: w.z3, z4: w.z4, z5: w.z5, from: 'watch' };
     const at = p => Math.round(c.resting_hr + p * hrr);
     return {
       hrr: hrr,
@@ -1801,7 +1805,12 @@
       }).filter(Boolean);
       if (!per.length) return null;
       const fastest = per.slice().sort((x, y) => x.seconds - y.seconds)[0].year;
-      return { km: km, years: per.map(p => Object.assign({ fastest: p.year === fastest }, p)) };
+      /* each year against the last year you ran it: faster or slower, by how much */
+      return { km: km, years: per.map((p, i) => Object.assign({
+        fastest: p.year === fastest, thisYear: p.year === year,
+        vs: i ? per[i - 1].year : null,
+        change: i ? delta(p.seconds, per[i - 1].seconds, 'down') : null
+      }, p)) };
     }).filter(Boolean);
 
     /* records: the existing set, plus climbing and the biggest month and year */
@@ -1825,6 +1834,56 @@
 
     return { count: runs.length, year: year, years: years, board: board,
              progression: progression, records: records, races: races };
+  }
+
+  /* ---------- resting HR ----------
+
+     Context, not a training number: zones come from the watch. Three views,
+     each averaging enough nights that one bad night doesn't spike the line:
+     every night for 30 days, weekly averages for a year, monthly for all. */
+
+  const RESTING_VIEWS = ['30d', 'year', 'all'];
+
+  function restingModel(days, view, today) {
+    const d = (days || []).filter(x => x && x[0] && x[1] > 0)
+      .map(x => ({ date: String(x[0]).slice(0, 10), bpm: +x[1] })).sort((a, b) => a.date.localeCompare(b.date));
+    if (!d.length) return { count: 0 };
+    const t = String(today).slice(0, 10);
+    const back = n => { const x = new Date(t + 'T12:00:00'); x.setDate(x.getDate() - n); return x.toISOString().slice(0, 10); };
+    const mean = arr => arr.length ? Math.round(arr.reduce((a, x) => a + x.bpm, 0) / arr.length * 10) / 10 : null;
+
+    let pts = [], gapDays;
+    if (view === '30d') {
+      pts = d.filter(x => x.date > back(30)).map(x => ({ date: x.date, value: x.bpm }));
+      gapDays = 3;
+    } else {
+      const keyOf = view === 'year' ? (x => weekStart(x.date)) : (x => x.date.slice(0, 7) + '-15');
+      const src = view === 'year' ? d.filter(x => x.date > back(365)) : d;
+      const g = {};
+      src.forEach(x => { (g[keyOf(x)] = g[keyOf(x)] || []).push(x); });
+      pts = Object.keys(g).sort().filter(k => g[k].length >= (view === 'year' ? 3 : 7))
+        .map(k => ({ date: k, value: mean(g[k]), n: g[k].length }));
+      gapDays = view === 'year' ? 15 : 62;
+    }
+    /* a gap in the record breaks the line rather than drawing across it */
+    const segments = [];
+    pts.forEach((p, i) => {
+      if (i && daysBetween(pts[i - 1].date, p.date) <= gapDays) segments[segments.length - 1].push(p);
+      else segments.push([p]);
+    });
+
+    const now = mean(d.filter(x => x.date > back(7)));
+    const at = n => { const end = back(n); const w = d.filter(x => x.date > back(n + 7) && x.date <= end); return w.length >= 3 ? mean(w) : null; };
+    const months = {};
+    d.forEach(x => { (months[x.date.slice(0, 7)] = months[x.date.slice(0, 7)] || []).push(x); });
+    const full = Object.keys(months).filter(k => months[k].length >= 10)
+      .map(k => ({ month: k, bpm: mean(months[k]) })).sort((a, b) => a.bpm - b.bpm);
+    return {
+      count: d.length, first: d[0].date, last: d[d.length - 1].date, view: view,
+      segments: segments, shown: pts.length,
+      now: now, ago3m: at(91), ago1y: at(365),
+      lowestMonth: full[0] || null, highestMonth: full[full.length - 1] || null
+    };
   }
 
   /* Which distances this run holds the record for, as of the whole history. */
@@ -1911,7 +1970,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

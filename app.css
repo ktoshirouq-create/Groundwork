@@ -735,9 +735,14 @@ label > span {
 /* ---------- bests ---------- */
 
 .corners { display: flex; gap: 6px; flex: none; }
-.prog { padding: 7px 0; border-top: 1px solid var(--line); }
-.prog .pl { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .12em;
-            text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
-.prog .chart { margin-top: 2px; }
-.prog .est { margin-top: 2px; }
-.cdot[data-id] { pointer-events: auto; cursor: pointer; }
+.yby .k em { font-style: normal; font-family: var(--f-data); font-size: var(--t-micro);
+              letter-spacing: .1em; text-transform: uppercase; color: var(--mute); margin-left: 4px; }
+.yby .v b { font-weight: 600; }
+#b-dist { margin: 4px 0 6px; }
+
+/* ---------- resting ---------- */
+
+.hero1 { margin: 14px 0 6px; }
+.hero1 .big { font-family: var(--f-display); font-size: var(--t-display); font-weight: 700; color: var(--ink); line-height: 1; }
+.hero1 .big s { text-decoration: none; font-size: var(--t-label); color: var(--mute); margin-left: 4px; }
+#r-view { margin: 14px 0 8px; }

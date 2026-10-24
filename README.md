@@ -834,13 +834,13 @@ A page of its own (**BESTS**, beside Setup), all-time and independent of the
 period selected on the home screen:
 
 - **All time**: each distance's best, with this year's best beside it.
-- **Year by year**: a small line chart per distance, built with the same
-  component as aerobic pace (faster is higher, years on a real timeline). One
-  dot per year is that year's best; tap it for the run. Consecutive years are
-  joined, and a year with no runs breaks the line, so 2019–2023 reads as time
-  off, not decline. The fastest year and this year are named with their
-  times. It isn't a bar chart: a time has no meaningful zero for a bar to
-  grow from.
+- **Year by year**: one distance at a time (chips), one row per year with
+  that year's best, and the change against the last year you ran it, as
+  faster or slower by how much, green or red. When years were skipped it
+  names the year compared ("slower than 2018"). The fastest year carries the
+  PB tag. A list rather than a chart: the question is "did I get faster or
+  slower", and that answer is a word and a number. (A line chart was tried,
+  and the 2019–2023 gap took most of its width.)
 - **Records**: best aerobic pace, longest run, biggest week, month and year,
   most climbing, lowest drift. No streaks, by the rule in "A count, not a
   streak".
@@ -895,6 +895,36 @@ showed a 1 km in 2:16. A gap is now a pause only if you moved slower than
 0.5 m/s during it; otherwise it is running time however long it is. A step
 between two points faster than 8 m/s is a GPS jump and adds no distance.
 `STREAM_V` went to 2, so `garminEnrich` re-reads every file once.
+
+## Zones come from your watch
+
+The app's zones are **exactly the ones set on your watch**, because those are
+the numbers you run by. The hourly Apps Script check reads them from Garmin
+(running's set, else the default) and sends them with the Garmin status;
+`Store.config()` hands them to `zoneBounds`, the one place zones are decided,
+along with the watch's max and resting HR, so load uses the same anchors.
+Change zones on the watch and the app follows within the hour. Setup shows
+them read-only, with a **From my watch / My own** switch; My own brings back
+your typed anchors with the watch's still shown. If Garmin's zones can't be
+read, the last good set is kept and Setup says so.
+
+(An earlier, never-deployed version moved zones with Garmin's daily resting
+HR. That's wrong: the app would then disagree with the watch.)
+
+## Resting HR
+
+Garmin's daily resting heart rate, one row a day in the **Resting HR** tab,
+written only by the Apps Script. `garminRestingHistory()`, run once from the
+editor (press Run until it says complete), fills in every day Garmin has; the
+hourly check adds the last fortnight from then on, since Garmin sometimes
+settles a day's value late. The app gets the days with every sync and keeps a
+copy for offline use.
+
+The **RESTING** screen (home, beside Bests) shows this week's average, the
+change against three months and a year ago (lower is fitter), the lowest and
+highest month, and a chart in three views: every night for 30 days, weekly
+averages for a year, monthly averages for all years. A stretch with no
+readings breaks the line. It's context only and moves nothing.
 
 ## Settings that matter
 

@@ -16,7 +16,8 @@
     schema: 'groundwork:schema',
     queue: 'groundwork:queue',
     sheets: 'groundwork:sheets',     /* endpoint + token, deliberately not synced */
-    fieldsUp: 'groundwork:fields-up' /* the one-time fill of the new sheet columns */
+    fieldsUp: 'groundwork:fields-up', /* the one-time fill of the new sheet columns */
+    resting: 'groundwork:resting'     /* a copy of the sheet's Resting HR tab */
   };
 
   /* Fields that until Oct 2026 lived only on the phone, because the sheet had
@@ -218,15 +219,34 @@
 
     all: function () { return (this.bundle && this.bundle.activities) || []; },
 
+    /* Zones come from your watch when Garmin sends them, unless you've chosen
+       your own: the app must never disagree with the numbers you run by. The
+       watch's max and resting HR come with them, so load is worked out on the
+       same anchors. Decided here, once, so every figure in the app sees the
+       same zones. */
     config: function () {
-      return Object.assign({}, Calc.DEFAULT_CONFIG, (this.bundle && this.bundle.config) || {});
+      const c = Object.assign({}, Calc.DEFAULT_CONFIG, (this.bundle && this.bundle.config) || {});
+      const z = c.garmin_zones;
+      if (z && z.z2 && c.zones_source !== 'manual') {
+        c.watch_zones = { z1: z.z1, z2: z.z2, z3: z.z3, z4: z.z4, z5: z.z5 };
+        if (z.max) c.max_hr = z.max;
+        if (z.rest) c.resting_hr = z.rest;
+        c.zones_from = 'watch';
+      } else c.zones_from = 'manual';
+      return c;
     },
+
+    /* Garmin's daily resting HR, [date, bpm], oldest first. Context only. */
+    resting: function () { return readJSON(KEY.resting, []); },
 
     setConfig: function (patch) {
       this.bundle.config = Object.assign({}, this.bundle.config, patch);
       const done = this.adapter.saveAll(this.bundle);
       if (Sheets.configured()) {
-        Sheets.post({ action: 'config', config: this.bundle.config }).catch(() => {});
+        /* what the Apps Script owns is never sent back */
+        const send = Object.assign({}, this.bundle.config);
+        delete send.garmin_zones;
+        Sheets.post({ action: 'config', config: send }).catch(() => {});
       }
       return done;
     },
@@ -302,6 +322,11 @@
           self.bundle.config = Object.assign({}, data.config, self.bundle.config);
         }
         self.sync.garmin = data.garmin || null;
+        /* kept, so zones and the resting chart work offline */
+        if (data.garmin && data.garmin.zones && data.garmin.zones.z2)
+          self.bundle.config.garmin_zones = data.garmin.zones;
+        if (Array.isArray(data.resting) && data.resting.length)
+          localStorage.setItem(KEY.resting, JSON.stringify(data.resting));
         /* an Apps Script deployed before the new columns can't keep tags */
         /* out of date if the sheet lacks a column for anything this app stores */
         self.sync.columns = data.columns || [];

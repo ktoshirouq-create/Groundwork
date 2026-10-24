@@ -30,8 +30,10 @@
 var SHEETS = {
   activities: 'Activities',
   laps: 'Laps',
-  config: 'Config'
+  config: 'Config',
+  resting: 'Resting HR'          // one row a day, from Garmin; written only by this script
 };
+var RESTING_COLS = ['date', 'bpm'];
 
 var ACT_COLS = [
   'id', 'type', 'date', 'name', 'source',
@@ -79,6 +81,7 @@ function setup() {
   ensureSheet(ss, SHEETS.activities, ACT_COLS);
   ensureSheet(ss, SHEETS.laps, LAP_COLS);
   ensureSheet(ss, SHEETS.config, ['key', 'value', 'dated']);
+  ensureSheet(ss, SHEETS.resting, RESTING_COLS);
   Logger.log('Tabs ready.');
 }
 
@@ -255,7 +258,7 @@ function listAll() {
   /* columns: lets the app tell an up-to-date script from an old deployment.
      garmin: how the last import went, so a dead key is said, not hidden. */
   return { schema: 1, config: config, activities: acts,
-           columns: ACT_COLS, garmin: garminStatus() };
+           columns: ACT_COLS, garmin: garminStatus(), resting: restingRows() };
 }
 
 function putActivity(act) {
@@ -401,8 +404,12 @@ function garminProps() { return PropertiesService.getScriptProperties(); }
 function garminStatus() {
   var props = garminProps();
   if (!props.getProperty('GARMIN_KEY')) return { state: 'off' };
-  try { return JSON.parse(props.getProperty('GARMIN_STATUS') || '{"state":"waiting"}'); }
-  catch (e) { return { state: 'waiting' }; }
+  var st;
+  try { st = JSON.parse(props.getProperty('GARMIN_STATUS') || '{"state":"waiting"}'); }
+  catch (e) { st = { state: 'waiting' }; }
+  /* your watch's zones ride along with the status: the app reads them on every sync */
+  try { var z = JSON.parse(props.getProperty('GARMIN_ZONES') || 'null'); if (z) st.zones = z; } catch (e) {}
+  return st;
 }
 
 function garminSetStatus(st) {
@@ -823,7 +830,12 @@ function garminSync() {
     found.forEach(function (j) { garminHandle(j, cx); });
     props.setProperty('GARMIN_SINCE',
       isoDay(new Date(today.getTime() - GARMIN_OVERLAP_DAYS * 864e5)));
-    return garminSetStatus({ state: 'ok', added: cx.added, linked: cx.linked, seen: found.length });
+    /* resting HR and zones each on their own: neither failing may look like a failed import */
+    var st = { state: 'ok', added: cx.added, linked: cx.linked, seen: found.length };
+    try { garminResting(); } catch (e) { st.restingNote = String(e.message || e); }
+    try { if (!garminZones()) st.zonesNote = 'Garmin sent no zones the app could read'; }
+    catch (e) { st.zonesNote = String(e.message || e); }
+    return garminSetStatus(st);
   } catch (e) {
     var kind = e instanceof GarminError ? e.kind : 'error';
     return garminSetStatus({ state: kind === 'key' ? 'key' : 'error',
@@ -831,6 +843,129 @@ function garminSync() {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ------------------------------------------------------- resting HR --
+
+   Garmin measures resting heart rate every day. It is kept, one row a day,
+   in the "Resting HR" tab, and shown in the app as context: how it has moved
+   over weeks, months and years. It does NOT move your zones. Those come from
+   your watch (below), because they are the numbers you actually run by.
+
+   The hourly check adds the last fortnight (Garmin sometimes settles a day's
+   value late); garminRestingHistory() fills in everything before that, once. */
+
+var RESTING_CHUNK_DAYS = 28;
+var RESTING_FROM_YEAR = 2010;
+
+/* The value from one day's summary, whatever Garmin names it. */
+function restingOfDay(e) {
+  if (!e) return null;
+  var v = e.restingHeartRate != null ? e.restingHeartRate
+        : e.restingHeartRateValue != null ? e.restingHeartRateValue
+        : e.restingHR != null ? e.restingHR : null;
+  v = Number(v);
+  return v >= 25 && v <= 120 ? Math.round(v) : null;
+}
+
+/* Pure: a summary list as [date, bpm] rows, days without a value left out. */
+function restingDays(list) {
+  return (list || []).map(function (e) {
+    return [String(e.calendarDate || e.date || '').slice(0, 10), restingOfDay(e)];
+  }).filter(function (d) { return d[1] != null && /^\d{4}-\d\d-\d\d$/.test(d[0]); });
+}
+
+function restingSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SHEETS.resting);
+  if (!sh) { sh = ss.insertSheet(SHEETS.resting); sh.appendRow(RESTING_COLS); sh.getRange('A:A').setNumberFormat('@'); }
+  return sh;
+}
+
+/* Write days in, replacing a date already there. Kept in date order. */
+function restingUpsert(rows) {
+  if (!rows.length) return 0;
+  var sh = restingSheet();
+  var last = sh.getLastRow();
+  var have = {};
+  if (last > 1) sh.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) {
+    var d = r[0] instanceof Date ? isoDay(r[0]) : String(r[0]).slice(0, 10);
+    if (d) have[d] = Number(r[1]);
+  });
+  var changed = 0;
+  rows.forEach(function (r) { if (have[r[0]] !== r[1]) { have[r[0]] = r[1]; changed++; } });
+  if (!changed) return 0;
+  var all = Object.keys(have).sort().map(function (d) { return [d, have[d]]; });
+  if (last > 1) sh.getRange(2, 1, last - 1, 2).clearContent();
+  sh.getRange(2, 1, all.length, 1).setNumberFormat('@');
+  sh.getRange(2, 1, all.length, 2).setValues(all);
+  return changed;
+}
+
+function restingRows() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.resting);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().map(function (r) {
+    return [r[0] instanceof Date ? isoDay(r[0]) : String(r[0]).slice(0, 10), Number(r[1])];
+  }).filter(function (r) { return r[0] && r[1] > 0; });
+}
+
+function garminRestingRange(from, to) {
+  var res = garminGet('/usersummary-service/v2/dailysummaries', { startDate: from, endDate: to });
+  return restingDays(Array.isArray(res) ? res : (res && Array.isArray(res.data) ? res.data : []));
+}
+
+function garminResting() {
+  var today = new Date();
+  return restingUpsert(garminRestingRange(isoDay(new Date(today.getTime() - 13 * 864e5)), isoDay(today)));
+}
+
+/** Once, from the editor: every day Garmin has. Press Run until it says done. */
+function garminRestingHistory() {
+  var started = Date.now(), props = garminProps();
+  var cursor = props.getProperty('GARMIN_RESTING_CURSOR') || (RESTING_FROM_YEAR + '-01-01');
+  var today = isoDay(new Date()), added = 0, cut = false;
+  while (cursor <= today) {
+    if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
+    var end = isoDay(new Date(new Date(cursor + 'T12:00:00Z').getTime() + (RESTING_CHUNK_DAYS - 1) * 864e5));
+    if (end > today) end = today;
+    added += restingUpsert(garminRestingRange(cursor, end));
+    cursor = isoDay(new Date(new Date(end + 'T12:00:00Z').getTime() + 864e5));
+    props.setProperty('GARMIN_RESTING_CURSOR', cursor);
+  }
+  var rows = restingRows();
+  var msg = cut ? 'Resting HR: ' + added + ' days so far, up to ' + cursor + '. Press Run again to carry on.'
+    : 'Resting HR history complete: ' + rows.length + ' days' + (rows.length ? ', from ' + rows[0][0] : '') + '.';
+  if (!cut) props.deleteProperty('GARMIN_RESTING_CURSOR');
+  Logger.log(msg);
+  return { complete: !cut, days: rows.length, message: msg };
+}
+
+/* --------------------------------------------------------- watch zones --
+
+   Your heart-rate zones exactly as they are set on your watch, so the app
+   never disagrees with the numbers you run by. Garmin keeps a set per sport;
+   running's is used, else the default. Kept in Script properties and sent
+   with the Garmin status. Change them on the watch and the app follows on the
+   next hourly check. */
+
+function zonesFrom(list) {
+  var arr = Array.isArray(list) ? list : (list && Array.isArray(list.data) ? list.data : []);
+  var pick = arr.filter(function (z) { return /run/i.test(String(z.sport || '')); })[0] ||
+             arr.filter(function (z) { return /default/i.test(String(z.sport || '')); })[0] || arr[0];
+  if (!pick) return null;
+  var f = [1, 2, 3, 4, 5].map(function (n) { return Number(pick['zone' + n + 'Floor']); });
+  var ok = f.every(function (v) { return v > 0; }) && f[1] > f[0] && f[2] > f[1] && f[3] > f[2] && f[4] > f[3];
+  if (!ok) return null;
+  return { z1: f[0], z2: f[1], z3: f[2], z4: f[3], z5: f[4],
+           max: Number(pick.maxHeartRateUsed) || null, rest: Number(pick.restingHeartRateUsed) || null,
+           method: String(pick.trainingMethod || ''), sport: String(pick.sport || '') };
+}
+
+function garminZones() {
+  var z = zonesFrom(garminGet('/biometric-service/heartRateZones/v2'));
+  if (z) { z.at = new Date().toISOString(); garminProps().setProperty('GARMIN_ZONES', JSON.stringify(z)); }
+  return z;
 }
 
 /* ------------------------------------------------------- history import --
