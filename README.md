@@ -986,16 +986,17 @@ Runs arrive from Garmin, so the floating + is gone. For the odd run Garmin
 doesn't have, **Paste a run by hand** in Setup opens the paste screen. The run
 screen no longer labels where a run came from.
 
-## Worth knowing
+## Training progress
 
-On the home screen, while looking at the current week, month or year: up to
-three plain facts the data has to say, only when genuinely notable
-(`worthKnowing`). Resting HR 3 bpm or more away from three months ago; a best
-effort in the last 30 days that is all-time (against at least five earlier
-efforts) or the fastest in over a year; last week the biggest in eight weeks or
-more; the longest run in the last fortnight the longest in eight weeks or more;
-a first run back after four weeks off. Each taps through to where it comes
-from. Nothing here changes a number anywhere else.
+At the top of **Bests** (not the home screen): four measures, each now against
+the same stretch three months earlier (`progressModel`). Resting HR (last 7
+nights), aerobic pace (middle of 28 days; the app's existing measure, same
+runs, same rules), weekly distance (average of 4 weeks, shown without a
+verdict) and time in Z2 (share of 28 days). A row drops out when one side has
+nothing to compare. Below them, **Lately**: the occasional notable fact from
+`worthKnowing` (a best effort in the last 30 days that is all-time or the
+fastest in over a year, the biggest week or longest run in eight weeks or more,
+a first run back after four weeks off), each tapping through to its run.
 
 ## Tests
 

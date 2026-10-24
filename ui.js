@@ -584,11 +584,33 @@
 
   /* ---------------------------------------------------- worth knowing --- */
 
-  function worthHTML(W) {
-    if (!W || !W.length) return '';
-    return '<div class="sec"><span>Worth knowing</span><span></span></div>' + W.map(w =>
-      '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
-      (w.go ? ' data-wgo="' + esc(w.go) + '"' : '') + '>' + esc(w.text) + '</div>').join('');
+  /* Training progress, top of Bests: four measures now against three months
+     ago, then the occasional notable fact. */
+  function progressHTML(P) {
+    if (!P || (!P.rows.length && !P.lately.length)) return '';
+    let h = '<div class="sec"><span>Training progress</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
+    const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%'
+      : r.key === 'volume' ? v.toFixed(1) + ' km' : (Math.round(v * 10) / 10) + ' bpm';
+    const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points'
+      : r.key === 'volume' ? Math.abs(d).toFixed(1) + ' km' : (Math.round(Math.abs(d) * 10) / 10) + ' bpm';
+    const word = (r, up) => r.key === 'aerobic' ? (up ? 'slower' : 'faster') : (up ? 'higher' : 'lower');
+    P.rows.forEach(r => {
+      const c = r.change;
+      let aside;
+      if (!c) aside = r.then === 0 ? 'up from nothing then' : 'then ' + fmtV(r, r.then);
+      else if (c.dir === 'flat') aside = 'about the same as then (' + fmtV(r, r.then) + ')';
+      else aside = { html: '<span class="delta ' + (c.tone || '') + '">' + (c.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
+        diff(r, c.diff) + ' ' + word(r, c.dir === 'up') + '</span> than ' + esc(fmtV(r, r.then)) };
+      h += cmp(r.label, fmtV(r, r.now), aside);
+    });
+    h += '<div class="est">Each now against the same stretch three months earlier. Resting HR, aerobic pace and Z2 ' +
+      'are green when better; distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
+    if (P.lately.length) {
+      h += '<div class="sec"><span>Lately</span><span></span></div>' + P.lately.map(w =>
+        '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
+        (w.go ? ' data-wgo="' + esc(w.go) + '"' : '') + '>' + esc(w.text) + '</div>').join('');
+    }
+    return h;
   }
 
   /* ------------------------------------------------- the noticing card */
@@ -645,8 +667,6 @@
 
     h += ribbonHTML(m, bounds);
     if (m.days) h += weekStripHTML(m);
-    /* plain facts worth a line, only while looking at now */
-    if (m.mode === 'live' && m.period.isCurrent) h += worthHTML(Calc.worthKnowing(Store.all(), cfg, Store.resting(), today()));
     h += '<div class="rule"></div>';
     h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
 
@@ -1248,6 +1268,8 @@
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
 
+    h += progressHTML(Calc.progressModel(Store.all(), Store.config(), Store.resting(), today()));
+
     if (m.board.length) {
       h += '<div class="sec"><span>All time</span><span>beside ' + esc(m.year) + '</span></div>';
       h += m.board.map(b => {
@@ -1325,6 +1347,9 @@
 
     el('view-bests').innerHTML = h;
     $('#view-bests [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#view-bests .wk').forEach(w => {
+      w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
+    });
     document.querySelectorAll('#b-dist [data-km]').forEach(b => {
       b.onclick = () => { bestsKm = +b.dataset.km; const y = window.scrollY; renderBests(); window.scrollTo(0, y); };
     });
@@ -2053,9 +2078,7 @@
     if (bests) bests.onclick = () => go('bests');
     const rest = $('#view-home [data-go="resting"]');
     if (rest) rest.onclick = () => go('resting');
-    document.querySelectorAll('#view-home .wk').forEach(w => {
-      w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
-    });
+
   }
 
   const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting'];

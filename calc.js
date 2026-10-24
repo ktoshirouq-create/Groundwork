@@ -1982,6 +1982,55 @@
     return out.slice(0, WORTH.max);
   }
 
+  /* ---------- training progress ----------
+
+     Four measures, now against three months ago, always shown (a row only
+     drops out when one side has nothing to compare). Every number here is the
+     app's existing measure, unchanged: aerobic pace counts the same runs by
+     the same rules; this only lines it up across time. Below them, "lately":
+     the occasional notable facts from worthKnowing, resting HR excepted since
+     it has a row of its own. */
+  const PROGRESS_BACK = 91, PROGRESS_DAYS = 28;
+
+  function progressModel(acts, cfg, resting, today) {
+    const t = String(today).slice(0, 10);
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    const thenEnd = addDays(t, -PROGRESS_BACK);
+    const inWin = (end) => runs.filter(a => a.date > addDays(end, -PROGRESS_DAYS) && a.date <= end);
+    const rows = [];
+
+    if (resting && resting.length) {
+      const r = restingModel(resting, 'month', t);
+      if (r.now != null && r.ago3m != null)
+        rows.push({ key: 'resting', label: 'Resting HR', unit: 'bpm', now: r.now, then: r.ago3m,
+          change: delta(r.now, r.ago3m, 'down'), note: 'last 7 nights' });
+    }
+    const aer = end => {
+      const v = inWin(end).filter(a => isAerobicMeasure(a) && a.avg_hr != null).map(a => aerobicPace(a, cfg)).filter(x => x != null);
+      return v.length >= 3 ? median(v) : null;
+    };
+    const aN = aer(t), aT = aer(thenEnd);
+    if (aN != null && aT != null)
+      rows.push({ key: 'aerobic', label: 'Aerobic pace', unit: '/km', now: aN, then: aT,
+        change: delta(aN, aT, 'down'), note: 'middle of 28 days' });
+
+    const kmN = inWin(t).reduce((s, a) => s + (a.distance_km || 0), 0) / 4;
+    const kmT = inWin(thenEnd).reduce((s, a) => s + (a.distance_km || 0), 0) / 4;
+    if (inWin(t).length || inWin(thenEnd).length)
+      /* more is not automatically better: shown without a verdict */
+      rows.push({ key: 'volume', label: 'Weekly distance', unit: 'km', now: kmN, then: kmT,
+        change: kmT ? delta(kmN, kmT, null) : null, note: 'average of 4 weeks' });
+
+    const z2 = end => { const s = z2Of(lapsOf(inWin(end)), cfg); return s && s.total ? s.pct : null; };
+    const zN = z2(t), zT = z2(thenEnd);
+    if (zN != null && zT != null)
+      rows.push({ key: 'z2', label: 'Time in Z2', unit: '%', now: zN, then: zT,
+        change: delta(zN, zT, 'up'), note: 'share of 28 days' });
+
+    const lately = worthKnowing(acts, cfg, [], today).filter(w => w.kind !== 'resting');
+    return { rows: rows, lately: lately, thenDate: thenEnd };
+  }
+
   /* ---------- the Best-of page ----------
 
      Everything here is all-time, so nothing depends on which period the home
@@ -2209,7 +2258,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, progressModel, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
