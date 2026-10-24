@@ -364,11 +364,13 @@ label > span {
 }
 .noticed .h s { text-decoration: none; font-size: var(--t-label); color: var(--mute); font-weight: 500; margin-left: 3px; }
 .noticed .w { font-size: var(--t-label); color: var(--mute); line-height: 1.5; margin-top: 7px; }
-.sigbar { position: relative; height: 14px; margin-top: 10px; }
+.sigbar { position: relative; height: 14px; margin-top: 24px; }
 .sigbar .l2 { position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--line); }
 .sigbar .fill { position: absolute; left: 0; top: 6px; height: 2px; background: var(--good); }
 .sigbar .thr { position: absolute; top: 2px; width: 2px; height: 10px; background: var(--mute); }
 .sigbar .cap { position: absolute; font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim); top: -2px; }
+/* the threshold's name sits above its tick, not across it */
+.sigbar .cap.above { top: -16px; }
 
 /* ---------- zone share ---------- */
 
@@ -733,15 +735,6 @@ label > span {
 
 .pl2 { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .12em; text-transform: uppercase;
        color: var(--dim); margin: 10px 0 2px; }
-.cal { display: flex; flex-direction: column; gap: 3px; margin: 6px 0 4px; }
-.crow { display: flex; align-items: center; gap: 1px; }
-.crow .cm { width: 12px; flex: none; font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim); }
-.cd { flex: 1; height: 11px; display: flex; align-items: center; justify-content: center; border-radius: 2px;
-      background: color-mix(in srgb, var(--line) 35%, transparent); }
-.cd.off { background: none; }
-.cd.run { cursor: pointer; background: none; }
-.cd.run b { display: block; border-radius: 50%; background: var(--mute); }
-.cd.race b { background: none; box-shadow: 0 0 0 1.5px var(--ink); }
 .mix span.top b { color: var(--ink); }
 .scat { position: relative; display: flex; gap: 6px; margin-top: 6px; }
 .splot { position: relative; flex: 1; height: 170px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -760,3 +753,22 @@ label > span {
 .rstep:disabled { opacity: .25; cursor: default; }
 #r-chart { touch-action: pan-y; }
 .rnone { padding: 40px 0; text-align: center; }
+
+/* scatter: heart-rate lines, Z2 band, pace marks */
+.splot .sband { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--z2) 12%, transparent); }
+.splot .sband span { position: absolute; top: 3px; left: 4px; font-family: var(--f-data); font-size: var(--t-micro); color: var(--z2); }
+.splot .sv { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: .6; }
+.splot .sh { position: absolute; left: 0; right: 0; height: 1px; background: var(--line); opacity: .45; }
+.sya span { transform: translateY(-50%); }
+.sxa { position: relative; height: 16px; margin: 4px 44px 0 0; font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); }
+.sxa span { position: absolute; transform: translateX(-50%); }
+.sxa em { position: absolute; right: -40px; font-style: normal; color: var(--dim); }
+/* a line's own name at its end */
+.cend { position: absolute; transform: translate(4px, -50%); font-family: var(--f-data); font-size: var(--t-micro);
+        font-weight: 400; color: var(--mute); white-space: nowrap; pointer-events: none; }
+.cend.lead { color: var(--z2); }
+.mix.byhr .lbl { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+/* worth knowing */
+.wk { padding: 10px 12px; border-left: 2px solid var(--line); margin: 8px 0; font-size: var(--t-body); color: var(--ink); cursor: pointer; }
+.wk.good { border-left-color: var(--good); }
+.wk.bad { border-left-color: var(--bad); }

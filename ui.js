@@ -230,9 +230,10 @@
      the honest picture and needs no gutter at all. */
   /* What an aerobic-pace chart leaves out, said once for every chart. */
   function leftOutText(L) {
-    if (!L || (!L.races && !L.trail && !L.locked)) return '';
+    if (!L || (!L.races && !L.tests && !L.trail && !L.locked)) return '';
     const parts = [];
     if (L.races) parts.push(L.races + ' race' + (L.races === 1 ? '' : 's'));
+    if (L.tests) parts.push(L.tests + ' test' + (L.tests === 1 ? '' : 's'));
     if (L.trail) parts.push(L.trail + ' trail run' + (L.trail === 1 ? '' : 's'));
     if (L.locked) parts.push(L.locked + ' run' + (L.locked === 1 ? '' : 's') + ' whose heart rate followed cadence');
     return '. ' + (parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0]) +
@@ -261,12 +262,14 @@
     const extra = pad * 0.6;
     if (opt.invert) { lo -= pad + extra; hi += pad; }
     else { lo -= pad; hi += pad + extra; }
+    /* a stated floor (0 km) is the floor, not padded below */
+    if (opt.min != null && !opt.invert) lo = opt.min;
     const yOf = v => {
       const t = (v - lo) / (hi - lo);
       return opt.invert ? t * 100 : 100 - t * 100;
     };
 
-    const dots = [];
+    const dots = [], endLabels = [];
     let svg = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" height="' +
       (opt.height || 150) + '" role="img" aria-label="' + esc(opt.label || 'chart') + '">';
 
@@ -304,6 +307,11 @@
         const p = seg[seg.length - 1];
         dots.push({ x: xOf(p.date), y: yOf(p.value), cls: 'tip', r: 5 });
       }
+      /* each line can carry its own name at its end (which year is which grey) */
+      if (opt.endLabels && opt.endLabels[si] != null) {
+        const p = seg[seg.length - 1];
+        endLabels.push({ x: xOf(p.date), y: yOf(p.value), text: opt.endLabels[si], lead: lead });
+      }
     });
     svg += '</svg>';
 
@@ -312,14 +320,16 @@
       d.y.toFixed(2) + '%; width:' + d.r + 'px; height:' + d.r + 'px"></i>').join('');
 
     const fmt = opt.format || (v => Math.round(v));
-    const best = Math.min.apply(null, all), worst = Math.max.apply(null, all);
+    const best = opt.min != null && !opt.invert ? opt.min : Math.min.apply(null, all), worst = Math.max.apply(null, all);
     const anchors = opt.invert ? [best, worst] : [worst, best];
     const axis = anchors.map((v, i) =>
       '<span style="top:' + yOf(v).toFixed(1) + '%">' + fmt(v) +
       (opt.anchorLabels ? '<em>' + opt.anchorLabels[i] + '</em>' : '') + '</span>').join('');
 
     return '<div class="chart"><div class="cwrap">' +
-      '<div class="cplot">' + svg + dotHTML + '</div>' +
+      '<div class="cplot">' + svg + dotHTML + endLabels.map(l =>
+        '<b class="cend' + (l.lead ? ' lead' : '') + '" style="left:' + l.x.toFixed(2) + '%; top:' + l.y.toFixed(2) + '%">' +
+        esc(l.text) + '</b>').join('') + '</div>' +
       '<div class="yax" style="height:' + (opt.height || 150) + 'px">' + axis + '</div></div>' +
       (opt.xax ? '<div class="xax">' + opt.xax.map(s => '<span>' + esc(s) + '</span>').join('') + '</div>' : '') +
       (opt.legend ? '<div class="legend">' + opt.legend + '</div>' : '') + '</div>';
@@ -572,6 +582,15 @@
     return h;
   }
 
+  /* ---------------------------------------------------- worth knowing --- */
+
+  function worthHTML(W) {
+    if (!W || !W.length) return '';
+    return '<div class="sec"><span>Worth knowing</span><span></span></div>' + W.map(w =>
+      '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
+      (w.go ? ' data-wgo="' + esc(w.go) + '"' : '') + '>' + esc(w.text) + '</div>').join('');
+  }
+
   /* ------------------------------------------------- the noticing card */
 
   function noticedHTML(act) {
@@ -590,7 +609,7 @@
       '<div class="sigbar"><div class="l2"></div>' +
       '<div class="fill" style="width:' + pct.toFixed(0) + '%"></div>' +
       '<div class="thr" style="left:50%"></div>' +
-      '<div class="cap" style="left:50%; transform:translateX(-50%)">threshold</div>' +
+      '<div class="cap above" style="left:50%; transform:translateX(-50%)">threshold</div>' +
       '<div class="cap" style="right:0">' + n.ratio.toFixed(1) + '\u00d7</div></div></div>';
   }
 
@@ -626,6 +645,8 @@
 
     h += ribbonHTML(m, bounds);
     if (m.days) h += weekStripHTML(m);
+    /* plain facts worth a line, only while looking at now */
+    if (m.mode === 'live' && m.period.isCurrent) h += worthHTML(Calc.worthKnowing(Store.all(), cfg, Store.resting(), today()));
     h += '<div class="rule"></div>';
     h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
 
@@ -819,7 +840,8 @@
     if (a.avg_hr != null) h += cmp('Heart rate', a.avg_hr + ' bpm',
       R.drift == null ? '' : Calc.driftIsFlat(R.drift) ? 'drift flat'
         : 'drift ' + (R.drift > 0 ? '+' : '') + R.drift);
-    if (R.halves) {
+    /* on a trail or obstacle course the split is the course, not your pacing */
+    if (R.halves && !Calc.isTrail(a)) {
       const H = R.halves;
       h += cmp('Halves', Calc.fmtPace(H.first) + ' \u2192 ' + Calc.fmtPace(H.second),
         H.shape === 'even' ? 'even' : H.shape === 'positive'
@@ -894,27 +916,6 @@
 
   /* ------------------------------------------------- the year's pictures */
 
-  function calendarHTML(P) {
-    const keys = Object.keys(P.days);
-    if (keys.length < 2) return '';
-    const max = Math.max.apply(null, keys.map(k => P.days[k].km).concat([1]));
-    let h = '<div class="sec"><span>The year at a glance</span><span>a dot a run</span></div><div class="cal">';
-    for (let m = 0; m < 12; m++) {
-      const n = new Date(Date.UTC(+P.year, m + 1, 0)).getUTCDate();
-      h += '<div class="crow"><span class="cm">' + MON[m][0] + '</span>';
-      for (let d = 1; d <= 31; d++) {
-        const k = P.year + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
-        const r = d <= n ? P.days[k] : null;
-        h += d > n ? '<i class="cd off"></i>' : !r ? '<i class="cd"></i>'
-          : '<i class="cd run' + (r.race ? ' race' : '') + '" data-id="' + esc(r.id) + '" title="' + r.km.toFixed(1) +
-            ' km"><b style="width:' + Math.round(4 + 6 * Math.sqrt(r.km / max)) + 'px;height:' +
-            Math.round(4 + 6 * Math.sqrt(r.km / max)) + 'px"></b></i>';
-      }
-      h += '</div>';
-    }
-    return h + '</div><div class="est">Bigger is longer. A ring is a race. Tap a dot for the run.</div>';
-  }
-
   function cumulativeHTML(P) {
     if (P.cumulative.length < 2) return '';
     const mine = P.cumulative.find(y => y.year === P.year);
@@ -922,7 +923,8 @@
     /* this year drawn last, so the chart gives it the colour */
     const order = P.cumulative.filter(y => y.year !== P.year).concat([mine]);
     const chart = lineChart(order.map(y => y.points), {
-      height: 140, from: '2000-01-01', to: '2000-12-31', format: v => Math.round(v) + '',
+      height: 160, from: '2000-01-01', to: '2000-12-31', format: v => Math.round(v) + '', min: 0,
+      endLabels: order.map(y => "'" + y.year.slice(2)),
       anchorLabels: ['km', 'km'], label: 'Kilometres through the year, every year.',
       xax: ['JAN', 'JUL', 'DEC'] });
     return '<div class="sec"><span>Against your other years</span><span>km through the year</span></div>' + (chart || '') +
@@ -931,43 +933,44 @@
       '<div class="est">' + esc(P.year) + ' in colour, the rest in grey, all on one January-to-December line.</div>';
   }
 
-  function scatterHTML(P) {
+  function scatterHTML(P, bounds) {
     const S = P.scatter;
     if (S.now.length < 3) return '';
     const all = S.now.concat(S.prev);
-    const hrLo = Math.min.apply(null, all.map(p => p.hr)) - 2, hrHi = Math.max.apply(null, all.map(p => p.hr)) + 2;
+    const hrLo = Math.floor((Math.min.apply(null, all.map(p => p.hr)) - 3) / 5) * 5;
+    const hrHi = Math.ceil((Math.max.apply(null, all.map(p => p.hr)) + 3) / 5) * 5;
     const pLo = Math.min.apply(null, all.map(p => p.pace)), pHi = Math.max.apply(null, all.map(p => p.pace));
-    const pad = (pHi - pLo) * 0.08 || 10;
-    const x = hr => ((hr - hrLo) / (hrHi - hrLo) * 100).toFixed(2);
-    const y = pace => ((pace - (pLo - pad)) / (pHi - pLo + 2 * pad) * 100).toFixed(2);    // faster is higher
-    const dot = (p, cls) => '<i class="sd ' + cls + '" data-id="' + esc(p.id) + '" style="left:' + x(p.hr) + '%;top:' + y(p.pace) + '%"></i>';
+    const pad = (pHi - pLo) * 0.08 || 10, yLo = pLo - pad, ySpan = pHi - pLo + 2 * pad;
+    const x = hr => Math.max(0, Math.min(100, (hr - hrLo) / (hrHi - hrLo) * 100));
+    const y = pace => (pace - yLo) / ySpan * 100;              // faster is higher
+    const dot = (p, cls) => '<i class="sd ' + cls + '" data-id="' + esc(p.id) + '" style="left:' + x(p.hr).toFixed(2) +
+      '%;top:' + y(p.pace).toFixed(2) + '%"></i>';
+    /* your Z2, from the watch's zones, behind everything */
+    const z2a = bounds && bounds.z2, z2b = bounds && bounds.z3;
+    const band = z2a && z2b && z2b > hrLo && z2a < hrHi
+      ? '<div class="sband" style="left:' + x(z2a).toFixed(2) + '%;width:' + (x(z2b) - x(z2a)).toFixed(2) + '%"><span>Z2</span></div>' : '';
+    /* a line every 10 bpm, labelled underneath */
+    let vlines = '', vlabels = '';
+    for (let b = Math.ceil(hrLo / 10) * 10; b <= hrHi; b += 10) {
+      vlines += '<i class="sv" style="left:' + x(b).toFixed(2) + '%"></i>';
+      vlabels += '<span style="left:' + x(b).toFixed(2) + '%">' + b + '</span>';
+    }
+    /* four pace marks up the side, on whole quarter-minutes */
+    let hlines = '', hlabels = '';
+    const step = Math.max(15, Math.ceil((pHi - pLo) / 3 / 15) * 15);
+    for (let v = Math.ceil(pLo / step) * step; v <= pHi; v += step) {
+      hlines += '<i class="sh" style="top:' + y(v).toFixed(2) + '%"></i>';
+      hlabels += '<span style="top:' + y(v).toFixed(2) + '%">' + Calc.fmtPace(v) + '</span>';
+    }
     return '<div class="sec"><span>Pace against heart rate</span><span>' + esc(P.year) +
       (S.prev.length ? ' over ' + esc(S.prevYear) : '') + '</span></div>' +
-      '<div class="scat"><div class="splot">' + S.prev.map(p => dot(p, 'prev')).join('') + S.now.map(p => dot(p, 'now')).join('') +
-      '</div><div class="sya"><span style="top:0">' + Calc.fmtPace(pLo) + '</span><span style="bottom:0">' + Calc.fmtPace(pHi) + '</span></div></div>' +
-      '<div class="xax"><span>' + Math.round(hrLo) + ' BPM</span><span></span><span>' + Math.round(hrHi) + ' BPM</span></div>' +
-      '<div class="est">Each dot is a run: heart rate across, pace up (faster is higher). ' +
+      '<div class="scat"><div class="splot">' + band + vlines + hlines +
+      S.prev.map(p => dot(p, 'prev')).join('') + S.now.map(p => dot(p, 'now')).join('') +
+      '</div><div class="sya">' + hlabels + '</div></div>' +
+      '<div class="sxa">' + vlabels + '<em>bpm</em></div>' +
+      '<div class="est">Each dot is a run: heart rate across, pace up (faster is higher). The shaded band is your Z2. ' +
       (S.prev.length ? esc(S.prevYear) + ' in grey behind. A cloud that sits higher at the same heart rate is a fitter year. ' : '') +
-      'Races and trail runs left out.</div>';
-  }
-
-  function aerobicYearsHTML(P) {
-    const A = P.aerobicByYear;
-    if (A.length < 2) return '';
-    const segs = [];
-    A.forEach((a, i) => {
-      const pt = { date: a.year + '-07-01', value: a.value };
-      if (i && +a.year - +A[i - 1].year === 1) segs[segs.length - 1].push(pt); else segs.push([pt]);
-    });
-    const chart = lineChart(segs, { invert: true, uniform: true, height: 100, from: A[0].year + '-01-01',
-      to: A[A.length - 1].year + '-12-31', format: v => Calc.fmtPace(v), anchorLabels: ['best', 'slowest'],
-      label: 'Aerobic pace, the middle of each year.', xax: [A[0].year, '', A[A.length - 1].year] });
-    const me = A.find(a => a.year === P.year);
-    return '<div class="sec"><span>Aerobic pace by year</span><span>every year</span></div>' + (chart || '') +
-      '<div class="mix">' + A.map(a => '<span' + (a.year === P.year ? ' class="top"' : '') + '>' + esc(a.year) +
-        ' <b>' + Calc.fmtPace(a.value) + '</b></span>').join('') + '</div>' +
-      '<div class="est">The middle value of each year\u2019s aerobic pace' + (me ? '' : ' (' + esc(P.year) + ' had too few runs with heart rate)') +
-      '. Faster is higher; a break is a year without enough runs.</div>';
+      'Races, tests and trail runs left out.</div>';
   }
 
   function reviewHTML(m, bounds) {
@@ -1000,7 +1003,7 @@
     h += '</div>';
 
     h += monthsHTML(m.months);
-    if (m.pictures) h += calendarHTML(m.pictures) + cumulativeHTML(m.pictures);
+    if (m.pictures) h += cumulativeHTML(m.pictures);
     h += bestsHTML(m.bests, m.period.word);
 
     if (m.mix) {
@@ -1008,6 +1011,12 @@
         plural(s.count, 'run') + '</span></div>';
       h += '<div class="mix">' + m.mix.map(x =>
         '<span><b>' + x.count + '</b> ' + esc(x.label) + '</span>').join('') + '</div>';
+      const E = m.byHr;
+      if (E && (E.easy + E.steady + E.hard)) h += '<div class="mix byhr"><span class="lbl">By heart rate</span>' +
+        [['easy', E.easy], ['steady', E.steady], ['hard', E.hard]].filter(z => z[1]).map(z =>
+          '<span><b>' + z[1] + '</b> ' + z[0] + '</span>').join('') +
+        (E.unknown ? '<span><b>' + E.unknown + '</b> no heart rate</span>' : '') + '</div>' +
+        '<div class="est">By heart rate alone: easy is 70% or more of the time in Z1\u2013Z2, hard is 30% or more in Z4\u2013Z5. Your tags are untouched.</div>';
     }
     h += zonesHTML(m.zones, bounds);
 
@@ -1024,7 +1033,7 @@
         leftOutText(m.leftOut) +
         '. ' + plural(T.shown, 'run') + (T.days >= 2 ? ' over ' + T.days + ' days' : '') + '.</div>';
     }
-    if (m.pictures) h += scatterHTML(m.pictures) + aerobicYearsHTML(m.pictures);
+    if (m.pictures) h += scatterHTML(m.pictures, bounds);
     return h;
   }
 
@@ -1192,7 +1201,7 @@
         format: v => bpm(v), anchorLabels: ['highest', 'lowest'],
         label: 'Resting heart rate, ' + (restingView === 'month' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
         xax: P ? [fmtDate(P.from).toUpperCase(), '', fmtDate(P.to).toUpperCase()]
-               : [fmtDate(m.segments[0][0].date).toUpperCase(), '', fmtDate(m.segments[m.segments.length - 1].slice(-1)[0].date).toUpperCase()]
+               : [m.segments[0][0].date.slice(0, 4), '', m.segments[m.segments.length - 1].slice(-1)[0].date.slice(0, 4)]
       }) : null;
       h += '<div id="r-chart">' + (chart || '<div class="est rnone">No nights in this ' + (restingView === 'month' ? 'month' : 'year') + '.</div>') + '</div>';
       h += '<div class="est">' + (restingView === 'month' ? 'Every night.' : restingView === 'year'
@@ -1283,6 +1292,28 @@
     }
 
     h += recordsHTML(m.records);
+
+    /* threshold tests, newest first, each against the one before */
+    if (m.tests.length) {
+      h += '<div class="sec"><span>Tests</span><span>last 20 minutes</span></div>';
+      h += m.tests.map(T => {
+        const V = T.vs;
+        let aside = fmtDate(T.run.date) + (T.full ? '' : ' \u00b7 under 20 min, whole test used');
+        let vs = '';
+        if (V) {
+          const p = V.pace;
+          vs = (p.dir === 'flat' ? 'same pace' : '<span class="delta ' + p.tone + '">' + (p.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
+              Math.round(Math.abs(p.diff)) + ' s/km ' + (p.dir === 'up' ? 'slower' : 'faster') + '</span>') +
+            (V.hr != null ? ', ' + (V.hr === 0 ? 'same heart rate' : Math.abs(V.hr) + ' bpm ' + (V.hr > 0 ? 'higher' : 'lower')) : '') +
+            ' than ' + esc(fmtDate(V.date));
+        }
+        return '<div class="cmp" data-id="' + esc(T.run.id) + '"><span class="k">' + esc(T.run.name) + '</span>' +
+          '<span class="v">' + (T.hr != null ? T.hr + ' bpm' : '\u2014') + ' \u00b7 ' + (T.pace ? Calc.fmtPace(T.pace) + '/km' : '\u2014') +
+          '<s>' + esc(aside) + (vs ? '<br>' + vs : '') + '</s></span></div>';
+      }).join('');
+      h += '<div class="est">Threshold heart rate and pace: the last 20 minutes of each run tagged Test, ' +
+        'the standard reading of a 30-minute test.</div>';
+    }
 
     if (m.races.length) {
       h += '<div class="sec"><span>Races</span><span>' + m.races.length + '</span></div>';
@@ -2022,6 +2053,9 @@
     if (bests) bests.onclick = () => go('bests');
     const rest = $('#view-home [data-go="resting"]');
     if (rest) rest.onclick = () => go('resting');
+    document.querySelectorAll('#view-home .wk').forEach(w => {
+      w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
+    });
   }
 
   const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting'];

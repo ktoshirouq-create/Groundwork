@@ -986,6 +986,43 @@ Runs arrive from Garmin, so the floating + is gone. For the odd run Garmin
 doesn't have, **Paste a run by hand** in Setup opens the paste screen. The run
 screen no longer labels where a run came from.
 
+## Worth knowing
+
+On the home screen, while looking at the current week, month or year: up to
+three plain facts the data has to say, only when genuinely notable
+(`worthKnowing`). Resting HR 3 bpm or more away from three months ago; a best
+effort in the last 30 days that is all-time (against at least five earlier
+efforts) or the fastest in over a year; last week the biggest in eight weeks or
+more; the longest run in the last fortnight the longest in eight weeks or more;
+a first run back after four weeks off. Each taps through to where it comes
+from. Nothing here changes a number anywhere else.
+
+## Tests
+
+**Test** is a session tag, for a yearly lactate threshold test. A test counts
+like a race: out of aerobic pace, the "something changed" card and "against
+runs this length", in everything else. The **Tests** section on Bests reads
+each one the standard way, heart rate and pace over the last 20 minutes from
+the laps, newest first, each against the test before.
+
+## Comparisons are like for like
+
+An unfinished period is compared with the previous one at the same point:
+1 January-24 October 2026 against 1 January-24 October 2025, this month to the
+24th against last month to the 24th. The label says so ("2025 to 24 Oct").
+On Year, the Z2 target line and "recent typical" are gone: they are
+training-week ideas.
+
+## Year review, revised
+
+The year-at-a-glance calendar and aerobic pace by year are gone. **Against
+your other years** starts at 0 km and names each line with its year.
+**Pace against heart rate** has a line every 10 bpm, your Z2 band shaded, and
+pace marks up the side. **What you mainly did** adds a by-heart-rate line
+(easy: 70%+ of the time in Z1-Z2; hard: 30%+ in Z4-Z5; steady between),
+display only. A trail race shows no halves: on a trail or obstacle course the
+split is the course.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.

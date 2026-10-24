@@ -563,6 +563,14 @@
   }
 
   /** Most recent period before `key` that actually has something in it. */
+  /* how the cut-off reads beside the period it cuts: '24 Oct', '24', 'Wed' */
+  function shortDay(date, scope) {
+    const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    if (scope === 'week') return ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][dayIndex(date)];
+    if (scope === 'month') return String(+date.slice(8));
+    return (+date.slice(8)) + ' ' + M[+date.slice(5, 7) - 1];
+  }
+
   function previousWithData(acts, scope, key) {
     let k = shiftKey(key, scope, -1);
     for (let i = 0; i < 60; i++) {
@@ -866,13 +874,13 @@
   /* Did this run move meaningfully against the ones before it?
      Compares aerobic pace within the same length band where possible. */
   function noticed(act, acts, cfg) {
-    if (!act || act.type !== 'run') return null;
+    if (!act || act.type !== 'run' || !isAerobicMeasure(act)) return null;
     const value = aerobicPace(act, cfg);
     if (value == null) return null;
 
     const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2;
     const earlier = acts
-      .filter(a => a.type === 'run' && a.id !== act.id && a.date <= act.date && a.avg_hr != null)
+      .filter(a => a.type === 'run' && a.id !== act.id && a.date <= act.date && a.avg_hr != null && isAerobicMeasure(a))
       .sort((a, b) => b.date.localeCompare(a.date));
 
     let banded = earlier.filter(a => a.distance_km >= lo && a.distance_km <= hi);
@@ -1158,8 +1166,12 @@
     { key: 'steady',    label: 'Steady',    z2: 'mid'  },
     { key: 'tempo',     label: 'Tempo',     z2: 'low'  },
     { key: 'intervals', label: 'Intervals', z2: 'low'  },
-    { key: 'race',      label: 'Race',      z2: 'low'  }
+    { key: 'race',      label: 'Race',      z2: 'low'  },
+    /* a field test (a yearly lactate threshold test): measured like a race */
+    { key: 'test',      label: 'Test',      z2: 'low'  }
   ];
+
+  function isTest(a) { return !!a && a.session === 'test'; }
 
   function sessionOf(key) {
     return SESSIONS.find(s => s.key === key) || null;
@@ -1359,7 +1371,16 @@
     const rows = readRows(all, c, readTo, isCurrent ? null : start);
 
     const prevKey = previousWithData(runs, scope, key);
-    const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey))) : null;
+    /* An unfinished period is compared with the previous one at the same
+       point: 1 Jan-24 Oct 2026 against 1 Jan-24 Oct 2025, not all of 2025. */
+    let prevCut = null;
+    if (prevKey && isCurrent) {
+      const off = daysBetween(start, today);
+      prevCut = addDays(periodStart(prevKey, scope), off);
+      const pEnd = periodEnd(prevKey, scope);
+      if (prevCut >= pEnd) prevCut = null;
+    }
+    const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey) && (!prevCut || a.date <= prevCut))) : null;
 
     return {
       mode: 'live',
@@ -1368,8 +1389,8 @@
       runs: inP,
       count: inP.length,
       summary: summary,
-      previous: prev ? { key: prevKey, label: periodLabel(prevKey, scope, today),
-                         summary: prev } : null,
+      previous: prev ? { key: prevKey, summary: prev, cut: prevCut,
+                         label: periodLabel(prevKey, scope, today) + (prevCut ? ' to ' + shortDay(prevCut, scope) : '') } : null,
 
       hero: {
         pace: stat(pace, {
@@ -1397,7 +1418,8 @@
         tz: tz, zoned: zoned, unknown: tz.unknown,
         elapsed: summary.elapsed_s,
         share: zoned ? z2Of(laps, c) : null,
-        typical: z2Typical(runs, c, scope, key),
+        /* "recent typical" and the target line are training-week ideas */
+        typical: scope === 'year' ? null : z2Typical(runs, c, scope, key),
         window: word,
         absent: zoned ? null
           : (summary.elapsed_s ? 'no lap heart rate' : 'nothing logged')
@@ -1429,7 +1451,7 @@
 
       ribbon: ribbon(runs, scope, key, 12, 'load', c, today),
       gapBefore: emptyRunBefore(runs, scope, key),
-      record: z2Record(runs, c, scope, key, 10),
+      record: scope === 'year' ? null : z2Record(runs, c, scope, key, 10),
       days: scope === 'week' ? weekDays(runs, c, key) : null
     };
   }
@@ -1593,6 +1615,9 @@
         .sort((a, b) => b.count - a.count || order.indexOf(a.key) - order.indexOf(b.key));
     }
 
+    /* ---- the same runs read by heart rate alone, beside the tags ---- */
+    const byHr = mix ? effortMix(inP, c) : null;
+
     /* ---- zones: the period's own split, no rolling window, no "usual" ---- */
     const laps = lapsOf(inP);
     const tz = timeInZone(laps, zoneBounds(c));
@@ -1629,6 +1654,7 @@
       months: months,
       bests: bests,
       mix: mix,
+      byHr: byHr,
       zones: {
         tz: tz, zoned: zoned, unknown: tz.unknown,
         elapsed: summary.elapsed_s,
@@ -1664,23 +1690,8 @@
       return { year: y, points: pts, total: Math.round(sum) };
     }).filter(y => y.points.length);
 
-    /* every day of the year: a dot per run, sized by distance */
-    const days = {};
-    runs.filter(a => a.date.slice(0, 4) === key).forEach(a => {
-      const d = days[a.date] = days[a.date] || { km: 0, race: false, id: a.id };
-      d.km += a.distance_km || 0;
-      if (isRace(a)) d.race = true;
-    });
-
-    /* aerobic pace, the median of each year's measurements, every year */
-    const aerobicByYear = years.map(y => {
-      const v = runs.filter(a => a.date.slice(0, 4) === y && isAerobicMeasure(a) && a.avg_hr != null)
-        .map(a => aerobicPace(a, c)).filter(x => x != null);
-      return v.length >= 3 ? { year: y, value: median(v), n: v.length } : null;
-    }).filter(Boolean);
-
     return { year: key, scatter: { now: dots(key), prev: dots(prevKey), prevYear: prevKey },
-             cumulative: cumulative, days: days, aerobicByYear: aerobicByYear };
+             cumulative: cumulative };
   }
 
   /* ---------- what counts as a measurement of aerobic fitness ----------
@@ -1713,7 +1724,7 @@
     return !!a && a.hr_trust !== 'trust' && a.hr_lock != null && a.hr_lock !== '' && Number(a.hr_lock) >= HR_LOCK_LIMIT;
   }
 
-  function isAerobicMeasure(a) { return !!a && !isRace(a) && !isTrail(a) && !hrLocked(a); }
+  function isAerobicMeasure(a) { return !!a && !isRace(a) && !isTest(a) && !isTrail(a) && !hrLocked(a); }
 
   function aerobicSamples(acts) {
     return (acts || []).filter(isAerobicMeasure);
@@ -1723,20 +1734,21 @@
   function leftOutOf(acts) {
     const runs = (acts || []).filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0);
     return { races: runs.filter(isRace).length,
-             trail: runs.filter(a => isTrail(a) && !isRace(a)).length,
-             locked: runs.filter(a => hrLocked(a) && !isRace(a) && !isTrail(a)).length };
+             tests: runs.filter(a => isTest(a) && !isRace(a)).length,
+             trail: runs.filter(a => isTrail(a) && !isRace(a) && !isTest(a)).length,
+             locked: runs.filter(a => hrLocked(a) && !isRace(a) && !isTest(a) && !isTrail(a)).length };
   }
 
   /* Runs to rank this one against: a similar distance (within 20%) on the
      same kind of ground. A technical trail ranked against road runs comes
      last for reasons that aren't fitness. */
   function lengthPeers(act, all, cfg) {
-    if (!act || act.distance_km == null || hrLocked(act)) return null;
+    if (!act || act.distance_km == null || hrLocked(act) || isTest(act)) return null;
     const mine = aerobicPace(act, cfg);
     if (mine == null) return null;
     const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2, trail = isTrail(act);
     const peers = (all || [])
-      .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null && !hrLocked(x) &&
+      .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null && !hrLocked(x) && !isTest(x) &&
                    x.distance_km >= lo && x.distance_km <= hi && isTrail(x) === trail)
       .map(x => ({ act: x, pace: aerobicPace(x, cfg) }))
       .filter(x => x.pace != null)
@@ -1834,6 +1846,142 @@
     }).filter(Boolean);
   }
 
+  /* ---------- runs read by heart rate alone ----------
+
+     Display only, beside your tags: easy when 70% or more of the time is in
+     Z1-Z2, hard when 30% or more is in Z4-Z5, steady otherwise. A run without
+     zone data isn't guessed at. Nothing else in the app uses this. */
+  function effortMix(runs, cfg) {
+    const b = zoneBounds(cfg);
+    const out = { easy: 0, steady: 0, hard: 0, unknown: 0 };
+    (runs || []).forEach(a => {
+      const tz = timeInZone(zoneLaps(a), b);
+      const tot = [1, 2, 3, 4, 5].reduce((t, z) => t + tz[z], 0);
+      if (!tot) { out.unknown++; return; }
+      if ((tz[1] + tz[2]) / tot >= 0.7) out.easy++;
+      else if ((tz[4] + tz[5]) / tot >= 0.3) out.hard++;
+      else out.steady++;
+    });
+    return out;
+  }
+
+  /* ---------- threshold tests ----------
+
+     A run tagged Test, read the standard way for a 30-minute test: heart rate
+     and pace over the last 20 minutes, from the laps (a lap that straddles the
+     cut counts for the part inside it). Each test against the one before. */
+  const TEST_WINDOW_S = 1200;
+
+  function testReading(a) {
+    const laps = (a.laps || []).filter(l => l.time_s > 0 && l.distance_km > 0).slice().sort((x, y) => x.n - y.n);
+    if (!laps.length) return null;
+    let t = 0, d = 0, hrT = 0, hrS = 0;
+    for (let i = laps.length - 1; i >= 0 && t < TEST_WINDOW_S; i--) {
+      const l = laps[i], take = Math.min(1, (TEST_WINDOW_S - t) / l.time_s);
+      t += l.time_s * take; d += l.distance_km * take;
+      if (l.avg_hr != null) { hrT += l.time_s * take; hrS += l.avg_hr * l.time_s * take; }
+    }
+    return { seconds: Math.round(t), full: t >= TEST_WINDOW_S - 1,
+             hr: hrT ? Math.round(hrS / hrT) : null, pace: d ? t / d : null };
+  }
+
+  function testsModel(runs) {
+    const tests = (runs || []).filter(a => a.type === 'run' && isTest(a))
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map(a => Object.assign({ run: a }, testReading(a) || {}));
+    tests.forEach((t, i) => {
+      const prev = tests[i + 1];
+      t.vs = prev && prev.pace && t.pace ? {
+        date: prev.run.date,
+        pace: delta(t.pace, prev.pace, 'down'),
+        hr: t.hr != null && prev.hr != null ? t.hr - prev.hr : null
+      } : null;
+    });
+    return tests;
+  }
+
+  /* ---------- worth knowing ----------
+
+     Plain facts the data has to say, shown only when genuinely notable and
+     never more than three. Nothing here changes a number anywhere else. */
+  const WORTH = { restingBpm: 3, weekGapWeeks: 8, runGapDays: 56, bestGapDays: 365, minWeekKm: 10, max: 3 };
+
+  function worthKnowing(acts, cfg, resting, today) {
+    const t = String(today).slice(0, 10);
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a)).sort((a, b) => a.date.localeCompare(b.date));
+    const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const when = d => (+d.slice(8)) + ' ' + M[+d.slice(5, 7) - 1] + (d.slice(0, 4) !== t.slice(0, 4) ? ' ' + d.slice(0, 4) : '');
+    const monthOf = d => M[+d.slice(5, 7) - 1] + ' ' + d.slice(0, 4);
+    const out = [];
+
+    /* resting HR against three months ago */
+    if (resting && resting.length) {
+      const r = restingModel(resting, 'month', t);
+      if (r.now != null && r.ago3m != null && Math.abs(r.now - r.ago3m) >= WORTH.restingBpm) {
+        const lower = r.now < r.ago3m;
+        out.push({ kind: 'resting', go: 'resting', tone: lower ? 'good' : 'bad',
+          text: 'Resting HR is ' + Math.round(Math.abs(r.now - r.ago3m)) + ' bpm ' + (lower ? 'lower' : 'higher') +
+            ' than three months ago \u2014 ' + Math.round(r.now) + ' against ' + Math.round(r.ago3m) + '.' });
+      }
+    }
+
+    /* a best effort in the last 30 days that stands out */
+    const recentFrom = addDays(t, -30);
+    let best = null;
+    EFFORT_DISTANCES.slice().reverse().forEach(km => {
+      if (best && best.allTime) return;
+      const recent = bestEffortBoard(runs.filter(a => a.date > recentFrom), [km])[0];
+      if (!recent) return;
+      const earlier = runs.filter(a => a.date < recentFrom).map(a => ({ a: a, e: bestEffortOf(a, km) })).filter(x => x.e);
+      /* an all-time best only means something against a real history */
+      if (earlier.length < 5) return;
+      const faster = earlier.filter(x => x.e.seconds <= recent.seconds).sort((x, y) => y.a.date.localeCompare(x.a.date))[0];
+      if (!faster) best = { km: km, e: recent, allTime: true };
+      else if (!best && daysBetween(faster.a.date, recent.run.date) >= WORTH.bestGapDays)
+        best = { km: km, e: recent, since: faster.a.date.slice(0, 4) };
+    });
+    if (best) {
+      const name = { 0.4: '400 m', 1: '1 km', 1.609: 'mile', 21.1: 'half marathon', 42.2: 'marathon' }[best.km] || best.km + ' km';
+      out.push({ kind: 'best', id: best.e.run.id, tone: 'good',
+        text: (best.allTime ? 'New all-time ' + name + ' best: ' : 'Your fastest ' + name + ' since ' + best.since + ': ') +
+          fmtDuration(best.e.seconds) + ' on ' + when(best.e.run.date) + '.' });
+    }
+
+    /* last full week against the weeks before it */
+    const thisWeek = weekStart(t), lastWeek = addDays(thisWeek, -7);
+    const weekKm = {};
+    runs.forEach(a => { const w = weekStart(a.date); weekKm[w] = (weekKm[w] || 0) + (a.distance_km || 0); });
+    const lw = weekKm[lastWeek] || 0;
+    if (lw >= WORTH.minWeekKm) {
+      const bigger = Object.keys(weekKm).filter(w => w < lastWeek && weekKm[w] >= lw).sort().pop();
+      if (!bigger) out.push({ kind: 'week', tone: 'good', text: 'Last week was your biggest ever: ' + lw.toFixed(1) + ' km.' });
+      else if (daysBetween(bigger, lastWeek) >= WORTH.weekGapWeeks * 7)
+        out.push({ kind: 'week', tone: 'good', text: 'Last week was your biggest since ' + monthOf(bigger) + ': ' + lw.toFixed(1) + ' km.' });
+    }
+
+    /* the longest run in the last fortnight against everything before it */
+    const recentRuns = runs.filter(a => a.date > addDays(t, -14));
+    if (recentRuns.length) {
+      const L = recentRuns.slice().sort((a, b) => b.distance_km - a.distance_km)[0];
+      const longer = runs.filter(a => a.date < L.date && a.distance_km >= L.distance_km).pop();
+      if (L.distance_km >= 10 && !longer)
+        out.push({ kind: 'long', id: L.id, tone: 'good', text: 'Your longest run ever: ' + L.distance_km.toFixed(1) + ' km on ' + when(L.date) + '.' });
+      else if (L.distance_km >= 10 && longer && daysBetween(longer.date, L.date) >= WORTH.runGapDays)
+        out.push({ kind: 'long', id: L.id, tone: 'good', text: 'Your longest run since ' + monthOf(longer.date) + ': ' +
+          L.distance_km.toFixed(1) + ' km on ' + when(L.date) + '.' });
+    }
+
+    /* back after a break */
+    if (runs.length >= 2) {
+      const last = runs[runs.length - 1], before = runs[runs.length - 2];
+      const gap = daysBetween(before.date, last.date);
+      if (daysBetween(last.date, t) <= 7 && gap >= 28)
+        out.push({ kind: 'back', id: last.id, tone: 'good', text: 'First run in ' + Math.round(gap / 7) + ' weeks. Welcome back.' });
+    }
+
+    return out.slice(0, WORTH.max);
+  }
+
   /* ---------- the Best-of page ----------
 
      Everything here is all-time, so nothing depends on which period the home
@@ -1887,7 +2035,7 @@
       run: r, seconds: r.elapsed_s, pace: paceSecPerKm(r.distance_km, r.elapsed_s) }));
 
     return { count: runs.length, year: year, years: years, board: board,
-             progression: progression, records: records, races: races };
+             progression: progression, records: records, races: races, tests: testsModel(runs) };
   }
 
   /* ---------- resting HR ----------
@@ -2061,7 +2209,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
