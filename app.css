@@ -772,3 +772,19 @@ label > span {
 .wk { padding: 10px 12px; border-left: 2px solid var(--line); margin: 8px 0; font-size: var(--t-body); color: var(--ink); cursor: pointer; }
 .wk.good { border-left-color: var(--good); }
 .wk.bad { border-left-color: var(--bad); }
+
+/* recovery overview and progress */
+.rsum { border-left: 2px solid var(--line); padding: 8px 12px; margin: 14px 0 6px; }
+.rsum.good { border-left-color: var(--good); }
+.rsum.bad { border-left-color: var(--bad); }
+.rsum p { margin: 4px 0; color: var(--ink); font-size: var(--t-body); line-height: 1.45; }
+.rcard { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 12px 0; cursor: pointer; }
+.rcard .rn { display: flex; justify-content: space-between; font-family: var(--f-data); font-size: var(--t-micro);
+             letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+.rcard .rn span { color: var(--dim); }
+.rcard .rv { font-family: var(--f-display); font-size: var(--t-display); font-weight: 700; color: var(--ink); line-height: 1.1; margin: 4px 0; }
+.rcard .rv s { text-decoration: none; font-size: var(--t-label); color: var(--mute); margin-left: 4px; font-weight: 400; }
+.rcard .rl { font-size: var(--t-body); color: var(--ink); }
+.psum { font-size: var(--t-body); color: var(--ink); margin: 6px 0 4px; line-height: 1.45; }
+.cmp.rlink { cursor: pointer; }
+.pline { margin: 10px 0 4px; padding: 8px 12px; border-left: 2px solid var(--line); font-size: var(--t-body); color: var(--ink); cursor: pointer; }

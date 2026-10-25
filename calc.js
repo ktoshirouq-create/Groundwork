@@ -1992,6 +1992,21 @@
      it has a row of its own. */
   const PROGRESS_BACK = 91, PROGRESS_DAYS = 28;
 
+  /* Below these, a change is "about the same": night-to-night and run-to-run
+     noise is bigger than this, so a verdict on it would be a verdict on noise.
+     One table for every screen. */
+  const SAME = { rhr: 1, hrv: 2, aerobic: 3, z2: 2, volume: 0.5 };
+
+  /* a delta that knows when it is too small to mean anything */
+  function changeOf(now, then, better, key) {
+    if (now == null || then == null) return null;
+    const diff = now - then;
+    if (Math.abs(diff) < (SAME[key] || 0)) return { dir: 'flat', diff: diff, same: true, tone: 'neutral' };
+    const d = better ? delta(now, then, better) : delta(now, then, null);
+    return d ? Object.assign(d, { same: false }) : { dir: diff > 0 ? 'up' : 'down', diff: diff, same: false,
+      tone: !better ? 'neutral' : (diff > 0) === (better === 'up') ? 'good' : 'bad' };
+  }
+
   function progressModel(acts, cfg, resting, today, hrv) {
     const t = String(today).slice(0, 10);
     const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
@@ -1999,19 +2014,6 @@
     const inWin = (end) => runs.filter(a => a.date > addDays(end, -PROGRESS_DAYS) && a.date <= end);
     const rows = [];
 
-    if (resting && resting.length) {
-      const r = restingModel(resting, 'month', t);
-      if (r.now != null && r.ago3m != null)
-        rows.push({ key: 'resting', label: 'Resting HR', unit: 'bpm', now: r.now, then: r.ago3m,
-          change: delta(r.now, r.ago3m, 'down'), note: 'last 7 nights' });
-    }
-    /* nightly HRV: higher is better; the same 7 nights against 3 months ago */
-    if (hrv && hrv.length) {
-      const h = restingModel(hrv, 'month', t);
-      if (h.now != null && h.ago3m != null)
-        rows.push({ key: 'hrv', label: 'HRV', unit: 'ms', now: h.now, then: h.ago3m,
-          change: delta(h.now, h.ago3m, 'up'), note: 'last 7 nights' });
-    }
     const aer = end => {
       const v = inWin(end).filter(a => isAerobicMeasure(a) && a.avg_hr != null).map(a => aerobicPace(a, cfg)).filter(x => x != null);
       return v.length >= 3 ? median(v) : null;
@@ -2019,23 +2021,151 @@
     const aN = aer(t), aT = aer(thenEnd);
     if (aN != null && aT != null)
       rows.push({ key: 'aerobic', label: 'Aerobic pace', unit: '/km', now: aN, then: aT,
-        change: delta(aN, aT, 'down'), note: 'middle of 28 days' });
+        change: changeOf(aN, aT, 'down', 'aerobic'), note: 'middle of 28 days' });
+
+    const z2 = end => { const s = z2Of(lapsOf(inWin(end)), cfg); return s && s.total ? s.pct : null; };
+    const zN = z2(t), zT = z2(thenEnd);
+    if (zN != null && zT != null)
+      rows.push({ key: 'z2', label: 'Time in Z2', unit: '%', now: zN, then: zT,
+        change: changeOf(zN, zT, 'up', 'z2'), note: 'share of 28 days' });
 
     const kmN = inWin(t).reduce((s, a) => s + (a.distance_km || 0), 0) / 4;
     const kmT = inWin(thenEnd).reduce((s, a) => s + (a.distance_km || 0), 0) / 4;
     if (inWin(t).length || inWin(thenEnd).length)
       /* more is not automatically better: shown without a verdict */
       rows.push({ key: 'volume', label: 'Weekly distance', unit: 'km', now: kmN, then: kmT,
-        change: kmT ? delta(kmN, kmT, null) : null, note: 'average of 4 weeks' });
+        change: kmT ? changeOf(kmN, kmT, null, 'volume') : null, note: 'average of 4 weeks' });
 
-    const z2 = end => { const s = z2Of(lapsOf(inWin(end)), cfg); return s && s.total ? s.pct : null; };
-    const zN = z2(t), zT = z2(thenEnd);
-    if (zN != null && zT != null)
-      rows.push({ key: 'z2', label: 'Time in Z2', unit: '%', now: zN, then: zT,
-        change: delta(zN, zT, 'up'), note: 'share of 28 days' });
+    /* one sentence on top, the same way Recovery's is built */
+    const A = rows.find(r => r.key === 'aerobic'), Z = rows.find(r => r.key === 'z2');
+    let summary = null;
+    if (A) {
+      summary = A.change.same ? 'Aerobic pace about the same as three months ago'
+        : 'Aerobic pace ' + Math.round(Math.abs(A.change.diff)) + ' s/km ' + (A.change.diff < 0 ? 'faster' : 'slower') + ' than three months ago';
+      if (Z && !Z.change.same) summary += ', with ' + (Z.change.diff > 0 ? 'more' : 'less') + ' of your running in Z2';
+      summary += '.';
+    }
 
+    const rec = recoveryModel(resting, hrv, t, acts, cfg);
     const lately = worthKnowing(acts, cfg, [], today).filter(w => w.kind !== 'resting');
-    return { rows: rows, lately: lately, thenDate: thenEnd };
+    return { rows: rows, summary: summary, aerobic: A || null, recovery: rec.verdict, lately: lately, thenDate: thenEnd };
+  }
+
+  /* ---------- recovery: resting HR and HRV read together ----------
+
+     Each measure is placed against your own normal: the last 60 nights'
+     average, plus or minus your usual variation (one standard deviation).
+     The last 3 nights say where you are now; the last 4 weeks against the 4
+     before say where you're heading. Statements say what the numbers do and
+     what that often means, never a diagnosis, and need enough nights behind
+     them to appear at all. */
+  const RECOVERY = { normalNights: 60, minNormal: 30, nowNights: 3, trendDays: 28,
+                     patternNights: 90, patternMin: { hrv: 4, rhr: 2 }, perDayMin: 8, hardDaysMin: 8 };
+
+  function nightsOf(days) {
+    const seen = {};
+    (days || []).forEach(x => { if (!x || !(+x[1] > 0)) return; const d = nightDate(x[0]); if (d) seen[d] = +x[1]; });
+    return Object.keys(seen).sort().map(k => ({ date: k, v: seen[k] }));
+  }
+
+  function measureState(days, today, key, better, acts, cfg) {
+    const n = nightsOf(days);
+    if (!n.length) return null;
+    const t = String(today).slice(0, 10);
+    const between = (from, to) => n.filter(x => x.date > from && x.date <= to).map(x => x.v);
+    const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
+    const r1 = v => v == null ? null : Math.round(v * 10) / 10;
+
+    const base = between(addDays(t, -RECOVERY.normalNights), t);
+    let band = null;
+    if (base.length >= RECOVERY.minNormal) {
+      const m = avg(base), sd = Math.sqrt(avg(base.map(v => (v - m) * (v - m))));
+      band = { mean: r1(m), sd: r1(sd), lo: r1(m - sd), hi: r1(m + sd) };
+    }
+    const last3 = between(addDays(t, -RECOVERY.nowNights), t);
+    const now3 = last3.length >= 2 ? avg(last3) : null;
+    let pos = null;
+    if (band && now3 != null) {
+      const z = band.sd ? (now3 - band.mean) / band.sd : 0;
+      pos = z < -1 ? (z < -2 ? 'well below' : 'below') : z > 1 ? (z > 2 ? 'well above' : 'above') : 'inside';
+    }
+    const now7 = avg(between(addDays(t, -7), t));
+    const cur = avg(between(addDays(t, -RECOVERY.trendDays), t));
+    const prev = avg(between(addDays(t, -2 * RECOVERY.trendDays), addDays(t, -RECOVERY.trendDays)));
+    const trend = cur != null && prev != null ? changeOf(cur, prev, better, key) : null;
+
+    /* patterns in your own weeks, once there are enough nights */
+    const patterns = [];
+    const recent = n.filter(x => x.date > addDays(t, -365));
+    if (recent.length >= RECOVERY.patternNights) {
+      const all = avg(recent.map(x => x.v));
+      const byDay = [0,1,2,3,4,5,6].map(i => recent.filter(x => dayIndex(x.date) === i).map(x => x.v));
+      const off = byDay.map((a, i) => ({ i: i, n: a.length, d: a.length >= RECOVERY.perDayMin ? avg(a) - all : 0 }));
+      const worse = off.filter(o => better === 'up' ? o.d <= -RECOVERY.patternMin[key] : o.d >= RECOVERY.patternMin[key]);
+      if (worse.length && worse.length <= 3) {
+        const D = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+        const names = worse.map(o => D[o.i]);
+        const mag = Math.round(Math.abs(avg(worse.map(o => o.d))) * 10) / 10;
+        patterns.push({ kind: 'weekday', text: 'Your ' + (key === 'hrv' ? 'HRV' : 'resting HR') + ' is ' +
+          (better === 'up' ? 'lowest' : 'highest') + ' on ' + (names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names.slice(-1) : names[0]) +
+          ' mornings: ' + mag + ' ' + (key === 'hrv' ? 'ms' : 'bpm') + (better === 'up' ? ' below' : ' above') + ' your average.' });
+      }
+      /* the morning after your hardest training days */
+      if (acts && acts.length) {
+        const dayLoad = {};
+        acts.filter(a => a.type === 'run').forEach(a => { const l = load(a, cfg); if (l) dayLoad[a.date] = (dayLoad[a.date] || 0) + l; });
+        const loads = Object.keys(dayLoad).filter(d => d > addDays(t, -365)).map(d => dayLoad[d]).sort((a, b) => a - b);
+        if (loads.length >= 10) {
+          const cut = loads[Math.floor(loads.length * 0.8)];
+          const after = Object.keys(dayLoad).filter(d => dayLoad[d] >= cut).map(d => recent.find(x => x.date === addDays(d, 1))).filter(Boolean).map(x => x.v);
+          if (after.length >= RECOVERY.hardDaysMin) {
+            const dlt = avg(after) - all;
+            if (better === 'up' ? dlt <= -RECOVERY.patternMin[key] : dlt >= RECOVERY.patternMin[key])
+              patterns.push({ kind: 'hard', text: 'The morning after your hardest training days, ' + (key === 'hrv' ? 'HRV' : 'resting HR') +
+                ' averages ' + Math.round(Math.abs(dlt) * 10) / 10 + ' ' + (key === 'hrv' ? 'ms ' : 'bpm ') +
+                (better === 'up' ? 'lower' : 'higher') + ' than usual.' });
+          }
+        }
+      }
+    }
+    return { key: key, better: better, nights: n.length, now7: r1(now7), now3: r1(now3), band: band, pos: pos,
+             trend: trend, trendNow: r1(cur), trendPrev: r1(prev), patterns: patterns };
+  }
+
+  /* the two together: one sentence for now, one for the trend */
+  function recoveryModel(resting, hrv, today, acts, cfg) {
+    const R = measureState(resting, today, 'rhr', 'down', acts, cfg);
+    const H = measureState(hrv, today, 'hrv', 'up', acts, cfg);
+    const good = (M, p) => M && M.pos && (M.better === 'up' ? /above/.test(M.pos) : /below/.test(M.pos)) === p;
+    const off = M => M && M.pos && M.pos !== 'inside';
+    let now = null, tone = 'neutral';
+    if (H && R && H.pos && R.pos) {
+      const hB = /below/.test(H.pos), hA = /above/.test(H.pos), rB = /below/.test(R.pos), rA = /above/.test(R.pos);
+      const well = /well/.test(H.pos) || /well/.test(R.pos);
+      if (!off(H) && !off(R)) now = 'Steady: both in your normal range.';
+      else if (hA && rB) { now = 'Both better than usual: well recovered.'; tone = 'good'; }
+      else if (hB && rA) { now = (well ? 'Both clearly point to under-recovery' : 'Both point to under-recovery') +
+        ': HRV ' + Math.round(Math.abs(H.now3 - H.band.mean)) + ' ms below your normal, resting HR ' +
+        Math.round(Math.abs(R.now3 - R.band.mean)) + ' bpm above. Often sleep, alcohol, illness or a hard block.'; tone = 'bad'; }
+      else if (hB && !off(R)) { now = 'HRV dipped, resting HR steady: often one late night or drinks. Worth watching tomorrow.'; tone = 'bad'; }
+      else if (rA && !off(H)) { now = 'Resting HR up, HRV steady: can be heat, a late meal or something coming on.'; tone = 'bad'; }
+      else if (hB && rB) now = 'Mixed: both lower than usual \u2014 sometimes deep fatigue after a big training block.';
+      else if (hA && rA) now = 'Mixed: both higher than usual \u2014 unusual, worth watching for a day or two.';
+      else if (hA || rB) { now = 'Better than usual on ' + (hA ? 'HRV' : 'resting HR') + ', the other steady.'; tone = 'good'; }
+    }
+    let trend = null, verdict = null;
+    if (H && R && H.trend && R.trend) {
+      const hs = H.trend.same, rs = R.trend.same;
+      const hGood = !hs && H.trend.tone === 'good', rGood = !rs && R.trend.tone === 'good';
+      const hBad = !hs && H.trend.tone === 'bad', rBad = !rs && R.trend.tone === 'bad';
+      const nums = 'HRV ' + (hs ? 'about the same' : (H.trend.diff > 0 ? 'up ' : 'down ') + Math.round(Math.abs(H.trend.diff)) + ' ms') +
+        ', resting HR ' + (rs ? 'about the same' : (R.trend.diff > 0 ? 'up ' : 'down ') + Math.round(Math.abs(R.trend.diff)) + ' bpm');
+      if (hGood && rGood) { verdict = { key: 'right', text: 'both moving the right way', tone: 'good' }; trend = 'Over four weeks both are moving the right way: ' + nums + '.'; }
+      else if (hBad && rBad) { verdict = { key: 'wrong', text: 'both moving the wrong way', tone: 'bad' }; trend = 'Over four weeks both are moving the wrong way: ' + nums + '. Worth easing off or checking sleep.'; }
+      else if (hs && rs) { verdict = { key: 'same', text: 'about the same', tone: 'neutral' }; trend = 'Over four weeks: about the same.'; }
+      else { verdict = { key: 'mixed', text: 'mixed', tone: 'neutral' }; trend = 'Over four weeks it\u2019s mixed: ' + nums + '. Give it time.'; }
+    }
+    return { rhr: R, hrv: H, now: now, nowTone: tone, trend: trend, verdict: verdict };
   }
 
   /* ---------- the Best-of page ----------
@@ -2265,7 +2395,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, progressModel, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

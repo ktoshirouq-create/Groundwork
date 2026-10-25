@@ -278,6 +278,11 @@
       svg += '<line x1="0" y1="' + my + '" x2="100" y2="' + my + '" stroke="var(--z2)" ' +
         'stroke-width=".7" stroke-dasharray="3 3" opacity=".75" vector-effect="non-scaling-stroke"/>';
     }
+    if (opt.band && isFinite(yOf(opt.band.lo)) && isFinite(yOf(opt.band.hi))) {
+      const a = yOf(opt.band.hi), b = yOf(opt.band.lo);
+      svg += '<rect x="0" y="' + Math.min(a, b).toFixed(2) + '" width="100" height="' + Math.abs(b - a).toFixed(2) +
+        '" fill="var(--z2)" opacity=".1"/>';
+    }
     svg += '<g stroke="#2B383C" stroke-width=".4" vector-effect="non-scaling-stroke">' +
       '<line x1="0" y1="2" x2="100" y2="2"/><line x1="0" y1="50" x2="100" y2="50"/>' +
       '<line x1="0" y1="98" x2="100" y2="98"/></g>';
@@ -586,25 +591,40 @@
 
   /* Training progress, top of Bests: four measures now against three months
      ago, then the occasional notable fact. */
+  /* The headline of Progress, for the home screen: one line, only when there's
+     something to say, tapping through to Progress. */
+  function progressLineHTML(P) {
+    if (!P) return '';
+    const A = P.aerobic, R = P.recovery, bits = [];
+    if (A && !A.change.same) bits.push('aerobic pace ' + Math.round(Math.abs(A.change.diff)) + ' s/km ' +
+      (A.change.diff < 0 ? 'faster' : 'slower') + ' than 3 months ago');
+    if (R && R.key !== 'same') bits.push('recovery ' + R.text);
+    if (!bits.length) return '';
+    return '<div class="pline"><b>Progress:</b> ' + esc(bits.join(' \u00b7 ')) + ' \u2192</div>';
+  }
+
+  /* Training progress, top of Progress: one sentence, three rows, and a line
+     pointing to Recovery for the body's side (its numbers live there only). */
   function progressHTML(P) {
-    if (!P || (!P.rows.length && !P.lately.length)) return '';
+    if (!P || (!P.rows.length && !P.lately.length && !P.recovery)) return '';
     let h = '<div class="sec"><span>Training progress</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
-    const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%'
-      : r.key === 'volume' ? v.toFixed(1) + ' km' : r.key === 'hrv' ? Math.round(v) + ' ms' : (Math.round(v * 10) / 10) + ' bpm';
-    const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points'
-      : r.key === 'volume' ? Math.abs(d).toFixed(1) + ' km' : r.key === 'hrv' ? Math.round(Math.abs(d)) + ' ms' : (Math.round(Math.abs(d) * 10) / 10) + ' bpm';
+    if (P.summary) h += '<div class="psum">' + esc(P.summary) + '</div>';
+    const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%' : v.toFixed(1) + ' km';
+    const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points' : Math.abs(d).toFixed(1) + ' km';
     const word = (r, up) => r.key === 'aerobic' ? (up ? 'slower' : 'faster') : (up ? 'higher' : 'lower');
     P.rows.forEach(r => {
       const c = r.change;
       let aside;
       if (!c) aside = r.then === 0 ? 'up from nothing then' : 'then ' + fmtV(r, r.then);
-      else if (c.dir === 'flat') aside = 'about the same as then (' + fmtV(r, r.then) + ')';
-      else aside = { html: '<span class="delta ' + (c.tone || '') + '">' + (c.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
-        diff(r, c.diff) + ' ' + word(r, c.dir === 'up') + '</span> than ' + esc(fmtV(r, r.then)) };
+      else if (c.same) aside = 'about the same as then (' + fmtV(r, r.then) + ')';
+      else aside = { html: '<span class="delta ' + (c.tone || '') + '">' + (c.diff > 0 ? '\u25b2 ' : '\u25bc ') +
+        diff(r, c.diff) + ' ' + word(r, c.diff > 0) + '</span> than ' + esc(fmtV(r, r.then)) };
       h += cmp(r.label, fmtV(r, r.now), aside);
     });
-    h += '<div class="est">Each now against the same stretch three months earlier. Resting HR, HRV, aerobic pace and Z2 ' +
-      'are green when better; distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
+    if (P.recovery) h += '<div class="cmp rlink"><span class="k">Recovery</span><span class="v"><span class="delta ' +
+      (P.recovery.tone || '') + '">' + esc(P.recovery.text) + '</span> \u2192<s>HRV and resting HR, last 4 weeks</s></span></div>';
+    h += '<div class="est">Each now against the same stretch three months earlier; a change too small to matter reads ' +
+      '\u201cabout the same\u201d. Distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
     if (P.lately.length) {
       h += '<div class="sec"><span>Lately</span><span></span></div>' + P.lately.map(w =>
         '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
@@ -650,7 +670,7 @@
       '<div class="ttl">' + esc(m.period.label) + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
       '</div><div class="corners"><button class="corner" data-go="resting">RECOVERY</button>' +
-      '<button class="corner" data-go="bests">BESTS</button>' +
+      '<button class="corner" data-go="bests">PROGRESS</button>' +
       '<button class="corner" data-go="settings">SETUP</button></div></div>';
 
     h += '<div class="bar">' + SCOPES.map(s =>
@@ -669,6 +689,8 @@
     if (m.days) h += weekStripHTML(m);
     h += '<div class="rule"></div>';
     h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
+
+    if (m.mode === 'live' && m.period.isCurrent) h += progressLineHTML(Calc.progressModel(Store.all(), cfg, Store.resting(), today(), Store.hrv()));
 
     h += '<div class="sec"><span>' +
       (m.period.isCurrent ? 'This ' + scope : esc(m.period.label)) + '</span><span>' +
@@ -1163,14 +1185,16 @@
      Garmin's daily resting HR as context. It moves nothing: zones come from
      the watch. Pure presentation of Calc.restingModel. */
 
-  let restingView = 'month', restingKey = null, recoveryMetric = 'rhr';
+  let restingView = 'month', restingKey = null, recoveryMetric = 'rhr', recoveryDetail = false;
   /* the two nightly measures, and which way is better for each */
   const METRICS = {
     rhr: { name: 'Resting HR', unit: 'bpm', better: 'down', data: () => Store.resting(),
            lead: 'Average of the last 7 nights. Lower is fitter.',
+           meaning: 'Your heart\u2019s rate at rest overnight. It falls as aerobic fitness builds, and rises for a night or two with poor sleep, alcohol, illness or a hard session.',
            none: 'Nothing from Garmin yet. Run <b>garminRestingHistory</b> in Apps Script once (README \u2192 Resting HR).' },
     hrv: { name: 'HRV', unit: 'ms', better: 'up', data: () => Store.hrv(),
            lead: 'Average of the last 7 nights. Higher is generally better \u2014 it moves a lot night to night, so read the week, not the night.',
+           meaning: 'How much your heartbeat varies overnight \u2014 a sign of how rested your body is. Higher than your normal usually means well recovered; lower, that something is taking it out of you.',
            none: 'No HRV yet. Run <b>garminHrvHistory</b> in Apps Script once (README \u2192 HRV). Only watches with overnight HRV record it.' }
   };
   const MONTH_NAMES = ['January','February','March','April','May','June',
@@ -1188,12 +1212,45 @@
     renderResting();
   }
 
+  /* Recovery opens on how you're doing: one reading of both measures, then a
+     card for each that taps through to its detail. */
   function renderResting() {
+    if (recoveryDetail) return renderRecoveryDetail();
+    const R = Calc.recoveryModel(Store.resting(), Store.hrv(), today(), Store.all(), Store.config());
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Recovery</div>';
+    if (!R.rhr && !R.hrv) {
+      h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> and <b>garminHrvHistory</b> in Apps Script once (README \u2192 Resting HR, HRV).</div>';
+    } else {
+      if (R.now || R.trend) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
+        (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') + '</div>';
+      else h += '<div class="est">A reading needs about 30 nights of both measures.</div>';
+      [['hrv', R.hrv], ['rhr', R.rhr]].forEach(([k, M]) => {
+        const MT = METRICS[k];
+        if (!M) { h += '<div class="rcard" data-rd="' + k + '"><div class="rn">' + MT.name + '</div><div class="est">' + MT.none + '</div></div>'; return; }
+        const r1 = v => v == null ? '\u2014' : (Math.round(v * 10) / 10).toString();
+        const where = !M.band ? 'Your normal range needs 30 nights.'
+          : (M.pos ? (M.pos === 'inside' ? 'Inside' : M.pos.charAt(0).toUpperCase() + M.pos.slice(1)) + ' your normal range' : 'Your normal range is') +
+            ' (' + r1(M.band.lo) + '\u2013' + r1(M.band.hi) + ' ' + MT.unit + ').';
+        const T = M.trend;
+        const tr = !T ? '' : T.same ? 'About the same over four weeks.'
+          : '<span class="delta ' + T.tone + '">' + (T.diff > 0 ? '\u25b2 ' : '\u25bc ') + r1(Math.abs(T.diff)) + ' ' + MT.unit + '</span> over four weeks.';
+        h += '<div class="rcard" data-rd="' + k + '"><div class="rn">' + MT.name + '<span>details \u2192</span></div>' +
+          '<div class="rv">' + r1(M.now7) + '<s> ' + MT.unit + '</s></div>' +
+          '<div class="rl">' + esc(where) + ' ' + tr + '</div><div class="est">' + MT.meaning + '</div></div>';
+      });
+    }
+    el('view-resting').innerHTML = h;
+    $('#view-resting [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#view-resting [data-rd]').forEach(c => {
+      c.onclick = () => { recoveryMetric = c.dataset.rd; recoveryDetail = true; restingKey = null; renderResting(); window.scrollTo(0, 0); };
+    });
+  }
+
+  function renderRecoveryDetail() {
     const MT = METRICS[recoveryMetric];
     const m = Calc.restingModel(MT.data(), restingView, today(), restingKey);
-    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Recovery</div>' +
-      '<div class="bar" id="r-metric">' + [['rhr', 'Resting HR'], ['hrv', 'HRV']].map(v =>
-        '<button class="chip" type="button" data-rm="' + v[0] + '" aria-pressed="' + (v[0] === recoveryMetric) + '">' + v[1] + '</button>').join('') + '</div>' +
+    const S = Calc.measureState(MT.data(), today(), recoveryMetric, MT.better, Store.all(), Store.config());
+    let h = '<div class="back" data-back="1">\u2190 Recovery</div><div class="ttl">' + MT.name + '</div>' +
       '<div class="sub">' + (m.count ? m.count + ' NIGHTS \u00b7 FROM ' + fmtDate(m.first).toUpperCase() : 'NO DATA YET') + '</div>';
     if (!m.count) {
       h += '<div class="est">' + MT.none + '</div>';
@@ -1201,8 +1258,8 @@
       const bpm = v => v == null ? '\u2014' : (Math.round(v * 10) / 10).toFixed(Math.abs(v % 1) > 0.05 ? 1 : 0);
       const vs = (now, then, label) => {
         if (now == null || then == null) return '';
-        const d = Calc.delta(now, then, MT.better);
-        return cmp('Against ' + label, bpm(then) + ' ' + MT.unit, !d || d.dir === 'flat' ? 'about the same'
+        const d = Calc.changeOf(now, then, MT.better, recoveryMetric);
+        return cmp('Against ' + label, bpm(then) + ' ' + MT.unit, !d || d.same || d.dir === 'flat' ? 'about the same'
           : { html: '<span class="delta ' + d.tone + '">' + (d.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
             bpm(Math.abs(d.diff)) + ' ' + MT.unit + ' ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>' });
       };
@@ -1229,6 +1286,7 @@
       }
       const chart = m.shown ? lineChart(m.segments, {
         uniform: true, height: 150, from: P ? P.from : undefined, to: P ? P.to : undefined,
+        band: S && S.band ? { lo: S.band.lo, hi: S.band.hi } : null,
         format: v => bpm(v), anchorLabels: ['highest', 'lowest'],
         label: MT.name + ', ' + (restingView === 'month' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
         xax: P ? [fmtDate(P.from).toUpperCase(), '', fmtDate(P.to).toUpperCase()]
@@ -1239,19 +1297,20 @@
         ? 'Each point is a week\u2019s average, so one bad night doesn\u2019t spike the line.'
         : 'Each point is a month\u2019s average.') +
         (P ? ' Swipe the chart, or use the arrows, for ' + (restingView === 'month' ? 'other months.' : 'other years.') : '') +
-        ' A break is a stretch with no readings. Context only \u2014 your zones come from your watch.</div>';
+        ' A break is a stretch with no readings.' + (S && S.band ? ' The shaded band is your normal range now (last 60 nights).' : '') +
+        ' Context only \u2014 your zones come from your watch.</div>';
+      if (S && S.patterns.length) h += '<div class="sec"><span>Patterns</span><span>last 12 months</span></div>' +
+        S.patterns.map(p => '<div class="wk">' + esc(p.text) + '</div>').join('');
       if (m.bad) h += '<div class="flag"><i>!</i><div>' + m.bad + ' night' + (m.bad === 1 ? '' : 's') +
         ' couldn\u2019t be read and ' + (m.bad === 1 ? 'is' : 'are') + ' left out (for example \u201c' +
         esc(String(m.badSample).slice(0, 40)) + '\u201d). Send me this line.</div></div>';
     }
     el('view-resting').innerHTML = h;
-    $('#view-resting [data-back]').onclick = () => go('home');
+    $('#view-resting [data-back]').onclick = () => { recoveryDetail = false; renderResting(); window.scrollTo(0, 0); };
     document.querySelectorAll('#r-view [data-rv]').forEach(b => {
       b.onclick = () => { restingView = b.dataset.rv; restingKey = null; renderResting(); };
     });
-    document.querySelectorAll('#r-metric [data-rm]').forEach(b => {
-      b.onclick = () => { recoveryMetric = b.dataset.rm; renderResting(); };
-    });
+
     document.querySelectorAll('#view-resting [data-step]').forEach(b => {
       b.onclick = () => restingStep(+b.dataset.step);
     });
@@ -1278,7 +1337,7 @@
 
   function renderBests() {
     const m = Calc.bestOfModel(Store.all(), Store.config(), today());
-    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Bests</div>' +
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Progress</div>' +
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
 
@@ -1361,6 +1420,8 @@
 
     el('view-bests').innerHTML = h;
     $('#view-bests [data-back]').onclick = () => go('home');
+    const rl = $('#view-bests .rlink');
+    if (rl) rl.onclick = () => go('resting');
     document.querySelectorAll('#view-bests .wk').forEach(w => {
       w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
     });
@@ -2092,6 +2153,8 @@
     if (bests) bests.onclick = () => go('bests');
     const rest = $('#view-home [data-go="resting"]');
     if (rest) rest.onclick = () => go('resting');
+    const pl = $('#view-home .pline');
+    if (pl) pl.onclick = () => go('bests');
 
   }
 
@@ -2112,7 +2175,7 @@
       if (view === 'edit') renderEdit(param);
       if (view === 'replace') renderReplace(param);
       if (view === 'bests') renderBests();
-      if (view === 'resting') renderResting();
+      if (view === 'resting') { if (param !== 'keep') recoveryDetail = false; renderResting(); }
     } catch (err) {
       /* Whatever went wrong, there must still be a way to Setup, an export,
          and the error itself. A blank screen tells you nothing and traps you. */
