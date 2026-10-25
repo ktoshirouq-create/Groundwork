@@ -17,7 +17,8 @@
     queue: 'groundwork:queue',
     sheets: 'groundwork:sheets',     /* endpoint + token, deliberately not synced */
     fieldsUp: 'groundwork:fields-up', /* the one-time fill of the new sheet columns */
-    resting: 'groundwork:resting'     /* a copy of the sheet's Resting HR tab */
+    resting: 'groundwork:resting',    /* a copy of the sheet's Resting HR tab */
+    hrv: 'groundwork:hrv'             /* and of its HRV tab */
   };
 
   /* Fields that until Oct 2026 lived only on the phone, because the sheet had
@@ -238,6 +239,8 @@
 
     /* Garmin's daily resting HR, [date, bpm], oldest first. Context only. */
     resting: function () { return readJSON(KEY.resting, []); },
+    /* Garmin's nightly HRV, [date, ms], oldest first. Context only. */
+    hrv: function () { return readJSON(KEY.hrv, []); },
 
     setConfig: function (patch) {
       this.bundle.config = Object.assign({}, this.bundle.config, patch);
@@ -327,6 +330,8 @@
           self.bundle.config.garmin_zones = data.garmin.zones;
         if (Array.isArray(data.resting) && data.resting.length)
           localStorage.setItem(KEY.resting, JSON.stringify(data.resting));
+        if (Array.isArray(data.hrv) && data.hrv.length)
+          localStorage.setItem(KEY.hrv, JSON.stringify(data.hrv));
         /* an Apps Script deployed before the new columns can't keep tags */
         /* out of date if the sheet lacks a column for anything this app stores */
         self.sync.columns = data.columns || [];

@@ -1024,6 +1024,21 @@ pace marks up the side. **What you mainly did** adds a by-heart-rate line
 display only. A trail race shows no halves: on a trail or obstacle course the
 split is the course.
 
+## HRV
+
+Garmin's nightly HRV (each night's own average, in ms, never the weekly one),
+one row a night in the **HRV** tab, written only by the Apps Script.
+`garminHrvHistory()` fills the history once, a year per request; the hourly
+check adds the last fortnight. Only watches with overnight HRV record it, so
+the history starts with that watch. Garmin's HRV status and baseline band
+aren't in the summaries a personal key gets, so the app shows the numbers, not
+Garmin's verdict.
+
+The **RECOVERY** screen (formerly Resting) switches between **Resting HR** and
+**HRV**, with the same Month, Year and All years views and the same stepping.
+Colours follow each measure: lower is better for resting HR, higher for HRV.
+Training progress on Bests has an HRV row. Context only: it moves nothing.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.

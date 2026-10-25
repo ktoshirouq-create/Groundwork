@@ -1992,7 +1992,7 @@
      it has a row of its own. */
   const PROGRESS_BACK = 91, PROGRESS_DAYS = 28;
 
-  function progressModel(acts, cfg, resting, today) {
+  function progressModel(acts, cfg, resting, today, hrv) {
     const t = String(today).slice(0, 10);
     const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
     const thenEnd = addDays(t, -PROGRESS_BACK);
@@ -2004,6 +2004,13 @@
       if (r.now != null && r.ago3m != null)
         rows.push({ key: 'resting', label: 'Resting HR', unit: 'bpm', now: r.now, then: r.ago3m,
           change: delta(r.now, r.ago3m, 'down'), note: 'last 7 nights' });
+    }
+    /* nightly HRV: higher is better; the same 7 nights against 3 months ago */
+    if (hrv && hrv.length) {
+      const h = restingModel(hrv, 'month', t);
+      if (h.now != null && h.ago3m != null)
+        rows.push({ key: 'hrv', label: 'HRV', unit: 'ms', now: h.now, then: h.ago3m,
+          change: delta(h.now, h.ago3m, 'up'), note: 'last 7 nights' });
     }
     const aer = end => {
       const v = inWin(end).filter(a => isAerobicMeasure(a) && a.avg_hr != null).map(a => aerobicPace(a, cfg)).filter(x => x != null);

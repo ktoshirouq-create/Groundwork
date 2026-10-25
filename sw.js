@@ -1,5 +1,5 @@
 /* Bump CACHE on every JS or CSS change. */
-const CACHE = 'groundwork-v53';
+const CACHE = 'groundwork-v54';
 const ASSETS = [
   './', './index.html', './app.css',
   './calc.js', './store.js', './parse.js', './ui.js',

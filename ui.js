@@ -590,9 +590,9 @@
     if (!P || (!P.rows.length && !P.lately.length)) return '';
     let h = '<div class="sec"><span>Training progress</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
     const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%'
-      : r.key === 'volume' ? v.toFixed(1) + ' km' : (Math.round(v * 10) / 10) + ' bpm';
+      : r.key === 'volume' ? v.toFixed(1) + ' km' : r.key === 'hrv' ? Math.round(v) + ' ms' : (Math.round(v * 10) / 10) + ' bpm';
     const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points'
-      : r.key === 'volume' ? Math.abs(d).toFixed(1) + ' km' : (Math.round(Math.abs(d) * 10) / 10) + ' bpm';
+      : r.key === 'volume' ? Math.abs(d).toFixed(1) + ' km' : r.key === 'hrv' ? Math.round(Math.abs(d)) + ' ms' : (Math.round(Math.abs(d) * 10) / 10) + ' bpm';
     const word = (r, up) => r.key === 'aerobic' ? (up ? 'slower' : 'faster') : (up ? 'higher' : 'lower');
     P.rows.forEach(r => {
       const c = r.change;
@@ -603,7 +603,7 @@
         diff(r, c.diff) + ' ' + word(r, c.dir === 'up') + '</span> than ' + esc(fmtV(r, r.then)) };
       h += cmp(r.label, fmtV(r, r.now), aside);
     });
-    h += '<div class="est">Each now against the same stretch three months earlier. Resting HR, aerobic pace and Z2 ' +
+    h += '<div class="est">Each now against the same stretch three months earlier. Resting HR, HRV, aerobic pace and Z2 ' +
       'are green when better; distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
     if (P.lately.length) {
       h += '<div class="sec"><span>Lately</span><span></span></div>' + P.lately.map(w =>
@@ -649,7 +649,7 @@
     let h = '<div class="top"><div>' +
       '<div class="ttl">' + esc(m.period.label) + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
-      '</div><div class="corners"><button class="corner" data-go="resting">RESTING</button>' +
+      '</div><div class="corners"><button class="corner" data-go="resting">RECOVERY</button>' +
       '<button class="corner" data-go="bests">BESTS</button>' +
       '<button class="corner" data-go="settings">SETUP</button></div></div>';
 
@@ -1163,13 +1163,22 @@
      Garmin's daily resting HR as context. It moves nothing: zones come from
      the watch. Pure presentation of Calc.restingModel. */
 
-  let restingView = 'month', restingKey = null;
+  let restingView = 'month', restingKey = null, recoveryMetric = 'rhr';
+  /* the two nightly measures, and which way is better for each */
+  const METRICS = {
+    rhr: { name: 'Resting HR', unit: 'bpm', better: 'down', data: () => Store.resting(),
+           lead: 'Average of the last 7 nights. Lower is fitter.',
+           none: 'Nothing from Garmin yet. Run <b>garminRestingHistory</b> in Apps Script once (README \u2192 Resting HR).' },
+    hrv: { name: 'HRV', unit: 'ms', better: 'up', data: () => Store.hrv(),
+           lead: 'Average of the last 7 nights. Higher is generally better \u2014 it moves a lot night to night, so read the week, not the night.',
+           none: 'No HRV yet. Run <b>garminHrvHistory</b> in Apps Script once (README \u2192 HRV). Only watches with overnight HRV record it.' }
+  };
   const MONTH_NAMES = ['January','February','March','April','May','June',
                        'July','August','September','October','November','December'];
 
   /* one step back or forward through months or years */
   function restingStep(dir) {
-    const m = Calc.restingModel(Store.resting(), restingView, today(), restingKey);
+    const m = Calc.restingModel(METRICS[recoveryMetric].data(), restingView, today(), restingKey);
     const P = m.period;
     if (!P || (dir < 0 && !P.hasPrev) || (dir > 0 && !P.hasNext)) return;
     if (restingView === 'month') {
@@ -1180,28 +1189,30 @@
   }
 
   function renderResting() {
-    const m = Calc.restingModel(Store.resting(), restingView, today(), restingKey);
-    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Resting HR</div>' +
+    const MT = METRICS[recoveryMetric];
+    const m = Calc.restingModel(MT.data(), restingView, today(), restingKey);
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Recovery</div>' +
+      '<div class="bar" id="r-metric">' + [['rhr', 'Resting HR'], ['hrv', 'HRV']].map(v =>
+        '<button class="chip" type="button" data-rm="' + v[0] + '" aria-pressed="' + (v[0] === recoveryMetric) + '">' + v[1] + '</button>').join('') + '</div>' +
       '<div class="sub">' + (m.count ? m.count + ' NIGHTS \u00b7 FROM ' + fmtDate(m.first).toUpperCase() : 'NO DATA YET') + '</div>';
     if (!m.count) {
-      h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> in Apps Script once for the ' +
-        'years behind you (README \u2192 Resting HR); after that the hourly check adds each new day.</div>';
+      h += '<div class="est">' + MT.none + '</div>';
     } else {
       const bpm = v => v == null ? '\u2014' : (Math.round(v * 10) / 10).toFixed(Math.abs(v % 1) > 0.05 ? 1 : 0);
       const vs = (now, then, label) => {
         if (now == null || then == null) return '';
-        const d = Calc.delta(now, then, 'down');
-        return cmp('Against ' + label, bpm(then) + ' bpm', !d || d.dir === 'flat' ? 'about the same'
+        const d = Calc.delta(now, then, MT.better);
+        return cmp('Against ' + label, bpm(then) + ' ' + MT.unit, !d || d.dir === 'flat' ? 'about the same'
           : { html: '<span class="delta ' + d.tone + '">' + (d.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
-            bpm(Math.abs(d.diff)) + ' bpm ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>' });
+            bpm(Math.abs(d.diff)) + ' ' + MT.unit + ' ' + (d.dir === 'up' ? 'higher' : 'lower') + ' now</span>' });
       };
-      h += '<div class="hero1"><div class="big">' + bpm(m.now) + '<s> bpm</s></div>' +
-        '<div class="est">Average of the last 7 nights. Lower is fitter.</div></div>';
+      h += '<div class="hero1"><div class="big">' + bpm(m.now) + '<s> ' + MT.unit + '</s></div>' +
+        '<div class="est">' + MT.lead + '</div></div>';
       h += vs(m.now, m.ago3m, '3 months ago') + vs(m.now, m.ago1y, 'a year ago');
-      if (m.lowestMonth) h += cmp('Lowest month', bpm(m.lowestMonth.bpm) + ' bpm',
+      if (m.lowestMonth) h += cmp('Lowest month', bpm(m.lowestMonth.bpm) + ' ' + MT.unit,
         MON[+m.lowestMonth.month.slice(5) - 1] + ' ' + m.lowestMonth.month.slice(0, 4));
       if (m.highestMonth && m.highestMonth.month !== (m.lowestMonth || {}).month) h += cmp('Highest month',
-        bpm(m.highestMonth.bpm) + ' bpm', MON[+m.highestMonth.month.slice(5) - 1] + ' ' + m.highestMonth.month.slice(0, 4));
+        bpm(m.highestMonth.bpm) + ' ' + MT.unit, MON[+m.highestMonth.month.slice(5) - 1] + ' ' + m.highestMonth.month.slice(0, 4));
 
       h += '<div class="bar" id="r-view">' + [['month', 'Month'], ['year', 'Year'], ['all', 'All years']].map(v =>
         '<button class="chip" type="button" data-rv="' + v[0] + '" aria-pressed="' + (v[0] === restingView) + '">' +
@@ -1212,14 +1223,14 @@
         const label = restingView === 'month' ? MONTH_NAMES[+P.key.slice(5, 7) - 1] + ' ' + P.key.slice(0, 4) : P.key;
         h += '<div class="rnav"><button type="button" class="rstep" data-step="-1"' + (P.hasPrev ? '' : ' disabled') +
           ' aria-label="Earlier">\u2039</button><div class="rlab"><b>' + label + '</b><span>' +
-          (P.nights ? P.nights + ' night' + (P.nights === 1 ? '' : 's') + ' \u00b7 average ' + bpm(P.avg) + ' bpm' : 'no nights') +
+          (P.nights ? P.nights + ' night' + (P.nights === 1 ? '' : 's') + ' \u00b7 average ' + bpm(P.avg) + ' ' + MT.unit : 'no nights') +
           '</span></div><button type="button" class="rstep" data-step="1"' + (P.hasNext ? '' : ' disabled') +
           ' aria-label="Later">\u203a</button></div>';
       }
       const chart = m.shown ? lineChart(m.segments, {
         uniform: true, height: 150, from: P ? P.from : undefined, to: P ? P.to : undefined,
         format: v => bpm(v), anchorLabels: ['highest', 'lowest'],
-        label: 'Resting heart rate, ' + (restingView === 'month' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
+        label: MT.name + ', ' + (restingView === 'month' ? 'each night' : restingView === 'year' ? 'weekly average' : 'monthly average') + '.',
         xax: P ? [fmtDate(P.from).toUpperCase(), '', fmtDate(P.to).toUpperCase()]
                : [m.segments[0][0].date.slice(0, 4), '', m.segments[m.segments.length - 1].slice(-1)[0].date.slice(0, 4)]
       }) : null;
@@ -1237,6 +1248,9 @@
     $('#view-resting [data-back]').onclick = () => go('home');
     document.querySelectorAll('#r-view [data-rv]').forEach(b => {
       b.onclick = () => { restingView = b.dataset.rv; restingKey = null; renderResting(); };
+    });
+    document.querySelectorAll('#r-metric [data-rm]').forEach(b => {
+      b.onclick = () => { recoveryMetric = b.dataset.rm; renderResting(); };
     });
     document.querySelectorAll('#view-resting [data-step]').forEach(b => {
       b.onclick = () => restingStep(+b.dataset.step);
@@ -1268,7 +1282,7 @@
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
 
-    h += progressHTML(Calc.progressModel(Store.all(), Store.config(), Store.resting(), today()));
+    h += progressHTML(Calc.progressModel(Store.all(), Store.config(), Store.resting(), today(), Store.hrv()));
 
     if (m.board.length) {
       h += '<div class="sec"><span>All time</span><span>beside ' + esc(m.year) + '</span></div>';

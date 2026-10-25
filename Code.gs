@@ -31,8 +31,10 @@ var SHEETS = {
   activities: 'Activities',
   laps: 'Laps',
   config: 'Config',
-  resting: 'Resting HR'          // one row a day, from Garmin; written only by this script
+  resting: 'Resting HR',         // one row a day, from Garmin; written only by this script
+  hrv: 'HRV'                     // one row a night, the night's average HRV in ms; likewise
 };
+var HRV_COLS = ['date', 'ms'];
 var RESTING_COLS = ['date', 'bpm'];
 
 var ACT_COLS = [
@@ -85,6 +87,7 @@ function setup() {
   ensureSheet(ss, SHEETS.laps, LAP_COLS);
   ensureSheet(ss, SHEETS.config, ['key', 'value', 'dated']);
   ensureSheet(ss, SHEETS.resting, RESTING_COLS);
+  ensureSheet(ss, SHEETS.hrv, HRV_COLS);
   Logger.log('Tabs ready.');
 }
 
@@ -261,7 +264,7 @@ function listAll() {
   /* columns: lets the app tell an up-to-date script from an old deployment.
      garmin: how the last import went, so a dead key is said, not hidden. */
   return { schema: 1, config: config, activities: acts,
-           columns: ACT_COLS, garmin: garminStatus(), resting: restingRows() };
+           columns: ACT_COLS, garmin: garminStatus(), resting: restingRows(), hrv: dayRows(SHEETS.hrv) };
 }
 
 function putActivity(act) {
@@ -867,6 +870,7 @@ function garminSync() {
     /* resting HR and zones each on their own: neither failing may look like a failed import */
     var st = { state: 'ok', added: cx.added, linked: cx.linked, seen: found.length };
     try { garminResting(); } catch (e) { st.restingNote = String(e.message || e); }
+    try { garminHrv(); } catch (e) { st.hrvNote = String(e.message || e); }
     try { if (!garminZones()) st.zonesNote = 'Garmin sent no zones the app could read'; }
     catch (e) { st.zonesNote = String(e.message || e); }
     return garminSetStatus(st);
@@ -935,9 +939,17 @@ function restingSheet() {
 }
 
 /* Write days in, replacing a date already there. Kept in date order. */
-function restingUpsert(rows) {
+/* A one-row-a-day tab ([date, value]): write days in, replacing a date
+   already there, kept in date order. Resting HR and HRV both use it. */
+function daySheet(name, cols) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(cols); sh.getRange('A:A').setNumberFormat('@'); }
+  return sh;
+}
+
+function dayUpsert(sh, rows) {
   if (!rows.length) return 0;
-  var sh = restingSheet();
   var last = sh.getLastRow();
   var have = {};
   if (last > 1) sh.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) {
@@ -954,8 +966,11 @@ function restingUpsert(rows) {
   return changed;
 }
 
-function restingRows() {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.resting);
+function restingUpsert(rows) { return dayUpsert(restingSheet(), rows); }
+function restingRows() { return dayRows(SHEETS.resting); }
+
+function dayRows(name) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sh || sh.getLastRow() < 2) return [];
   return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().map(function (r) {
     return [r[0] instanceof Date ? isoDay(r[0]) : String(r[0]).slice(0, 10), Number(r[1])];
@@ -1576,4 +1591,64 @@ function garminHrLockApply() {
   var msg = 'Locked shares written to ' + set + ' runs' + (unmatched ? '; ' + unmatched + ' could not be matched' : '') + '.';
   Logger.log(msg);
   return { set: set, unmatched: unmatched, message: msg };
+}
+
+
+/* =================================================================== HRV ===
+
+   Each night's average HRV (ms), from Garmin's daily HRV summaries, one row a
+   night in the "HRV" tab. Context only, like resting HR: it moves nothing.
+   Only watches with overnight HRV record it, so the history starts with that
+   watch. Garmin answers a year at a time; a night it has nothing for is
+   simply absent. */
+
+var HRV_CHUNK_DAYS = 365;
+
+/* Pure: summaries as [date, ms], nights without a reading left out. */
+function hrvDays(list) {
+  return (list || []).map(function (e) {
+    var v = Number(e && e.lastNightAvg);
+    return [dateOfDay(e), v >= 5 && v <= 300 ? Math.round(v) : null];
+  }).filter(function (d) { return d[1] != null && /^\d{4}-\d\d-\d\d$/.test(d[0]); });
+}
+
+function garminHrvRange(from, to) {
+  return hrvDays(summaryList(garminGet('/hrv-service/hrv/daily/' + from + '/' + to)));
+}
+
+function garminHrv() {
+  var today = new Date();
+  return dayUpsert(daySheet(SHEETS.hrv, HRV_COLS),
+    garminHrvRange(isoDay(new Date(today.getTime() - 13 * 864e5)), isoDay(today)));
+}
+
+/** Once, from the editor: every night Garmin has. A year per request. */
+function garminHrvHistory() {
+  var started = Date.now(), props = garminProps();
+  var cursor = props.getProperty('GARMIN_HRV_CURSOR');
+  if (!cursor) {
+    var dates = readAll(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities), ACT_COLS)
+      .map(function (a) { return String(a.date || ''); }).filter(function (d) { return /^\d{4}-\d\d-\d\d$/.test(d); }).sort();
+    cursor = dates.length ? dates[0].slice(0, 7) + '-01' : RESTING_FROM_YEAR + '-01-01';
+  }
+  var sh = daySheet(SHEETS.hrv, HRV_COLS), today = isoDay(new Date()), added = 0, cut = false, refused = [];
+  while (cursor <= today) {
+    if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
+    var end = isoDay(new Date(new Date(cursor + 'T12:00:00Z').getTime() + (HRV_CHUNK_DAYS - 1) * 864e5));
+    if (end > today) end = today;
+    try { added += dayUpsert(sh, garminHrvRange(cursor, end)); }
+    catch (e) {
+      if (e && e.kind === 'key') throw e;
+      refused.push(cursor + '\u2013' + end + ': ' + (e && e.message || e));
+    }
+    cursor = isoDay(new Date(new Date(end + 'T12:00:00Z').getTime() + 864e5));
+    props.setProperty('GARMIN_HRV_CURSOR', cursor);
+  }
+  var rows = dayRows(SHEETS.hrv);
+  var msg = (cut ? 'HRV: ' + added + ' nights so far, up to ' + cursor + '. Press Run again.'
+    : 'HRV history complete: ' + rows.length + ' nights' + (rows.length ? ', from ' + rows[0][0] : '') + ' (' + added + ' new this run).') +
+    (refused.length ? ' Garmin refused ' + refused.length + ' stretch' + (refused.length === 1 ? '' : 'es') + '; first: ' + refused[0] : '');
+  if (!cut) props.deleteProperty('GARMIN_HRV_CURSOR');
+  Logger.log(msg);
+  return { complete: !cut, nights: rows.length, refused: refused, message: msg };
 }
