@@ -591,24 +591,38 @@
 
   /* Training progress, top of Bests: four measures now against three months
      ago, then the occasional notable fact. */
-  /* The headline of Progress, for the home screen: one line, only when there's
-     something to say, tapping through to Progress. */
-  function progressLineHTML(P) {
-    if (!P) return '';
-    const A = P.aerobic, R = P.recovery, bits = [];
-    if (A && !A.change.same) bits.push('aerobic pace ' + Math.round(Math.abs(A.change.diff)) + ' s/km ' +
-      (A.change.diff < 0 ? 'faster' : 'slower') + ' than 3 months ago');
-    if (R && R.key !== 'same') bits.push('recovery ' + R.text);
-    if (!bits.length) return '';
-    return '<div class="pline"><b>Progress:</b> ' + esc(bits.join(' \u00b7 ')) + ' \u2192</div>';
-  }
-
   /* Training progress, top of Progress: one sentence, three rows, and a line
      pointing to Recovery for the body's side (its numbers live there only). */
+  /* threshold tests, newest first, each against the one before */
+  function testsHTML(tests) {
+    let h = '';
+    if (tests.length) {
+      h += '<div class="sec"><span>Tests</span><span>last 20 minutes</span></div>';
+      h += tests.map(T => {
+        const V = T.vs;
+        let aside = fmtDate(T.run.date) + (T.full ? '' : ' \u00b7 under 20 min, whole test used');
+        let vs = '';
+        if (V) {
+          const p = V.pace;
+          vs = (p.dir === 'flat' ? 'same pace' : '<span class="delta ' + p.tone + '">' + (p.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
+              Math.round(Math.abs(p.diff)) + ' s/km ' + (p.dir === 'up' ? 'slower' : 'faster') + '</span>') +
+            (V.hr != null ? ', ' + (V.hr === 0 ? 'same heart rate' : Math.abs(V.hr) + ' bpm ' + (V.hr > 0 ? 'higher' : 'lower')) : '') +
+            ' than ' + esc(fmtDate(V.date));
+        }
+        return '<div class="cmp" data-id="' + esc(T.run.id) + '"><span class="k">' + esc(T.run.name) + '</span>' +
+          '<span class="v">' + (T.hr != null ? T.hr + ' bpm' : '\u2014') + ' \u00b7 ' + (T.pace ? Calc.fmtPace(T.pace) + '/km' : '\u2014') +
+          '<s>' + esc(aside) + (vs ? '<br>' + vs : '') + '</s></span></div>';
+      }).join('');
+      h += '<div class="est">Threshold heart rate and pace: the last 20 minutes of each run tagged Test, ' +
+        'the standard reading of a 30-minute test.</div>';
+    }
+    return h;
+  }
+
   function progressHTML(P) {
-    if (!P || (!P.rows.length && !P.lately.length && !P.recovery)) return '';
-    let h = '<div class="sec"><span>Training progress</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
-    if (P.summary) h += '<div class="psum">' + esc(P.summary) + '</div>';
+    if (!P || (!P.rows.length && !P.lately.length)) return '';
+    let h = '<div class="sec"><span>Training</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
+    if (!P.rows.some(r => r.key === 'aerobic')) h += '<div class="est">Aerobic pace and time in Z2 appear once there are runs to compare on both sides of the three months.</div>';
     const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%' : v.toFixed(1) + ' km';
     const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points' : Math.abs(d).toFixed(1) + ' km';
     const word = (r, up) => r.key === 'aerobic' ? (up ? 'slower' : 'faster') : (up ? 'higher' : 'lower');
@@ -621,11 +635,14 @@
         diff(r, c.diff) + ' ' + word(r, c.diff > 0) + '</span> than ' + esc(fmtV(r, r.then)) };
       h += cmp(r.label, fmtV(r, r.now), aside);
     });
-    if (P.recovery) h += '<div class="cmp rlink"><span class="k">Recovery</span><span class="v"><span class="delta ' +
-      (P.recovery.tone || '') + '">' + esc(P.recovery.text) + '</span> \u2192<s>HRV and resting HR, last 4 weeks</s></span></div>';
     h += '<div class="est">Each now against the same stretch three months earlier; a change too small to matter reads ' +
       '\u201cabout the same\u201d. Distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
-    if (P.lately.length) {
+    return h;
+  }
+
+  function latelyHTML(P) {
+    let h = '';
+    if (P && P.lately.length) {
       h += '<div class="sec"><span>Lately</span><span></span></div>' + P.lately.map(w =>
         '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
         (w.go ? ' data-wgo="' + esc(w.go) + '"' : '') + '>' + esc(w.text) + '</div>').join('');
@@ -669,8 +686,8 @@
     let h = '<div class="top"><div>' +
       '<div class="ttl">' + esc(m.period.label) + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
-      '</div><div class="corners"><button class="corner" data-go="resting">RECOVERY</button>' +
-      '<button class="corner" data-go="bests">PROGRESS</button>' +
+      '</div><div class="corners"><button class="corner" data-go="resting">PROGRESS</button>' +
+      '<button class="corner" data-go="bests">BESTS</button>' +
       '<button class="corner" data-go="settings">SETUP</button></div></div>';
 
     h += '<div class="bar">' + SCOPES.map(s =>
@@ -689,8 +706,6 @@
     if (m.days) h += weekStripHTML(m);
     h += '<div class="rule"></div>';
     h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
-
-    if (m.mode === 'live' && m.period.isCurrent) h += progressLineHTML(Calc.progressModel(Store.all(), cfg, Store.resting(), today(), Store.hrv()));
 
     h += '<div class="sec"><span>' +
       (m.period.isCurrent ? 'This ' + scope : esc(m.period.label)) + '</span><span>' +
@@ -1217,30 +1232,54 @@
   function renderResting() {
     if (recoveryDetail) return renderRecoveryDetail();
     const R = Calc.recoveryModel(Store.resting(), Store.hrv(), today(), Store.all(), Store.config());
-    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Recovery</div>';
+    const PM = Calc.progressModel(Store.all(), Store.config(), Store.resting(), today(), Store.hrv());
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Progress</div>';
+    /* how fresh it is, and a way to make it fresher */
+    const lastOf = a => a && a.length ? a[a.length - 1] : null;
+    const lr = lastOf(Store.resting()), lh = lastOf(Store.hrv()), G = Store.sync.garmin;
+    const hhmm = iso => { const d = new Date(iso); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    if (lr || lh) h += '<div class="rlatest">Latest: ' + [lr ? fmtDate(lr[0]) + ' resting HR ' + lr[1] + ' bpm' : null,
+        lh ? (lr && lh[0] === lr[0] ? '' : fmtDate(lh[0]) + ' ') + 'HRV ' + lh[1] + ' ms' : null].filter(Boolean).join(', ') +
+      (G && G.at ? ' \u00b7 Garmin checked ' + hhmm(G.at) : '') + '</div>';
+    if (Store.sheetsConfigured()) h += '<button class="btn ghost" id="r-check">Check Garmin now</button>';
     if (!R.rhr && !R.hrv) {
       h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> and <b>garminHrvHistory</b> in Apps Script once (README \u2192 Resting HR, HRV).</div>';
     } else {
-      if (R.now || R.trend) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
-        (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') + '</div>';
+      if (R.now || R.trend || PM.summary) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
+        (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') +
+        (PM.summary ? '<p>' + esc(PM.summary) + '</p>' : '') + '</div>';
       else h += '<div class="est">A reading needs about 30 nights of both measures.</div>';
       [['hrv', R.hrv], ['rhr', R.rhr]].forEach(([k, M]) => {
         const MT = METRICS[k];
         if (!M) { h += '<div class="rcard" data-rd="' + k + '"><div class="rn">' + MT.name + '</div><div class="est">' + MT.none + '</div></div>'; return; }
         const r1 = v => v == null ? '\u2014' : (Math.round(v * 10) / 10).toString();
+        /* the words name the number they describe: the last 3 nights, not the 7-night figure above */
         const where = !M.band ? 'Your normal range needs 30 nights.'
-          : (M.pos ? (M.pos === 'inside' ? 'Inside' : M.pos.charAt(0).toUpperCase() + M.pos.slice(1)) + ' your normal range' : 'Your normal range is') +
-            ' (' + r1(M.band.lo) + '\u2013' + r1(M.band.hi) + ' ' + MT.unit + ').';
+          : M.now3 == null ? 'Your normal range: ' + r1(M.band.lo) + '\u2013' + r1(M.band.hi) + ' ' + MT.unit + '.'
+          : 'Last 3 nights: ' + r1(M.now3) + ' ' + MT.unit + ', ' + (M.pos === 'inside' ? 'inside' : M.pos) +
+            ' your normal range (' + r1(M.band.lo) + '\u2013' + r1(M.band.hi) + ').';
         const T = M.trend;
         const tr = !T ? '' : T.same ? 'About the same over four weeks.'
           : '<span class="delta ' + T.tone + '">' + (T.diff > 0 ? '\u25b2 ' : '\u25bc ') + r1(Math.abs(T.diff)) + ' ' + MT.unit + '</span> over four weeks.';
         h += '<div class="rcard" data-rd="' + k + '"><div class="rn">' + MT.name + '<span>details \u2192</span></div>' +
-          '<div class="rv">' + r1(M.now7) + '<s> ' + MT.unit + '</s></div>' +
+          '<div class="rv">' + r1(M.now7) + '<s> ' + MT.unit + ' \u00b7 7 nights</s></div>' +
           '<div class="rl">' + esc(where) + ' ' + tr + '</div><div class="est">' + MT.meaning + '</div></div>';
       });
     }
+    h += progressHTML(PM) + testsHTML(Calc.testsModel(Store.all().filter(a => a.type === 'run'))) + latelyHTML(PM);
     el('view-resting').innerHTML = h;
     $('#view-resting [data-back]').onclick = () => go('home');
+    const chk = el('r-check');
+    if (chk) chk.onclick = () => {
+      chk.disabled = true; chk.textContent = 'Checking Garmin\u2026';
+      Store.checkGarmin().then(st => {
+        renderResting();
+        toast(st && st.state === 'ok' ? 'Up to date with Garmin' : 'Garmin check failed \u2014 see Setup', st && st.state === 'ok' ? 'ok' : 'bad');
+      }).catch(() => { renderResting(); toast('Couldn\u2019t reach the sheet', 'bad'); });
+    };
+    document.querySelectorAll('#view-resting .wk').forEach(w => {
+      w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
+    });
     document.querySelectorAll('#view-resting [data-rd]').forEach(c => {
       c.onclick = () => { recoveryMetric = c.dataset.rd; recoveryDetail = true; restingKey = null; renderResting(); window.scrollTo(0, 0); };
     });
@@ -1250,7 +1289,7 @@
     const MT = METRICS[recoveryMetric];
     const m = Calc.restingModel(MT.data(), restingView, today(), restingKey);
     const S = Calc.measureState(MT.data(), today(), recoveryMetric, MT.better, Store.all(), Store.config());
-    let h = '<div class="back" data-back="1">\u2190 Recovery</div><div class="ttl">' + MT.name + '</div>' +
+    let h = '<div class="back" data-back="1">\u2190 Progress</div><div class="ttl">' + MT.name + '</div>' +
       '<div class="sub">' + (m.count ? m.count + ' NIGHTS \u00b7 FROM ' + fmtDate(m.first).toUpperCase() : 'NO DATA YET') + '</div>';
     if (!m.count) {
       h += '<div class="est">' + MT.none + '</div>';
@@ -1337,22 +1376,20 @@
 
   function renderBests() {
     const m = Calc.bestOfModel(Store.all(), Store.config(), today());
-    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Progress</div>' +
+    let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Bests</div>' +
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
 
-    h += progressHTML(Calc.progressModel(Store.all(), Store.config(), Store.resting(), today(), Store.hrv()));
-
     if (m.board.length) {
       h += '<div class="sec"><span>All time</span><span>beside ' + esc(m.year) + '</span></div>';
-      h += m.board.map(b => {
+      /* a plaque per distance: the time, whose run it was, this year quietly beside it */
+      h += '<div class="plaques">' + m.board.map(b => {
         const T = b.thisYear, same = T && T.run.id === b.best.run.id;
-        return '<div class="cmp" data-id="' + esc(b.best.run.id) + '"><span class="k">' +
-          esc(effortName(b.km)) + '</span><span class="v">' + Calc.fmtDuration(b.best.seconds) +
-          '<s>' + fmtDate(b.best.run.date) +
-          (same ? ' \u00b7 this year' : T ? ' \u00b7 ' + esc(m.year) + ' best ' + Calc.fmtDuration(T.seconds) : '') +
-          '</s></span></div>';
-      }).join('');
+        return '<div class="plaque" data-id="' + esc(b.best.run.id) + '"><div class="pd">' + esc(effortName(b.km)) + '</div>' +
+          '<div class="pt">' + Calc.fmtDuration(b.best.seconds) + '</div>' +
+          '<div class="pw">' + esc(b.best.run.name) + '<br>' + fmtDate(b.best.run.date) + '</div>' +
+          '<div class="py">' + (same ? 'set this year' : T ? esc(m.year) + ': ' + Calc.fmtDuration(T.seconds) : esc(m.year) + ': \u2014') + '</div></div>';
+      }).join('') + '</div>';
       h += '<div class="est">The fastest stretch of each distance inside any run, races included. ' +
         'Distance is GPS distance.</div>';
     }
@@ -1387,28 +1424,6 @@
     }
 
     h += recordsHTML(m.records);
-
-    /* threshold tests, newest first, each against the one before */
-    if (m.tests.length) {
-      h += '<div class="sec"><span>Tests</span><span>last 20 minutes</span></div>';
-      h += m.tests.map(T => {
-        const V = T.vs;
-        let aside = fmtDate(T.run.date) + (T.full ? '' : ' \u00b7 under 20 min, whole test used');
-        let vs = '';
-        if (V) {
-          const p = V.pace;
-          vs = (p.dir === 'flat' ? 'same pace' : '<span class="delta ' + p.tone + '">' + (p.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
-              Math.round(Math.abs(p.diff)) + ' s/km ' + (p.dir === 'up' ? 'slower' : 'faster') + '</span>') +
-            (V.hr != null ? ', ' + (V.hr === 0 ? 'same heart rate' : Math.abs(V.hr) + ' bpm ' + (V.hr > 0 ? 'higher' : 'lower')) : '') +
-            ' than ' + esc(fmtDate(V.date));
-        }
-        return '<div class="cmp" data-id="' + esc(T.run.id) + '"><span class="k">' + esc(T.run.name) + '</span>' +
-          '<span class="v">' + (T.hr != null ? T.hr + ' bpm' : '\u2014') + ' \u00b7 ' + (T.pace ? Calc.fmtPace(T.pace) + '/km' : '\u2014') +
-          '<s>' + esc(aside) + (vs ? '<br>' + vs : '') + '</s></span></div>';
-      }).join('');
-      h += '<div class="est">Threshold heart rate and pace: the last 20 minutes of each run tagged Test, ' +
-        'the standard reading of a 30-minute test.</div>';
-    }
 
     if (m.races.length) {
       h += '<div class="sec"><span>Races</span><span>' + m.races.length + '</span></div>';
@@ -1731,8 +1746,9 @@
 
     if (ageDays(cfg.max_hr_dated) > 365) h += '<div class="flag"><i>!</i><div>Max HR was set ' +
       Math.round(ageDays(cfg.max_hr_dated) / 30) + ' months ago.</div></div>';
-    h += '<div class="small muted" style="margin-top:10px">Resting heart rate wants to be a 90-day median, ' +
-      'nudged every few weeks. The zones follow it.</div>';
+    if (cfg.zones_from !== 'watch')
+      h += '<div class="small muted" style="margin-top:10px">With your own anchors, resting heart rate wants to be a ' +
+        '90-day median, nudged every few weeks; the zones follow it.</div>';
 
     h += '<div class="sec"><span>Base work</span><span>Z2 target</span></div>';
     h += '<label><span>Share of time in Z2 you are aiming for</span>' +
@@ -2132,11 +2148,17 @@
     });
     /* a selection off-screen in a scrolled ribbon is a selection you cannot see */
     const wrap = el('ribbonwrap');
-    if (wrap && wrap.classList.contains('scrolls')) {
-      const on = wrap.querySelector('.rp.on');
-      if (on) wrap.scrollLeft = Math.max(0,
-        on.offsetLeft - wrap.clientWidth / 2 + on.offsetWidth / 2);
-    }
+    const land = () => {
+      if (!wrap || !wrap.classList.contains('scrolls')) return;
+      const on = wrap.querySelector('.rp.on') || wrap.querySelector('.rp:last-child');
+      if (!on) return;
+      /* measured against the ribbon itself, after layout: offsetLeft is
+         relative to whatever ancestor happens to be positioned */
+      const a = wrap.getBoundingClientRect(), b = on.getBoundingClientRect();
+      wrap.scrollLeft = Math.max(0, wrap.scrollLeft + (b.left - a.left) - a.width / 2 + b.width / 2);
+    };
+    land();
+    if (window.requestAnimationFrame) requestAnimationFrame(land);
 
     document.querySelectorAll('#view-home [data-period]').forEach(b => {
       b.onclick = () => { periodKey = b.dataset.period; render('home'); };
@@ -2153,8 +2175,6 @@
     if (bests) bests.onclick = () => go('bests');
     const rest = $('#view-home [data-go="resting"]');
     if (rest) rest.onclick = () => go('resting');
-    const pl = $('#view-home .pline');
-    if (pl) pl.onclick = () => go('bests');
 
   }
 

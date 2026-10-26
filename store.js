@@ -239,6 +239,14 @@
 
     /* Garmin's daily resting HR, [date, bpm], oldest first. Context only. */
     resting: function () { return readJSON(KEY.resting, []); },
+    /* "Check Garmin now": run the Apps Script's hourly check immediately,
+       then pull, so a value your watch just synced shows straight away. */
+    checkGarmin: function () {
+      if (!Sheets.configured()) return Promise.resolve({ error: 'no sheet' });
+      const self = this;
+      return Sheets.post({ action: 'garminSync' }).then(st => self.pull().then(() => st));
+    },
+
     /* Garmin's nightly HRV, [date, ms], oldest first. Context only. */
     hrv: function () { return readJSON(KEY.hrv, []); },
 
@@ -307,6 +315,20 @@
         const remote = (data.activities || []).map(r => Calc.normalise(r) || r);
         const local = self.all();
 
+        /* what the script owns arrives whatever the state of the runs: the
+           Garmin status, zones, resting HR and HRV are not activities */
+        self.sync.garmin = data.garmin || null;
+        /* kept, so zones and the resting chart work offline */
+        if (data.garmin && data.garmin.zones && data.garmin.zones.z2)
+          self.bundle.config.garmin_zones = data.garmin.zones;
+        if (Array.isArray(data.resting) && data.resting.length)
+          localStorage.setItem(KEY.resting, JSON.stringify(data.resting));
+        if (Array.isArray(data.hrv) && data.hrv.length)
+          localStorage.setItem(KEY.hrv, JSON.stringify(data.hrv));
+        /* an Apps Script deployed before the new columns can't keep tags */
+        /* out of date if the sheet lacks a column for anything this app stores */
+        self.sync.columns = data.columns || [];
+        self.sync.outdated = FILL_FIELDS.some(k => self.sync.columns.indexOf(k) < 0);
         if (!remote.length && local.length) {
           /* first run against an empty sheet — push, don't wipe */
           return self.pushAll().then(n => ({ pushed: n }));
@@ -324,18 +346,6 @@
         if (data.config && Object.keys(data.config).length) {
           self.bundle.config = Object.assign({}, data.config, self.bundle.config);
         }
-        self.sync.garmin = data.garmin || null;
-        /* kept, so zones and the resting chart work offline */
-        if (data.garmin && data.garmin.zones && data.garmin.zones.z2)
-          self.bundle.config.garmin_zones = data.garmin.zones;
-        if (Array.isArray(data.resting) && data.resting.length)
-          localStorage.setItem(KEY.resting, JSON.stringify(data.resting));
-        if (Array.isArray(data.hrv) && data.hrv.length)
-          localStorage.setItem(KEY.hrv, JSON.stringify(data.hrv));
-        /* an Apps Script deployed before the new columns can't keep tags */
-        /* out of date if the sheet lacks a column for anything this app stores */
-        self.sync.columns = data.columns || [];
-        self.sync.outdated = FILL_FIELDS.some(k => self.sync.columns.indexOf(k) < 0);
         return self.adapter.saveAll(self.bundle)
           .then(() => self.fillFields())
           .then(() => ({ merged: remote.length }));

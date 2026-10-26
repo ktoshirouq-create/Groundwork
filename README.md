@@ -990,34 +990,40 @@ screen no longer labels where a run came from.
 
 | Screen | Question | Owns |
 |---|---|---|
-| Home | How is my training going right now? | week/month/year, form, runs; one **Progress** line when there's something to say |
-| **RECOVERY** | How is my body coping? | HRV and resting HR |
-| **PROGRESS** (was Bests) | Am I getting better over months? | training progress, bests, year by year, records, tests, races |
+| Home | How is my training going right now? | week/month/year, form, runs |
+| **PROGRESS** | How am I doing? | HRV and resting HR, training progress, tests, lately |
+| **BESTS** | What have I achieved? | a plaque per distance, year by year, records, races |
 
 No number appears in full in two places. One table (`SAME`) decides when a
 change is too small to mean anything and reads "about the same": resting HR
 under 1 bpm, HRV under 2 ms, aerobic pace under 3 s/km, Z2 under 2 points,
 weekly distance under 0.5 km.
 
-**Recovery** opens on a reading of both measures (`recoveryModel`). Each is
-placed against your normal range: the last 60 nights' average plus or minus
-one standard deviation (needs 30 nights). The last 3 nights give "now":
-steady, well recovered, under-recovered (said more firmly when either is past
-two deviations), one dipped and the other steady, or mixed. The last 4 weeks
-against the 4 before give the trend: both the right way, both the wrong way,
-mixed, or about the same. Then a card for each measure (value, where it sits
-in its normal range, its four-week change, what it means) that opens its
-detail: the charts with the normal range shaded, comparisons, and
-**patterns** once there are 90 nights in the last year (a weekday that runs 4
-ms / 2 bpm worse than average; the morning after your hardest 20% of training
-days). Statements say what the numbers do and what that often means, never a
-diagnosis.
+**Progress** opens with how fresh it is ("Latest: 26 Oct resting HR 49 bpm,
+HRV 50 ms · Garmin checked 09:00") and a **Check Garmin now** button, which asks
+the Apps Script to run its hourly check immediately (`doPost` action
+`garminSync`, routed before the write lock since it takes its own) and then
+pulls. Today's resting HR is only settled once the watch has synced after you
+end sleep on it; until the next check, the sheet can hold an earlier value.
 
-**Progress** opens with **Training progress**: one sentence ("Aerobic pace 9
-s/km faster than three months ago, with more of your running in Z2."), then
-aerobic pace, time in Z2 and weekly distance (no verdict), each now against the
-same stretch three months earlier, and a **Recovery** line echoing Recovery's
-four-week verdict that taps through. **Lately** follows.
+Then the reading (`recoveryModel`), every line naming both measures with their
+numbers: "Last 3 nights: HRV 58 ms, above your normal range; resting HR 53 bpm,
+inside your normal range — well rested." Normal range: the last 60 nights'
+average plus or minus one standard deviation (needs 30 nights). Then the
+four-week trend for both, and the training sentence. Then a card per measure:
+the 7-night average, the last 3 nights against the normal range (the words
+always name the number they describe), the four-week change, what it means;
+each opens its detail (charts with the normal range shaded, comparisons, and
+patterns once there are 90 nights). Then **Training** (aerobic pace, time in Z2,
+weekly distance, now against three months ago), **Tests**, and **Lately**.
+
+**Bests** is the trophy room: a plaque per distance (time, run, date, this
+year's best quietly beneath), year by year, records, races.
+
+On the home screen, an unfinished period is compared over finished days only,
+plus today once today has a run, so a fresh Monday isn't "100% down". In the
+current period the aerobic pace card keeps showing your latest run until you
+run again. The period ribbon lands on the selected period after layout.
 
 ## Tests
 

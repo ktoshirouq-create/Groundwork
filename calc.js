@@ -1333,7 +1333,10 @@
        A race is not an aerobic-pace measurement, so it never becomes the
        exemplar. It stays in the list, the totals and the zone split. */
     const inPHr = inP.filter(a => a.avg_hr != null && isAerobicMeasure(a));
-    const lastRun = inPHr.length ? inPHr[0] : (isCurrent ? null : null);
+    /* the card is about now: in the current period, before you've run in it,
+       it keeps showing your latest run rather than going blank */
+    const lastRun = inPHr.length ? inPHr[0] : (isCurrent ? (upTo.filter(a => a.avg_hr != null && isAerobicMeasure(a))
+      .sort((a, b) => b.date.localeCompare(a.date))[0] || null) : null);
     const pace = lastRun ? aerobicPace(lastRun, c) : null;
 
     /* ---- what that run is measured against: all history, never the period ---- */
@@ -1373,14 +1376,19 @@
     const prevKey = previousWithData(runs, scope, key);
     /* An unfinished period is compared with the previous one at the same
        point: 1 Jan-24 Oct 2026 against 1 Jan-24 Oct 2025, not all of 2025. */
-    let prevCut = null;
+    let prevCut = null, nothingYet = false;
     if (prevKey && isCurrent) {
-      const off = daysBetween(start, today);
-      prevCut = addDays(periodStart(prevKey, scope), off);
-      const pEnd = periodEnd(prevKey, scope);
-      if (prevCut >= pEnd) prevCut = null;
+      /* finished days only, plus today once today has a run: a Monday morning
+         before your run is not "100% down" on last Monday */
+      const ranToday = inP.some(a => a.date === today);
+      const off = daysBetween(start, today) - (ranToday ? 0 : 1);
+      if (off < 0) nothingYet = true;
+      else {
+        prevCut = addDays(periodStart(prevKey, scope), off);
+        if (prevCut >= periodEnd(prevKey, scope)) prevCut = null;
+      }
     }
-    const prev = prevKey ? summarize(runs.filter(a => inPeriod(a, scope, prevKey) && (!prevCut || a.date <= prevCut))) : null;
+    const prev = prevKey && !nothingYet ? summarize(runs.filter(a => inPeriod(a, scope, prevKey) && (!prevCut || a.date <= prevCut))) : null;
 
     return {
       mode: 'live',
@@ -2142,16 +2150,19 @@
     if (H && R && H.pos && R.pos) {
       const hB = /below/.test(H.pos), hA = /above/.test(H.pos), rB = /below/.test(R.pos), rA = /above/.test(R.pos);
       const well = /well/.test(H.pos) || /well/.test(R.pos);
-      if (!off(H) && !off(R)) now = 'Steady: both in your normal range.';
-      else if (hA && rB) { now = 'Both better than usual: well recovered.'; tone = 'good'; }
-      else if (hB && rA) { now = (well ? 'Both clearly point to under-recovery' : 'Both point to under-recovery') +
-        ': HRV ' + Math.round(Math.abs(H.now3 - H.band.mean)) + ' ms below your normal, resting HR ' +
-        Math.round(Math.abs(R.now3 - R.band.mean)) + ' bpm above. Often sleep, alcohol, illness or a hard block.'; tone = 'bad'; }
-      else if (hB && !off(R)) { now = 'HRV dipped, resting HR steady: often one late night or drinks. Worth watching tomorrow.'; tone = 'bad'; }
-      else if (rA && !off(H)) { now = 'Resting HR up, HRV steady: can be heat, a late meal or something coming on.'; tone = 'bad'; }
-      else if (hB && rB) now = 'Mixed: both lower than usual \u2014 sometimes deep fatigue after a big training block.';
-      else if (hA && rA) now = 'Mixed: both higher than usual \u2014 unusual, worth watching for a day or two.';
-      else if (hA || rB) { now = 'Better than usual on ' + (hA ? 'HRV' : 'resting HR') + ', the other steady.'; tone = 'good'; }
+      const where = M => M.pos === 'inside' ? 'inside your normal range' : M.pos + ' your normal range';
+      let meaning;
+      if (!off(H) && !off(R)) meaning = 'steady';
+      else if ((hA && !rA) && (rB || !off(R))) { meaning = 'well rested'; tone = 'good'; }
+      else if ((rB && !hB) && (hA || !off(H))) { meaning = 'well rested'; tone = 'good'; }
+      else if (hB && rA) { meaning = (well ? 'both clearly point to under-recovery' : 'both point to under-recovery') +
+        ' \u2014 often sleep, alcohol, illness or a hard block'; tone = 'bad'; }
+      else if (hB && !off(R)) { meaning = 'often one late night or drinks; worth watching tomorrow'; tone = 'bad'; }
+      else if (rA && !off(H)) { meaning = 'can be heat, a late meal or something coming on'; tone = 'bad'; }
+      else if (hB && rB) meaning = 'mixed \u2014 sometimes deep fatigue after a big training block';
+      else meaning = 'mixed \u2014 unusual, worth watching for a day or two';
+      now = 'Last 3 nights: HRV ' + Math.round(H.now3) + ' ms, ' + where(H) + '; resting HR ' + Math.round(R.now3) +
+        ' bpm, ' + where(R) + ' \u2014 ' + meaning + '.';
     }
     let trend = null, verdict = null;
     if (H && R && H.trend && R.trend) {

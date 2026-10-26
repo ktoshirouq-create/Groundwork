@@ -788,3 +788,13 @@ label > span {
 .psum { font-size: var(--t-body); color: var(--ink); margin: 6px 0 4px; line-height: 1.45; }
 .cmp.rlink { cursor: pointer; }
 .pline { margin: 10px 0 4px; padding: 8px 12px; border-left: 2px solid var(--line); font-size: var(--t-body); color: var(--ink); cursor: pointer; }
+
+/* progress: freshness; bests: the trophy room */
+.rlatest { font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); margin: 10px 0 6px; }
+#r-check { margin-bottom: 6px; }
+.plaques { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 6px; }
+.plaque { border: 1px solid var(--line); border-radius: 12px; padding: 14px 14px 12px; cursor: pointer; }
+.plaque .pd { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .14em; text-transform: uppercase; color: var(--mute); }
+.plaque .pt { font-family: var(--f-display); font-size: var(--t-display); font-weight: 700; color: var(--ink); line-height: 1.15; margin: 6px 0 4px; }
+.plaque .pw { font-size: var(--t-label); color: var(--mute); line-height: 1.35; }
+.plaque .py { font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim); margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }

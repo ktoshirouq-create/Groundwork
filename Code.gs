@@ -214,6 +214,10 @@ function doPost(e) {
 
   if (!checkToken(body.token)) return json({ error: 'bad token' });
 
+  /* the app's "Check Garmin now": the hourly check, run on request. It takes
+     the lock itself, so it's routed before the lock below. */
+  if (body.action === 'garminSync') return json(garminSync());
+
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return json({ error: 'busy' }); }
 
