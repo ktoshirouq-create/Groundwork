@@ -1066,6 +1066,34 @@ The **RECOVERY** screen (formerly Resting) switches between **Resting HR** and
 Colours follow each measure: lower is better for resting HR, higher for HRV.
 Training progress on Bests has an HRV row. Context only: it moves nothing.
 
+## Strava history (2014–)
+
+Jack's Strava goes back to 2014, phone-recorded, before his first watch run in
+September 2017. `stravaImport()`, run from the editor until it says complete,
+reads Strava's own export: the tab made from `activities.csv` (found by its
+header row, whatever it's called) and, if the archive's `activities` folder is
+in Drive, each run's track (`.gpx`, `.tcx`, `.fit`, gzipped or not, found by
+file name). Only runs. A run already here (same day; distance within 2% or
+time within a minute) is linked by `strava_id` and keeps its own figures; the
+rest are added. Tracks give best efforts and, where they carry heart rate, the
+heart-rate figures, through the same `streamFigures` and GPS-jump filter as
+watch files; a GPX's distance comes from its points. Strava's dates are UTC and
+become Oslo dates. 2014 phone GPS is noisier than a watch, so its short efforts
+are the least trustworthy numbers in the app.
+
+## Bests, results and sync
+
+**Bests** opens with **New**: all-time bests set in the last 30 days, each with
+what it beat ("1 km 4:50: your fastest ever, 5 s quicker than 20 Nov 2017"),
+its plaque marked NEW PB. Plaques show time, pace and date (no run names) and
+this year's best with how far off it is. A run's own **best efforts** are
+ranked like results: PB, 2nd or 3rd best ever, or best of its year
+(`effortRanks`).
+
+**Sync with Garmin** lives on the home screen ("Garmin synced 09:00 · Sync
+now") and on pulling down at the top of home or Progress: it runs the Apps
+Script's check (new runs, resting HR, HRV, zones) and pulls.
+
 ## Settings that matter
 
 - **Max HR / resting HR** — the Karvonen anchors. Every zone follows them.

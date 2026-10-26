@@ -2179,6 +2179,36 @@
     return { rhr: R, hrv: H, now: now, nowTone: tone, trend: trend, verdict: verdict };
   }
 
+  /* ---------- where an effort ranks ----------
+
+     For a run's own results, like a race result: the run's effort at each
+     distance against every other run's best at it. 1st is the PB; 2nd and 3rd
+     are said as such; otherwise, the best of its year if it is. */
+  function effortRanks(act, acts) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a) && a.id !== act.id);
+    return effortsOf(act).map(e => {
+      const others = runs.map(a => bestEffortOf(a, e.km)).filter(Boolean).map(x => x.seconds);
+      const rank = 1 + others.filter(sec => sec < e.seconds).length;
+      const y = act.date.slice(0, 4);
+      const yearBest = !runs.some(a => a.date.slice(0, 4) === y && (bestEffortOf(a, e.km) || {}).seconds < e.seconds);
+      return Object.assign({ rank: rank, yearBest: yearBest, year: y }, e);
+    });
+  }
+
+  /* New bests: all-time bests set in the last 30 days, each with what it beat. */
+  function newBests(acts, today) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    const from = addDays(String(today).slice(0, 10), -30);
+    const out = [];
+    EFFORT_DISTANCES.forEach(km => {
+      const board = bestEffortBoard(runs, [km])[0];
+      if (!board || board.run.date <= from) return;
+      const before = bestEffortBoard(runs.filter(a => a.date < board.run.date), [km])[0];
+      out.push({ km: km, best: board, was: before || null, by: before ? before.seconds - board.seconds : null });
+    });
+    return out;
+  }
+
   /* ---------- the Best-of page ----------
 
      Everything here is all-time, so nothing depends on which period the home
@@ -2232,6 +2262,7 @@
       run: r, seconds: r.elapsed_s, pace: paceSecPerKm(r.distance_km, r.elapsed_s) }));
 
     return { count: runs.length, year: year, years: years, board: board,
+             first: runs.map(a => a.date).sort()[0],
              progression: progression, records: records, races: races, tests: testsModel(runs) };
   }
 
@@ -2406,7 +2437,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

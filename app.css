@@ -798,3 +798,12 @@ label > span {
 .plaque .pt { font-family: var(--f-display); font-size: var(--t-display); font-weight: 700; color: var(--ink); line-height: 1.15; margin: 6px 0 4px; }
 .plaque .pw { font-size: var(--t-label); color: var(--mute); line-height: 1.35; }
 .plaque .py { font-family: var(--f-data); font-size: var(--t-micro); color: var(--dim); margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+
+/* results, new bests, sync */
+.cmp .k .rk { font-style: normal; font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .06em;
+              color: var(--mute); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.newpb { margin: 8px 0; padding: 10px 12px; border-left: 2px solid var(--good); font-size: var(--t-body); color: var(--ink); cursor: pointer; }
+.plaque.fresh { border-color: var(--good); }
+.plaque .pt { font-size: calc(var(--t-display) * .8); }
+.syncline { font-family: var(--f-data); font-size: var(--t-micro); color: var(--mute); margin: 8px 0 2px; }
+.syncline button { background: none; border: 0; padding: 0; color: var(--z2); font: inherit; cursor: pointer; text-decoration: underline; }

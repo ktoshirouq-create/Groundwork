@@ -58,11 +58,13 @@ var ACT_COLS = [
   'terrain',
   /* share of the run (%) where heart rate followed cadence, from the watch
      file; and your override, 'trust', when you know the heart rate was fine */
-  'hr_lock', 'hr_trust'
+  'hr_lock', 'hr_trust',
+  /* written by the Strava import only: which Strava activity this run is */
+  'strava_id'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
-var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock'];
+var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'strava_id'];
 
 var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
 
@@ -70,7 +72,7 @@ var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust', 'strava_id'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
@@ -1655,4 +1657,184 @@ function garminHrvHistory() {
   if (!cut) props.deleteProperty('GARMIN_HRV_CURSOR');
   Logger.log(msg);
   return { complete: !cut, nights: rows.length, refused: refused, message: msg };
+}
+
+
+/* ================================================================ Strava ===
+
+   Run stravaImport() from the editor, once (press Run until it says done).
+   It reads Strava's own export: the tab made from activities.csv (found by its
+   header, whatever the tab is called) and, if the archive's "activities"
+   folder is in Drive, each run's track. Only runs are taken. A run already in
+   Groundwork (same day; distance within 2% or time within a minute) is linked,
+   not duplicated, and keeps its own figures; the rest are added, marked with
+   their Strava id. Tracks give best efforts the same way watch files do, with
+   the same GPS-jump filter. Phone runs carry no heart rate.
+
+   Strava's export dates are UTC; they are turned into Oslo dates, so a late
+   evening run lands on the day you ran it. */
+
+var STRAVA_TZ = 'Europe/Oslo';
+var STRAVA_MON = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+
+/* "Oct 26, 2026, 10:35:34 AM" (UTC) -> a Date */
+function stravaWhen(txt) {
+  var m = /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4}),? (\d{1,2}):(\d\d):(\d\d) ?([AP]M)$/.exec(String(txt).trim());
+  if (!m || STRAVA_MON[m[1]] == null) return null;
+  var h = (+m[4]) % 12 + (m[7] === 'PM' ? 12 : 0);
+  return new Date(Date.UTC(+m[3], STRAVA_MON[m[1]], +m[2], h, +m[5], +m[6]));
+}
+
+/* the export tab, wherever it is: the one whose header has these */
+function stravaSheet() {
+  var sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    if (sh.getLastRow() < 2) continue;
+    var head = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
+    if (head.indexOf('Activity ID') >= 0 && head.indexOf('Activity Type') >= 0 && head.indexOf('Filename') >= 0) return sh;
+  }
+  return null;
+}
+
+/* Pure: one export row (as an object keyed by the header, first of any
+   repeated name) -> the parts Groundwork keeps, or null if not a run. */
+function stravaRow(r) {
+  if (String(r['Activity Type']) !== 'Run') return null;
+  var when = r['Activity Date'] instanceof Date ? r['Activity Date'] : stravaWhen(r['Activity Date']);
+  if (!when) return null;
+  var date = Utilities.formatDate(when, STRAVA_TZ, 'yyyy-MM-dd');
+  var num = function (k) { var v = Number(String(r[k] == null ? '' : r[k]).replace(',', '.')); return isFinite(v) && v > 0 ? v : null; };
+  var metres = num('Distance (m)') != null ? num('Distance (m)') : (num('Distance') != null ? num('Distance') * 1000 : null);
+  var name = String(r['Activity Name'] || '').trim();
+  var generic = /^(morning|lunch|afternoon|evening|night) run$/i.test(name) || /^run$/i.test(name);
+  return {
+    sid: String(r['Activity ID']),
+    date: date,
+    name: generic || !name ? 'Run \u00b7 ' + (+date.slice(8)) + ' ' + MON3[+date.slice(5, 7) - 1] : name.slice(0, 80),
+    distance_km: metres != null ? r2(metres / 1000) : null,
+    elapsed_s: num('Elapsed Time') != null ? Math.round(num('Elapsed Time')) : null,
+    moving_s: num('Moving Time') != null ? Math.round(num('Moving Time')) : null,
+    ascent_m: num('Elevation Gain') != null ? Math.round(num('Elevation Gain')) : null,
+    avg_hr: num('Average Heart Rate') != null ? Math.round(num('Average Heart Rate')) : null,
+    file: String(r['Filename'] || '').trim()
+  };
+}
+
+/* the export's rows as objects; Strava repeats some column names, and the
+   second "Distance" is metres, so it is kept as "Distance (m)" */
+function stravaRows(sh) {
+  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var head = vals[0].map(String), keys = [], seen = {};
+  head.forEach(function (h) {
+    if (seen[h]) keys.push(h === 'Distance' ? 'Distance (m)' : h + ' (' + (++seen[h]) + ')');
+    else { seen[h] = 1; keys.push(h); }
+  });
+  return vals.slice(1).map(function (row) {
+    var o = {}; keys.forEach(function (k, i) { o[k] = row[i]; }); return o;
+  });
+}
+
+/* ---- tracks: GPX (lat/lon/time, sometimes HR) and TCX (time, distance, HR) */
+
+function haversine(a, b) {
+  var R = 6371000, toR = Math.PI / 180;
+  var dLat = (b.lat - a.lat) * toR, dLon = (b.lon - a.lon) * toR;
+  var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+
+/* Pure: a track's text -> records {t (s), d (m), hr} like a watch file's */
+function trackRecords(text) {
+  var out = [];
+  var tcx = /<Trackpoint/.test(text);
+  if (tcx) {
+    var re = /<Trackpoint>([\s\S]*?)<\/Trackpoint>/g, m;
+    while ((m = re.exec(text))) {
+      var b = m[1];
+      var t = /<Time>([^<]+)<\/Time>/.exec(b), d = /<DistanceMeters>([^<]+)<\/DistanceMeters>/.exec(b);
+      var hr = /<HeartRateBpm>[\s\S]*?<Value>([^<]+)<\/Value>/.exec(b);
+      if (!t) continue;
+      out.push({ t: Date.parse(t[1]) / 1000, d: d ? Number(d[1]) : null, hr: hr ? Math.round(Number(hr[1])) : null });
+    }
+  } else {
+    var rp = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g, p, prev = null, dist = 0;
+    while ((p = rp.exec(text))) {
+      var lat = /lat="([-\d.]+)"/.exec(p[1]), lon = /lon="([-\d.]+)"/.exec(p[1]), tm = /<time>([^<]+)<\/time>/.exec(p[2]);
+      var h2 = /<(?:\w+:)?hr>(\d+)<\/(?:\w+:)?hr>/.exec(p[2]);
+      if (!lat || !lon || !tm) continue;
+      var pt = { lat: Number(lat[1]), lon: Number(lon[1]) };
+      if (prev) dist += haversine(prev, pt);
+      prev = pt;
+      out.push({ t: Date.parse(tm[1]) / 1000, d: dist, hr: h2 ? Number(h2[1]) : null });
+    }
+  }
+  if (!out.length) return out;
+  var t0 = out[0].t;
+  return out.map(function (r) { return { t: r.t - t0, d: r.d, hr: r.hr }; });
+}
+
+/* a file named in the export, found in Drive by its name */
+function stravaTrack(filename) {
+  if (!filename) return null;
+  var base = filename.split('/').pop();
+  var it = DriveApp.getFilesByName(base);
+  if (!it.hasNext()) return null;
+  var blob = it.next().getBlob();
+  if (/\.gz$/i.test(base)) blob = Utilities.ungzip(blob.setContentType('application/x-gzip'));
+  if (/\.fit(\.gz)?$/i.test(base)) return fitDecode(blob.getBytes()).records;
+  return trackRecords(blob.getDataAsString());
+}
+
+function stravaImport() {
+  var started = Date.now();
+  var sh = stravaSheet();
+  if (!sh) throw new Error('No tab with Strava\u2019s activities.csv found (looking for Activity ID, Activity Type and Filename in the first row).');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(60000)) throw new Error('The hourly check is running \u2014 try again in a minute.');
+  try {
+    var ash = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.activities);
+    addMissingHeaders(ash, ACT_COLS);
+    var hm = headerMap(ash), rows = readAll(ash, ACT_COLS);
+    var known = {};
+    rows.forEach(function (a) { if (a.strava_id) known[String(a.strava_id)] = a; });
+    var found = stravaRows(sh).map(stravaRow).filter(Boolean);
+    var added = 0, linked = 0, tracks = 0, noTrack = 0, cut = false;
+    for (var i = 0; i < found.length; i++) {
+      if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
+      var s = found[i];
+      if (known[s.sid]) continue;
+      var mine = garminMatch(s, rows);
+      if (mine) {
+        if (!mine.strava_id) {
+          var at = findRowById(ash, 'id', mine.id);
+          if (at > 0) ash.getRange(at, hm.strava_id + 1).setNumberFormat('@').setValue(s.sid);
+          mine.strava_id = s.sid; linked++;
+        }
+        known[s.sid] = mine;
+        continue;
+      }
+      var now = new Date().toISOString();
+      var act = { id: 'run-' + s.date + '-s' + s.sid, type: 'run', date: s.date, name: s.name, source: 'tracked',
+        distance_km: s.distance_km, elapsed_s: s.elapsed_s, moving_s: s.moving_s, ascent_m: s.ascent_m,
+        avg_hr: s.avg_hr, strava_id: s.sid, laps: [], created_at: now, updated_at: now };
+      var rec = null;
+      try { rec = stravaTrack(s.file); } catch (e) { rec = null; }
+      if (rec && rec.length > 10) {
+        var st = streamFigures(rec);
+        if (st) { act.efforts = st.efforts; act.hr_hist = st.hr_hist; act.drift_bpm = st.drift_bpm; act.stream_v = STREAM_V; tracks++; }
+      } else noTrack++;
+      putActivity(act);
+      rows.push(act); known[s.sid] = act; added++;
+    }
+    var msg = (cut ? 'Strava: stopped to stay inside Google\u2019s time limit. Press Run again. ' : 'Strava import complete. ') +
+      'This run: ' + added + ' added (' + tracks + ' with a track for best efforts' +
+      (noTrack ? ', ' + noTrack + ' without \u2014 the activities folder isn\u2019t in Drive, or the run was entered by hand' : '') +
+      '), ' + linked + ' linked to runs already here.';
+    Logger.log(msg);
+    return { complete: !cut, added: added, linked: linked, tracks: tracks, message: msg };
+  } finally {
+    lock.releaseLock();
+  }
 }

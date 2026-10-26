@@ -587,6 +587,39 @@
     return h;
   }
 
+  /* ---------------------------------------------------- sync with Garmin */
+
+  /* Runs the Apps Script's hourly check now (new runs, resting HR, HRV, zones)
+     and pulls. From the home screen's line, or by pulling down on home or
+     Progress. */
+  let syncing = false;
+  function syncGarmin() {
+    if (syncing || !Store.sheetsConfigured()) return;
+    syncing = true;
+    const b = el('h-sync'); if (b) { b.disabled = true; b.textContent = 'syncing\u2026'; }
+    toast('Syncing with Garmin\u2026');
+    Store.checkGarmin().then(st => {
+      syncing = false;
+      render(el('view-resting').hidden ? 'home' : 'resting');
+      toast(st && st.state === 'ok' ? 'Up to date with Garmin' : 'Garmin sync failed \u2014 see Setup', st && st.state === 'ok' ? 'ok' : 'bad');
+    }).catch(() => { syncing = false; render('home'); toast('Couldn\u2019t reach the sheet', 'bad'); });
+  }
+
+  /* pull down at the top of home or Progress to sync */
+  (function () {
+    let y0 = null;
+    document.addEventListener('touchstart', e => {
+      const v = !el('view-home').hidden || !el('view-resting').hidden;
+      y0 = v && (window.scrollY || 0) <= 0 ? e.touches[0].clientY : null;
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+      if (y0 == null) return;
+      const dy = e.changedTouches[0].clientY - y0;
+      y0 = null;
+      if (dy > 90) syncGarmin();
+    }, { passive: true });
+  })();
+
   /* ---------------------------------------------------- worth knowing --- */
 
   /* Training progress, top of Bests: four measures now against three months
@@ -703,6 +736,12 @@
     }
 
     h += ribbonHTML(m, bounds);
+    /* how fresh the Garmin data is, and a way to make it fresher */
+    if (Store.sheetsConfigured() && Store.sync.garmin && Store.sync.garmin.state !== 'off') {
+      const G = Store.sync.garmin, d = G.at ? new Date(G.at) : null;
+      h += '<div class="syncline">' + (d ? 'Garmin synced ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : 'Garmin') +
+        ' \u00b7 <button type="button" id="h-sync">Sync now</button></div>';
+    }
     if (m.days) h += weekStripHTML(m);
     h += '<div class="rule"></div>';
     h += m.mode === 'review' ? reviewHTML(m, bounds) : runHero(m, bounds, cfg);
@@ -1166,33 +1205,21 @@
   /* ---------------------------------------------------------- best efforts */
 
   function effortsHTML(a) {
-    const efforts = Calc.effortsOf(a);
+    const efforts = Calc.effortRanks(a, Store.all());
     if (!efforts.length) return '';
-    const held = Calc.recordsSetBy(a, Store.all());
-    const heldKm = {};
-    held.forEach(b => { heldKm[b.km] = true; });
-
-    let h = '<div class="sec"><span>Best efforts</span><span>' +
-      (held.length ? held.length + ' all-time best' + (held.length === 1 ? '' : 's') : 'in this run') +
-      '</span></div>';
-
+    const badge = e => e.rank === 1 ? '<i class="pbtag">PB</i>' : e.rank === 2 ? '<i class="rk">2nd best ever</i>'
+      : e.rank === 3 ? '<i class="rk">3rd best ever</i>' : e.yearBest ? '<i class="rk">best of ' + e.year + '</i>' : '';
+    const n = efforts.filter(e => e.rank <= 3 || e.yearBest).length;
+    let h = '<div class="sec"><span>Best efforts</span><span>' + (n ? n + ' result' + (n === 1 ? '' : 's') : 'in this run') + '</span></div>';
     h += efforts.map(e =>
-      '<div class="cmp' + (heldKm[e.km] ? ' pb' : '') + '">' +
-      '<span class="k">' + (heldKm[e.km] ? '<i class="pbtag">PB</i> ' : '') +
-      esc(effortName(e.km)) + '</span>' +
-      '<span class="v">' + Calc.fmtDuration(e.seconds) +
-      '<s>' + Calc.fmtPace(e.pace) + '/km' +
-      (e.source === 'laps' ? ' \u00b7 km ' + e.from + (e.to !== e.from ? '\u2013' + e.to : '') : '') +
-      '</s></span></div>').join('');
-
+      '<div class="cmp' + (e.rank === 1 ? ' pb' : '') + '"><span class="k">' + esc(effortName(e.km)) + ' ' + badge(e) + '</span>' +
+      '<span class="v">' + Calc.fmtDuration(e.seconds) + '<s>' + Calc.fmtPace(e.pace) + '/km</s></span></div>').join('');
     h += '<div class="est">' + (efforts[0].source === 'stream'
-      ? 'The fastest stretch of each distance anywhere in this run, from the watch\u2019s ' +
-        'second-by-second record. Distance is GPS distance, so a race that measured long ' +
-        'shows a quicker time here than your finish time.'
-      : 'This run has no watch file, so these are the fastest runs of consecutive whole ' +
-        'kilometres \u2014 a stretch starting mid-kilometre can\u2019t be seen.') + '</div>';
+      ? 'The fastest stretch of each distance in this run, ranked against every other run. Distance is the watch\u2019s (or the phone\u2019s) GPS distance.'
+      : 'This run has no track, so these are its fastest whole kilometres.') + '</div>';
     return h;
   }
+
 
 
   /* ------------------------------------------------------------ resting ---
@@ -1241,7 +1268,7 @@
     if (lr || lh) h += '<div class="rlatest">Latest: ' + [lr ? fmtDate(lr[0]) + ' resting HR ' + lr[1] + ' bpm' : null,
         lh ? (lr && lh[0] === lr[0] ? '' : fmtDate(lh[0]) + ' ') + 'HRV ' + lh[1] + ' ms' : null].filter(Boolean).join(', ') +
       (G && G.at ? ' \u00b7 Garmin checked ' + hhmm(G.at) : '') + '</div>';
-    if (Store.sheetsConfigured()) h += '<button class="btn ghost" id="r-check">Check Garmin now</button>';
+
     if (!R.rhr && !R.hrv) {
       h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> and <b>garminHrvHistory</b> in Apps Script once (README \u2192 Resting HR, HRV).</div>';
     } else {
@@ -1269,14 +1296,6 @@
     h += progressHTML(PM) + testsHTML(Calc.testsModel(Store.all().filter(a => a.type === 'run'))) + latelyHTML(PM);
     el('view-resting').innerHTML = h;
     $('#view-resting [data-back]').onclick = () => go('home');
-    const chk = el('r-check');
-    if (chk) chk.onclick = () => {
-      chk.disabled = true; chk.textContent = 'Checking Garmin\u2026';
-      Store.checkGarmin().then(st => {
-        renderResting();
-        toast(st && st.state === 'ok' ? 'Up to date with Garmin' : 'Garmin check failed \u2014 see Setup', st && st.state === 'ok' ? 'ok' : 'bad');
-      }).catch(() => { renderResting(); toast('Couldn\u2019t reach the sheet', 'bad'); });
-    };
     document.querySelectorAll('#view-resting .wk').forEach(w => {
       w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
     });
@@ -1373,6 +1392,7 @@
      source as the year reviews and the PB tags, so the three never disagree. */
 
   let bestsKm = null;
+  const gapTxt = s => s < 60 ? Math.round(s) + ' s' : Calc.fmtDuration(Math.round(s));
 
   function renderBests() {
     const m = Calc.bestOfModel(Store.all(), Store.config(), today());
@@ -1380,15 +1400,28 @@
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
 
+    /* new bests go first, and say what they beat */
+    const NB = Calc.newBests(Store.all(), today());
+    if (NB.length) {
+      h += '<div class="sec"><span>New</span><span>last 30 days</span></div>';
+      h += NB.map(n => '<div class="newpb" data-id="' + esc(n.best.run.id) + '"><i class="pbtag">NEW PB</i> <b>' +
+        esc(effortName(n.km)) + ' ' + Calc.fmtDuration(n.best.seconds) + '</b>: your fastest ever' +
+        (n.was ? ', ' + gapTxt(n.by) + ' quicker than ' + esc(fmtDate(n.was.run.date)) : '') + '.</div>').join('');
+    }
+    const fresh = {};
+    NB.forEach(n => { fresh[n.km] = true; });
+
     if (m.board.length) {
-      h += '<div class="sec"><span>All time</span><span>beside ' + esc(m.year) + '</span></div>';
+      h += '<div class="sec"><span>All time</span><span>since ' + esc(fmtDate(m.first || '').replace(/^\d+ /, '')) + '</span></div>';
       /* a plaque per distance: the time, whose run it was, this year quietly beside it */
       h += '<div class="plaques">' + m.board.map(b => {
         const T = b.thisYear, same = T && T.run.id === b.best.run.id;
-        return '<div class="plaque" data-id="' + esc(b.best.run.id) + '"><div class="pd">' + esc(effortName(b.km)) + '</div>' +
+        return '<div class="plaque' + (fresh[b.km] ? ' fresh' : '') + '" data-id="' + esc(b.best.run.id) + '">' +
+          '<div class="pd">' + esc(effortName(b.km)) + (fresh[b.km] ? ' <i class="pbtag">NEW PB</i>' : '') + '</div>' +
           '<div class="pt">' + Calc.fmtDuration(b.best.seconds) + '</div>' +
-          '<div class="pw">' + esc(b.best.run.name) + '<br>' + fmtDate(b.best.run.date) + '</div>' +
-          '<div class="py">' + (same ? 'set this year' : T ? esc(m.year) + ': ' + Calc.fmtDuration(T.seconds) : esc(m.year) + ': \u2014') + '</div></div>';
+          '<div class="pw">' + Calc.fmtPace(b.best.pace) + '/km \u00b7 ' + fmtDate(b.best.run.date) + '</div>' +
+          '<div class="py">' + (same ? 'set this year' : T ? esc(m.year) + ': ' + Calc.fmtDuration(T.seconds) + ', ' + gapTxt(T.seconds - b.best.seconds) + ' off'
+            : esc(m.year) + ': none yet') + '</div></div>';
       }).join('') + '</div>';
       h += '<div class="est">The fastest stretch of each distance inside any run, races included. ' +
         'Distance is GPS distance.</div>';
@@ -1437,6 +1470,7 @@
     $('#view-bests [data-back]').onclick = () => go('home');
     const rl = $('#view-bests .rlink');
     if (rl) rl.onclick = () => go('resting');
+    document.querySelectorAll('#view-bests .newpb').forEach(n => { n.onclick = () => go('detail', n.dataset.id); });
     document.querySelectorAll('#view-bests .wk').forEach(w => {
       w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
     });
@@ -2175,6 +2209,8 @@
     if (bests) bests.onclick = () => go('bests');
     const rest = $('#view-home [data-go="resting"]');
     if (rest) rest.onclick = () => go('resting');
+    const hs = el('h-sync');
+    if (hs) hs.onclick = () => syncGarmin();
 
   }
 
