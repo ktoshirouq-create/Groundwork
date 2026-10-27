@@ -1125,10 +1125,6 @@ the longest streak of weeks, the longest gap (14 days or more), and run lengths
 (under 5, 5–10, 10–15, 15 km +). Comparison lines for a year with nothing in
 it are gone rather than saying "nothing logged".
 
-Strava's automatic names in Dutch and Norwegian (Ochtendhardloopsessie,
-Middag loop, Ettermiddagsløp) and bare dates become "Run · 15 Apr"; a rerun of
-`stravaImport` tidies ones an earlier import kept, unless you've renamed them.
-
 ## Tagging
 
 Tags are set on the run screen: session chips (Easy, Long, Recovery, Steady,
