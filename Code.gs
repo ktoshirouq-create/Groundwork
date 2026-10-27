@@ -1742,7 +1742,7 @@ function stravaRow(r) {
   var num = function (k) { var v = Number(String(r[k] == null ? '' : r[k]).replace(',', '.')); return isFinite(v) && v > 0 ? v : null; };
   var metres = num('Distance (m)') != null ? num('Distance (m)') : (num('Distance') != null ? num('Distance') * 1000 : null);
   var name = String(r['Activity Name'] || '').trim();
-  var generic = stravaGeneric(name);
+  var generic = /^(morning|lunch|afternoon|evening|night) run$/i.test(name) || /^run$/i.test(name);
   return {
     sid: String(r['Activity ID']),
     date: date,
@@ -1752,20 +1752,8 @@ function stravaRow(r) {
     moving_s: num('Moving Time') != null ? Math.round(num('Moving Time')) : null,
     ascent_m: num('Elevation Gain') != null ? Math.round(num('Elevation Gain')) : null,
     avg_hr: num('Average Heart Rate') != null ? Math.round(num('Average Heart Rate')) : null,
-    file: String(r['Filename'] || '').trim(),
-    raw: name
+    file: String(r['Filename'] || '').trim()
   };
-}
-
-/* Strava's automatic names, in the languages the phone was set to, and
-   bare dates: these become the app's own "Run · 15 Apr" */
-function stravaGeneric(name) {
-  var n = String(name || '').trim();
-  return !n || /^run$/i.test(n) ||
-    /^(morning|lunch|afternoon|evening|night) run$/i.test(n) ||
-    /^(ochtend|middag|namiddag|avond|nacht|lunch)\s?(hardloopsessie|hardloop|loop|run|hardlopen)$/i.test(n) ||
-    /^(morgen|formiddag|ettermiddag|kveld|natt)s?\s?(l\u00f8p|l\u00f8petur|tur)$/i.test(n) ||
-    /^\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}$/.test(n) || /^\d{4}-\d\d-\d\d$/.test(n);
 }
 
 /* the export's rows as objects; Strava repeats some column names, and the
@@ -1866,7 +1854,7 @@ function stravaImport() {
     var known = {};
     rows.forEach(function (a) { if (a.strava_id) known[String(a.strava_id)] = a; });
     var found = rowsIn.map(stravaRow).filter(Boolean);
-    var added = 0, linked = 0, tracks = 0, noTrack = 0, renamed = 0, cut = false;
+    var added = 0, linked = 0, tracks = 0, noTrack = 0, cut = false;
     for (var i = 0; i < found.length; i++) {
       if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
       var s = found[i];
@@ -1874,12 +1862,6 @@ function stravaImport() {
         /* a run this import added earlier without its track (the activities
            folder wasn't in Drive yet): try the track again */
         var k = known[s.sid];
-        /* a Strava name like "Ochtendhardloopsessie" that the first import
-           kept, and you haven't renamed since: tidied to the app's own */
-        if (String(k.id) === 'run-' + s.date + '-s' + s.sid && String(k.name) === s.raw && stravaGeneric(s.raw) && s.name !== s.raw) {
-          var nr = findRowById(ash, 'id', k.id);
-          if (nr > 0 && hm.name != null) { ash.getRange(nr, hm.name + 1).setValue(s.name); k.name = s.name; renamed++; }
-        }
         if (String(k.id) === 'run-' + s.date + '-s' + s.sid && !(Number(k.stream_v) > 0) && s.file) {
           var again = null;
           try { again = stravaTrack(s.file); } catch (e) { again = null; }
@@ -1891,7 +1873,8 @@ function stravaImport() {
               putK('efforts', sf.efforts); putK('hr_hist', sf.hr_hist); putK('route', sf.route);
               if (hm.drift_bpm != null) ash.getRange(row, hm.drift_bpm + 1).setValue(sf.drift_bpm == null ? '' : sf.drift_bpm);
               ash.getRange(row, hm.stream_v + 1).setValue(STREAM_V);
-              k.stream_v = STREAM_V; tracks++;
+              ash.getRange(row, hm.updated_at + 1).setNumberFormat('@').setValue(new Date().toISOString());   // so the app takes it
+              k.stream_v = STREAM_V; k.touched = true; tracks++;
             }
           } else if (!again) noTrack++;
         }
@@ -1920,12 +1903,26 @@ function stravaImport() {
       putActivity(act);
       rows.push(act); known[s.sid] = act; added++;
     }
+    /* Tracks read by the first version of the rerun didn't move updated_at,
+       so the app kept its older copy of those runs, without best efforts.
+       Once: touch every Strava run that has a track, so the app takes them. */
+    var props = PropertiesService.getScriptProperties();
+    if (!cut && props.getProperty('STRAVA_TOUCHED') !== '1') {
+      var stamp = new Date().toISOString(), touched = 0;
+      rows.forEach(function (a) {
+        if (!a.strava_id || !(Number(a.stream_v) > 0) || a.touched) return;
+        var at = findRowById(ash, 'id', a.id);
+        if (at > 0) { ash.getRange(at, hm.updated_at + 1).setNumberFormat('@').setValue(stamp); touched++; }
+      });
+      props.setProperty('STRAVA_TOUCHED', '1');
+      if (touched) Logger.log('Strava: ' + touched + ' runs with tracks marked as updated, so the app picks up their best efforts.');
+    }
     var inAll = rows.filter(function (a) { return a.strava_id; }).length;
     var msg = (cut ? 'Strava: stopped to stay inside Google\u2019s time limit. Press Run again. ' : 'Strava import complete. ') +
       inAll + ' runs in Groundwork now carry a Strava id. ' +
       'This run: ' + added + ' added, ' + tracks + ' tracks read for best efforts' +
       (noTrack ? ', ' + noTrack + ' without a track \u2014 the activities folder isn\u2019t in Drive, or the run was entered by hand' : '') +
-      ', ' + linked + ' linked to runs already here' + (renamed ? ', ' + renamed + ' Strava names tidied' : '') + '.';
+      ', ' + linked + ' linked to runs already here.';
     Logger.log(msg);
     return { complete: !cut, added: added, linked: linked, tracks: tracks, message: msg };
   } finally {
