@@ -1078,7 +1078,8 @@ time within a minute) is linked by `strava_id` and keeps its own figures; the
 rest are added. Tracks give best efforts and, where they carry heart rate, the
 heart-rate figures, through the same `streamFigures` and GPS-jump filter as
 watch files; a GPX's distance comes from its points. Strava's dates are UTC and
-become Oslo dates. 2014 phone GPS is noisier than a watch, so its short efforts
+become Oslo dates. Running it again is safe: nothing is added twice, and a run
+it added before its track was in Drive gets the track on the rerun. 2014 phone GPS is noisier than a watch, so its short efforts
 are the least trustworthy numbers in the app.
 
 ## Bests, results and sync

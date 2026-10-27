@@ -1858,7 +1858,27 @@ function stravaImport() {
     for (var i = 0; i < found.length; i++) {
       if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
       var s = found[i];
-      if (known[s.sid]) continue;
+      if (known[s.sid]) {
+        /* a run this import added earlier without its track (the activities
+           folder wasn't in Drive yet): try the track again */
+        var k = known[s.sid];
+        if (String(k.id) === 'run-' + s.date + '-s' + s.sid && !(Number(k.stream_v) > 0) && s.file) {
+          var again = null;
+          try { again = stravaTrack(s.file); } catch (e) { again = null; }
+          var sf = again && again.length > 10 ? streamFigures(again) : null;
+          if (sf) {
+            var row = findRowById(ash, 'id', k.id);
+            if (row > 0) {
+              var putK = function (col, v) { if (hm[col] != null) ash.getRange(row, hm[col] + 1).setNumberFormat('@').setValue(v == null ? '' : v); };
+              putK('efforts', sf.efforts); putK('hr_hist', sf.hr_hist); putK('route', sf.route);
+              if (hm.drift_bpm != null) ash.getRange(row, hm.drift_bpm + 1).setValue(sf.drift_bpm == null ? '' : sf.drift_bpm);
+              ash.getRange(row, hm.stream_v + 1).setValue(STREAM_V);
+              k.stream_v = STREAM_V; tracks++;
+            }
+          } else if (!again) noTrack++;
+        }
+        continue;
+      }
       var mine = garminMatch(s, rows);
       if (mine) {
         if (!mine.strava_id) {
@@ -1882,10 +1902,12 @@ function stravaImport() {
       putActivity(act);
       rows.push(act); known[s.sid] = act; added++;
     }
+    var inAll = rows.filter(function (a) { return a.strava_id; }).length;
     var msg = (cut ? 'Strava: stopped to stay inside Google\u2019s time limit. Press Run again. ' : 'Strava import complete. ') +
-      'This run: ' + added + ' added (' + tracks + ' with a track for best efforts' +
-      (noTrack ? ', ' + noTrack + ' without \u2014 the activities folder isn\u2019t in Drive, or the run was entered by hand' : '') +
-      '), ' + linked + ' linked to runs already here.';
+      inAll + ' runs in Groundwork now carry a Strava id. ' +
+      'This run: ' + added + ' added, ' + tracks + ' tracks read for best efforts' +
+      (noTrack ? ', ' + noTrack + ' without a track \u2014 the activities folder isn\u2019t in Drive, or the run was entered by hand' : '') +
+      ', ' + linked + ' linked to runs already here.';
     Logger.log(msg);
     return { complete: !cut, added: added, linked: linked, tracks: tracks, message: msg };
   } finally {
