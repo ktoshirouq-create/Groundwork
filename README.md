@@ -1070,8 +1070,8 @@ Training progress on Bests has an HRV row. Context only: it moves nothing.
 
 Jack's Strava goes back to 2014, phone-recorded, before his first watch run in
 September 2017. `stravaImport()`, run from the editor until it says complete,
-reads Strava's own export: the tab made from `activities.csv` (found by its
-header row, whatever it's called) and, if the archive's `activities` folder is
+reads Strava's own export: `activities.csv` straight from Google Drive (or,
+failing that, a tab made from it, found by its header row) and, if the archive's `activities` folder is
 in Drive, each run's track (`.gpx`, `.tcx`, `.fit`, gzipped or not, found by
 file name). Only runs. A run already here (same day; distance within 2% or
 time within a minute) is linked by `strava_id` and keeps its own figures; the
@@ -1093,6 +1093,60 @@ ranked like results: PB, 2nd or 3rd best ever, or best of its year
 **Sync with Garmin** lives on the home screen ("Garmin synced 09:00 · Sync
 now") and on pulling down at the top of home or Progress: it runs the Apps
 Script's check (new runs, resting HR, HRV, zones) and pulls.
+
+## Your routes (matched runs)
+
+Each run with a watch file or a GPS track keeps a route fingerprint (`route`):
+ten points at equal distances along it, rounded to about 10 m. Not the track:
+GPS is still never stored. Two runs are the same route when their distances
+are within 6% and every point lies within 150 m of the other's, either way
+round (`sameRoute`). A route with three runs or more appears under **Your
+routes** on Progress, and opens a screen with pace and heart rate for every run
+on it. Its comparison (easy runs at the start against easy runs now, the middle
+of up to three each) leaves out races, tests, trail, locked heart rate and runs
+tagged tempo or intervals: same course, so no terrain excuses. Stream v3
+added the fingerprint, so `garminEnrich` re-reads watch files once; the Strava
+import takes it from each track.
+
+## Years without heart rate
+
+A year whose runs carry no heart rate at all (phone-recorded, 2014) says so
+once at the top ("Recorded with a phone: no heart rate this year"). Time in
+zone and the by-heart-rate line stay away rather than standing empty, and
+**Pace through the year** stands in: the middle pace of each month's runs,
+labelled as plain pace, not aerobic pace.
+
+## Tagging
+
+Tags are set on the run screen: session chips (Easy, Long, Recovery, Steady,
+Tempo, Intervals, Race, Test) and terrain (Road, Trail, Mixed), saved on tap,
+tapped again to clear. `suggestTags` outlines a guess, never applied by itself:
+from the name first (Lactate → Test, tempo → Tempo, z2 → Easy, marathon →
+Race, 6x400 → Intervals, trail → Trail, mixed → Mixed), otherwise from heart
+rate (30%+ in Z4–Z5 → Tempo; 70%+ in Z1–Z2 → Easy, or Long from 15 km;
+between → Steady; with no lap heart rate, the run's average against the zones).
+
+**New runs** are asked about when they arrive: on opening the app and after a
+sync, a card shows the run with the guess outlined. A session tag saves and
+brings the next; terrain can be tapped first; **Later** puts it away until the
+app is next opened; **Not this one** leaves it untagged for good.
+
+**Older runs** (before `AUTO_TAG_BEFORE`, 26 Oct 2026) and runs set aside with
+"not this one" carry an **auto** tag (`autoSession`): worked out each time,
+never stored, shown as "EASY (AUTO)" and counted separately in year reviews.
+Only training tags are guessed; Race and Test are never auto, since they
+change what counts. Any tag you tap replaces the guess.
+
+**Mixed** terrain counts for aerobic pace like road, is ranked only against
+mixed runs of a similar length, and shows no race halves.
+
+## Splits
+
+The run screen's per-kilometre strip became **Splits**: kilometre, pace, a bar
+whose length is speed and whose colour is that kilometre's heart-rate zone,
+elevation (climbed minus descended, from the watch file's laps), and heart rate.
+The fastest whole kilometre is marked; a partial one shows its distance. Laps
+now carry `ascent_m` and `descent_m`, written at import and by `garminEnrich`.
 
 ## Settings that matter
 

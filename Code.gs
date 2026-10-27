@@ -60,19 +60,22 @@ var ACT_COLS = [
      file; and your override, 'trust', when you know the heart rate was fine */
   'hr_lock', 'hr_trust',
   /* written by the Strava import only: which Strava activity this run is */
-  'strava_id'
+  'strava_id',
+  /* a run's route, coarsely: ten points along it, for matching runs on the same course */
+  'route'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
-var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'strava_id'];
+var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'strava_id', 'route'];
 
-var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role'];
+/* ascent and descent per lap (Oct 2026), from the watch file, for splits */
+var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role', 'ascent_m', 'descent_m'];
 
 /* Columns that must never be coerced by Sheets. Dates stay strings — a date
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust', 'strava_id'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust', 'strava_id', 'route'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
@@ -300,13 +303,15 @@ function putActivity(act) {
     ash.getRange(at, hm[c] + 1).setNumberFormat('@');
   });
 
+  addMissingHeaders(lsh, LAP_COLS);
   clearLaps(lsh, act.id);
   var laps = act.laps || [];
   if (laps.length) {
     var rows = laps.map(function (l) {
       return objToRow(lsh, LAP_COLS, {
         activity_id: act.id, n: l.n, distance_km: l.distance_km,
-        time_s: l.time_s, avg_hr: l.avg_hr, role: l.role || 'main'
+        time_s: l.time_s, avg_hr: l.avg_hr, role: l.role || 'main',
+        ascent_m: l.ascent_m, descent_m: l.descent_m
       });
     });
     lsh.getRange(lsh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
@@ -616,7 +621,9 @@ function fitDecode(input) {
     if (d.gnum === 20 && rec[253] != null)
       out.records.push({ t: rec[253], d: rec[5] != null ? rec[5] / 100 : null, hr: rec[3] != null ? rec[3] : null,
         /* cadence: strides a minute in the file, steps a minute here */
-        spm: rec[4] != null ? Math.round((rec[4] + (rec[53] || 0) / 128) * 2) : null });
+        spm: rec[4] != null ? Math.round((rec[4] + (rec[53] || 0) / 128) * 2) : null,
+        /* position, semicircles to degrees; only used for a route's fingerprint */
+        lat: rec[0] != null ? rec[0] * (180 / 2147483648) : null, lon: rec[1] != null ? rec[1] * (180 / 2147483648) : null });
     return at;
   }
   return out;
@@ -642,7 +649,8 @@ function fitDecode(input) {
    moved during it; otherwise it is running time however long it is. And a
    step between two points faster than any runner (a GPS jump) adds no
    distance. */
-var STREAM_V = 2;
+/* v3 (Oct 2026): a route fingerprint is kept, for matched runs */
+var STREAM_V = 3;
 var EFFORT_M = [400, 1000, 1609, 5000, 10000, 21097, 42195];
 var FASTEST_S_PER_KM = 120;
 var PAUSE_S = 10;            // a gap longer than this might be a pause...
@@ -674,6 +682,29 @@ function streamClean(records) {
     if (hasD) { prevD = r[i].d; if (dist == null) dist = 0; }
   }
   return out;
+}
+
+/* Pure: a route's fingerprint. Ten points at equal distances along the run,
+   rounded to about 10 m, as "lat,lon;lat,lon;...". Not the track: enough to
+   tell one loop from another, nothing more. */
+var ROUTE_POINTS = 10;
+function routeOf(records) {
+  var r = (records || []).filter(function (x) { return x.lat != null && x.lon != null && isFinite(x.lat) && isFinite(x.lon); });
+  if (r.length < 20) return '';
+  var cum = [0];
+  for (var i = 1; i < r.length; i++) {
+    var step = haversine(r[i - 1], r[i]);
+    cum.push(cum[i - 1] + (step < 200 ? step : 0));          // a jump isn't the route
+  }
+  var total = cum[cum.length - 1];
+  if (total < 500) return '';
+  var out = [], j = 0;
+  for (var k = 0; k < ROUTE_POINTS; k++) {
+    var want = total * k / (ROUTE_POINTS - 1);
+    while (j < cum.length - 1 && cum[j] < want) j++;
+    out.push(r[j].lat.toFixed(4) + ',' + r[j].lon.toFixed(4));
+  }
+  return out.join(';');
 }
 
 function streamFigures(records) {
@@ -719,7 +750,7 @@ function streamFigures(records) {
     if (secs[0] && secs[1]) driftBpm = Math.round(sums[1] / secs[1] - sums[0] / secs[0]);
   }
   return { efforts: Object.keys(efforts).length ? JSON.stringify(efforts) : '',
-           hr_hist: histStr, drift_bpm: driftBpm };
+           hr_hist: histStr, drift_bpm: driftBpm, route: routeOf(records) };
 }
 
 /* Trail by Garmin's own activity type; anything else is left for you. */
@@ -759,6 +790,8 @@ function garminActivity(j, fit) {
              distance_km: l[9] != null ? r2(l[9] / 100000) : null,
              time_s: l[8] != null ? Math.round(l[8] / 1000) : null,
              avg_hr: l[15] != null ? l[15] : null,
+             ascent_m: l[21] != null ? l[21] : null,
+             descent_m: l[22] != null ? l[22] : null,
              role: 'main' };
   }).filter(function (l) { return l.distance_km > 0 && l.time_s > 0; });
   var now = new Date().toISOString();
@@ -781,6 +814,7 @@ function garminActivity(j, fit) {
     garmin_id: gid,
     max_hr: s[17] != null ? s[17] : null,
     efforts: st ? st.efforts : '',
+    route: st ? st.route : '',
     hr_hist: st ? st.hr_hist : '',
     drift_bpm: st ? st.drift_bpm : null,
     stream_v: STREAM_V,
@@ -1427,6 +1461,7 @@ function garminEnrich() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var ash = ss.getSheetByName(SHEETS.activities), lsh = ss.getSheetByName(SHEETS.laps);
     addMissingHeaders(ash, ACT_COLS);
+    addMissingHeaders(lsh, LAP_COLS);
     var hm = headerMap(ash);
     var todo = readAll(ash, ACT_COLS).filter(function (a) {
       return a.garmin_id && !(Number(a.stream_v) >= STREAM_V);
@@ -1453,13 +1488,13 @@ function garminEnrich() {
         FILL_IF_EMPTY.forEach(function (c) { if (empty(c) && g[c] != null) put(c, g[c]); });
         /* Garmin's trail type only where you haven't said road or trail yourself */
         if (empty('terrain') && g.terrain) put('terrain', g.terrain);
-        put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm);
+        put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm); put('route', g.route);
         if (String(a.id).indexOf('-g' + a.garmin_id) >= 0) put('temp_c', null);   // imported: wrist sensor out
         if (g.laps.length) {
           clearLaps(lsh, a.id);
           var rows = g.laps.map(function (l) {
             return objToRow(lsh, LAP_COLS, { activity_id: a.id, n: l.n, distance_km: l.distance_km,
-              time_s: l.time_s, avg_hr: l.avg_hr, role: 'main' });
+              time_s: l.time_s, avg_hr: l.avg_hr, role: 'main', ascent_m: l.ascent_m, descent_m: l.descent_m });
           });
           lsh.getRange(lsh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
         }
@@ -1663,8 +1698,8 @@ function garminHrvHistory() {
 /* ================================================================ Strava ===
 
    Run stravaImport() from the editor, once (press Run until it says done).
-   It reads Strava's own export: the tab made from activities.csv (found by its
-   header, whatever the tab is called) and, if the archive's "activities"
+   It reads Strava's own export: activities.csv straight from Google Drive
+   (or, failing that, a tab made from it, found by its header) and, if the archive's "activities"
    folder is in Drive, each run's track. Only runs are taken. A run already in
    Groundwork (same day; distance within 2% or time within a minute) is linked,
    not duplicated, and keeps its own figures; the rest are added, marked with
@@ -1724,7 +1759,19 @@ function stravaRow(r) {
 /* the export's rows as objects; Strava repeats some column names, and the
    second "Distance" is metres, so it is kept as "Distance (m)" */
 function stravaRows(sh) {
-  var vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  return stravaRowsFrom(sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues());
+}
+
+/* activities.csv straight from Drive, as Strava wrote it: no spreadsheet in
+   between to turn its UTC dates into local ones */
+function stravaCsv() {
+  var it = DriveApp.getFilesByName('activities.csv');
+  if (!it.hasNext()) return null;
+  var vals = Utilities.parseCsv(it.next().getBlob().getDataAsString('UTF-8').replace(/^\uFEFF/, ''));
+  return vals.length > 1 && vals[0].indexOf('Activity ID') >= 0 ? stravaRowsFrom(vals) : null;
+}
+
+function stravaRowsFrom(vals) {
   var head = vals[0].map(String), keys = [], seen = {};
   head.forEach(function (h) {
     if (seen[h]) keys.push(h === 'Distance' ? 'Distance (m)' : h + ' (' + (++seen[h]) + ')');
@@ -1756,7 +1803,9 @@ function trackRecords(text) {
       var t = /<Time>([^<]+)<\/Time>/.exec(b), d = /<DistanceMeters>([^<]+)<\/DistanceMeters>/.exec(b);
       var hr = /<HeartRateBpm>[\s\S]*?<Value>([^<]+)<\/Value>/.exec(b);
       if (!t) continue;
-      out.push({ t: Date.parse(t[1]) / 1000, d: d ? Number(d[1]) : null, hr: hr ? Math.round(Number(hr[1])) : null });
+      var la = /<LatitudeDegrees>([^<]+)</.exec(b), lo = /<LongitudeDegrees>([^<]+)</.exec(b);
+      out.push({ t: Date.parse(t[1]) / 1000, d: d ? Number(d[1]) : null, hr: hr ? Math.round(Number(hr[1])) : null,
+                 lat: la ? Number(la[1]) : null, lon: lo ? Number(lo[1]) : null });
     }
   } else {
     var rp = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g, p, prev = null, dist = 0;
@@ -1767,12 +1816,12 @@ function trackRecords(text) {
       var pt = { lat: Number(lat[1]), lon: Number(lon[1]) };
       if (prev) dist += haversine(prev, pt);
       prev = pt;
-      out.push({ t: Date.parse(tm[1]) / 1000, d: dist, hr: h2 ? Number(h2[1]) : null });
+      out.push({ t: Date.parse(tm[1]) / 1000, d: dist, hr: h2 ? Number(h2[1]) : null, lat: pt.lat, lon: pt.lon });
     }
   }
   if (!out.length) return out;
   var t0 = out[0].t;
-  return out.map(function (r) { return { t: r.t - t0, d: r.d, hr: r.hr }; });
+  return out.map(function (r) { return { t: r.t - t0, d: r.d, hr: r.hr, lat: r.lat, lon: r.lon }; });
 }
 
 /* a file named in the export, found in Drive by its name */
@@ -1789,8 +1838,13 @@ function stravaTrack(filename) {
 
 function stravaImport() {
   var started = Date.now();
-  var sh = stravaSheet();
-  if (!sh) throw new Error('No tab with Strava\u2019s activities.csv found (looking for Activity ID, Activity Type and Filename in the first row).');
+  /* the csv file in Drive if it's there, else a tab made from it */
+  var sh = null, rowsIn = stravaCsv();
+  if (!rowsIn) {
+    sh = stravaSheet();
+    if (!sh) throw new Error('Strava\u2019s activities.csv not found: put the file in Google Drive (or import it as a tab).');
+    rowsIn = stravaRows(sh);
+  }
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(60000)) throw new Error('The hourly check is running \u2014 try again in a minute.');
   try {
@@ -1799,7 +1853,7 @@ function stravaImport() {
     var hm = headerMap(ash), rows = readAll(ash, ACT_COLS);
     var known = {};
     rows.forEach(function (a) { if (a.strava_id) known[String(a.strava_id)] = a; });
-    var found = stravaRows(sh).map(stravaRow).filter(Boolean);
+    var found = rowsIn.map(stravaRow).filter(Boolean);
     var added = 0, linked = 0, tracks = 0, noTrack = 0, cut = false;
     for (var i = 0; i < found.length; i++) {
       if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
@@ -1823,7 +1877,7 @@ function stravaImport() {
       try { rec = stravaTrack(s.file); } catch (e) { rec = null; }
       if (rec && rec.length > 10) {
         var st = streamFigures(rec);
-        if (st) { act.efforts = st.efforts; act.hr_hist = st.hr_hist; act.drift_bpm = st.drift_bpm; act.stream_v = STREAM_V; tracks++; }
+        if (st) { act.efforts = st.efforts; act.hr_hist = st.hr_hist; act.drift_bpm = st.drift_bpm; act.route = st.route; act.stream_v = STREAM_V; tracks++; }
       } else noTrack++;
       putActivity(act);
       rows.push(act); known[s.sid] = act; added++;

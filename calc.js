@@ -746,7 +746,9 @@
       distance_km: toNumber(l && l.distance_km),
       time_s: toNumber(l && l.time_s),
       avg_hr: toNumber(l && l.avg_hr),
-      role: (l && l.role) || 'main'
+      role: (l && l.role) || 'main',
+      ascent_m: toNumber(l && l.ascent_m),
+      descent_m: toNumber(l && l.descent_m)
     })).filter(l => l.distance_km != null && l.time_s != null);
     return out;
   }
@@ -1615,16 +1617,34 @@
     let mix = null;
     if (n >= REVIEW_MIN.mix) {
       const counts = {};
-      inP.forEach(a => { const k = sessionOf(a.session) ? a.session : 'untagged';
-                         counts[k] = (counts[k] || 0) + 1; });
-      const order = SESSIONS.map(s => s.key).concat(['untagged']);
-      mix = Object.keys(counts).map(k => ({ key: k,
-        label: k === 'untagged' ? 'untagged' : sessionLabel(k).toLowerCase(), count: counts[k] }))
+      /* your tags as they are; an older untagged run counts under the app's
+         guess, kept separate and marked as such */
+      inP.forEach(a => {
+        const auto = !sessionOf(a.session) ? autoSession(a, c) : null;
+        const k = sessionOf(a.session) ? a.session : auto ? 'auto:' + auto : 'untagged';
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      const order = SESSIONS.map(s => s.key).concat(SESSIONS.map(s => 'auto:' + s.key)).concat(['untagged']);
+      mix = Object.keys(counts).map(k => ({ key: k, auto: k.indexOf('auto:') === 0,
+        label: k === 'untagged' ? 'untagged' : k.indexOf('auto:') === 0 ? sessionLabel(k.slice(5)).toLowerCase() + ' (auto)'
+          : sessionLabel(k).toLowerCase(), count: counts[k] }))
         .sort((a, b) => b.count - a.count || order.indexOf(a.key) - order.indexOf(b.key));
     }
 
+    /* a year recorded without heart rate (a phone, 2014) says so once, and
+       its heart-rate cards stay away rather than standing empty */
+    const noHr = n > 0 && !inP.some(a => a.avg_hr != null || (a.hr_hist && a.hr_hist.length) || (a.laps || []).some(l => l.avg_hr != null));
     /* ---- the same runs read by heart rate alone, beside the tags ---- */
-    const byHr = mix ? effortMix(inP, c) : null;
+    const byHr = mix && !noHr ? effortMix(inP, c) : null;
+    /* ---- with no heart rate, plain pace month by month stands in ---- */
+    let paceMonths = null;
+    if (noHr && scope === 'year') {
+      const runPace = a => a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
+      const g = {};
+      inP.forEach(a => { const p = runPace(a); if (p > 0) (g[a.date.slice(0, 7)] = g[a.date.slice(0, 7)] || []).push(p); });
+      const pts = Object.keys(g).sort().map(k => ({ date: k + '-15', value: median(g[k]), n: g[k].length }));
+      if (pts.length >= 2) paceMonths = pts;
+    }
 
     /* ---- zones: the period's own split, no rolling window, no "usual" ---- */
     const laps = lapsOf(inP);
@@ -1663,6 +1683,8 @@
       bests: bests,
       mix: mix,
       byHr: byHr,
+      noHr: noHr,
+      paceMonths: paceMonths,
       zones: {
         tz: tz, zoned: zoned, unknown: tz.unknown,
         elapsed: summary.elapsed_s,
@@ -1718,6 +1740,9 @@
   /* Terrain: road unless said otherwise. Set from Garmin's "Trail Run" type
      at import, or by hand on the run. */
   function isTrail(a) { return !!a && a.terrain === 'trail'; }
+  /* road, trail or mixed. Mixed counts for aerobic pace like road (Jack's
+     call, Oct 2026), but is ranked only against mixed runs. */
+  function terrainOf(a) { return a && (a.terrain === 'trail' || a.terrain === 'mixed') ? a.terrain : 'road'; }
 
   /* What counts as a measurement of aerobic pace. A race is run to a
      different brief, and a technical trail is slow for reasons that have
@@ -1754,14 +1779,14 @@
     if (!act || act.distance_km == null || hrLocked(act) || isTest(act)) return null;
     const mine = aerobicPace(act, cfg);
     if (mine == null) return null;
-    const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2, trail = isTrail(act);
+    const lo = act.distance_km * 0.8, hi = act.distance_km * 1.2, trail = isTrail(act), ground = terrainOf(act);
     const peers = (all || [])
       .filter(x => x.type === 'run' && x.id !== act.id && x.avg_hr != null && !hrLocked(x) && !isTest(x) &&
-                   x.distance_km >= lo && x.distance_km <= hi && isTrail(x) === trail)
+                   x.distance_km >= lo && x.distance_km <= hi && terrainOf(x) === ground)
       .map(x => ({ act: x, pace: aerobicPace(x, cfg) }))
       .filter(x => x.pace != null)
       .sort((p, q) => p.pace - q.pace);
-    return { mine: mine, peers: peers, lo: lo, hi: hi, trail: trail };
+    return { mine: mine, peers: peers, lo: lo, hi: hi, trail: trail, ground: ground };
   }
 
   /* ---------- best efforts ----------
@@ -2209,6 +2234,129 @@
     return out;
   }
 
+  /* ---------- matched runs: the same route, run again ----------
+
+     Each run with a watch file or a GPS track carries a route fingerprint:
+     ten points at equal distances along it. Two runs are the same route when
+     their distances are within 6% and every point lies within 150 m of the
+     other run's, either way round (a loop run backwards is the same loop).
+     A route with three runs or more is worth comparing: same course, so no
+     terrain excuses. */
+  const ROUTE = { distTol: 0.06, pointM: 150, minRuns: 3 };
+
+  function routePoints(a) {
+    const r = a && a.route;
+    if (!r || typeof r !== 'string') return null;
+    const pts = r.split(';').map(p => p.split(',').map(Number)).filter(p => p.length === 2 && isFinite(p[0]) && isFinite(p[1]));
+    return pts.length >= 5 ? pts : null;
+  }
+  function metres(p, q) {
+    const R = 6371000, toR = Math.PI / 180;
+    const dLat = (q[0] - p[0]) * toR, dLon = (q[1] - p[1]) * toR;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(p[0] * toR) * Math.cos(q[0] * toR) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+  }
+  function sameRoute(a, b) {
+    const pa = routePoints(a), pb = routePoints(b);
+    if (!pa || !pb || pa.length !== pb.length) return false;
+    if (Math.abs(a.distance_km - b.distance_km) > ROUTE.distTol * Math.max(a.distance_km, b.distance_km)) return false;
+    const fwd = pa.every((p, i) => metres(p, pb[i]) <= ROUTE.pointM);
+    return fwd || pa.every((p, i) => metres(p, pb[pb.length - 1 - i]) <= ROUTE.pointM);
+  }
+
+  function routesModel(acts, cfg) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a) && routePoints(a))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const groups = [];
+    runs.forEach(a => {
+      const g = groups.find(g => sameRoute(g.runs[0], a));
+      if (g) g.runs.push(a); else groups.push({ runs: [a] });
+    });
+    const pace = a => a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
+    const named = {};
+    return groups.filter(g => g.runs.length >= ROUTE.minRuns).map(g => {
+      const km = median(g.runs.map(a => a.distance_km));
+      const base = km.toFixed(1) + ' km route';
+      named[base] = (named[base] || 0) + 1;
+      /* first against latest: easy runs only, as aerobic pace is everywhere */
+      const isEasy = a => isAerobicMeasure(a) && a.session !== 'tempo' && a.session !== 'intervals';
+      const easy = g.runs.filter(a => isEasy(a) && a.avg_hr != null);
+      const side = arr => arr.length ? { pace: median(arr.map(pace)), hr: Math.round(median(arr.map(a => a.avg_hr))), from: arr[0].date, to: arr[arr.length - 1].date } : null;
+      const n = Math.min(3, Math.floor(easy.length / 2));
+      return {
+        key: g.runs[0].id, name: base + (named[base] > 1 ? ' (' + named[base] + ')' : ''), km: km,
+        runs: g.runs.slice().reverse(), count: g.runs.length, first: g.runs[0].date, last: g.runs[g.runs.length - 1].date,
+        then: n ? side(easy.slice(0, n)) : null, now: n ? side(easy.slice(-n)) : null,
+        points: g.runs.map(a => ({ id: a.id, date: a.date, pace: pace(a), hr: a.avg_hr, easy: isEasy(a), session: a.session || null }))
+      };
+    }).sort((a, b) => b.count - a.count || b.last.localeCompare(a.last));
+  }
+
+  /* ---------- a suggested tag ----------
+
+     Never applied by itself: an outlined chip you confirm with a tap. From
+     the name first (you named it), then from heart rate. Terrain only from
+     the name, since the watch data can't tell road from trail. */
+  function suggestTags(act, cfg) {
+    if (!act) return { session: null, terrain: null };
+    const n = String(act.name || '');
+    let session = null;
+    if (/lactate|threshold|field test|\btest\b/i.test(n)) session = 'test';
+    else if (/\brace\b|marathon|maraton|stafett|toughest|parkrun/i.test(n)) session = 'race';
+    else if (/interval|\breps\b|\d+\s?x\s?\d|\bx\d/i.test(n)) session = 'intervals';
+    else if (/tempo/i.test(n)) session = 'tempo';
+    else if (/recovery|restitusjon/i.test(n)) session = 'recovery';
+    else if (/\blong\b|langtur/i.test(n)) session = 'long';
+    else if (/\bz2\b|easy|rolig/i.test(n)) session = 'easy';
+    else if (/steady/i.test(n)) session = 'steady';
+    if (!session) {
+      const tz = timeInZone(zoneLaps(act), zoneBounds(cfg));
+      const tot = [1, 2, 3, 4, 5].reduce((t, z) => t + tz[z], 0);
+      if (tot) {
+        const easy = (tz[1] + tz[2]) / tot, hard = (tz[4] + tz[5]) / tot;
+        if (hard >= 0.3) session = 'tempo';
+        else if (easy >= 0.7) session = act.distance_km >= 15 ? 'long' : 'easy';
+        else session = 'steady';
+      } else if (act.avg_hr != null && !hrLocked(act)) {
+        /* no laps with heart rate: the run's average alone, read against the zones */
+        const b = zoneBounds(cfg);
+        session = act.avg_hr >= b.z4 ? 'tempo' : act.avg_hr < b.z3 ? (act.distance_km >= 15 ? 'long' : 'easy') : 'steady';
+      }
+    }
+    const terrain = /mixed/i.test(n) ? 'mixed' : /trail|\bsti\b|skog|terreng/i.test(n) ? 'trail' : null;
+    return { session: session, terrain: terrain };
+  }
+
+  /* Runs from before tagging moved to the run screen are guessed, never
+     stored: the guess is worked out each time, marked "auto" wherever it
+     shows, and any tag you tap replaces it. Only training tags are guessed;
+     Race and Test change what counts, so they are never auto. A run you've
+     told the app to leave ("not this one") gets the same treatment. */
+  const AUTO_TAG_BEFORE = '2026-10-26';
+  const AUTO_SESSIONS = ['easy', 'long', 'steady', 'tempo', 'intervals', 'recovery'];
+  function autoSession(a, cfg, dismissed) {
+    if (!a || a.type !== 'run' || sessionOf(a.session)) return null;
+    if (!(a.date < AUTO_TAG_BEFORE || (dismissed && dismissed[a.id]))) return null;
+    const g = suggestTags(a, cfg).session;
+    return AUTO_SESSIONS.indexOf(g) >= 0 ? g : null;
+  }
+
+  /* ---------- splits: a run kilometre by kilometre ---------- */
+  function splitsOf(act) {
+    const laps = (act && act.laps || []).filter(l => l.time_s > 0 && l.distance_km > 0)
+      .slice().sort((a, b) => a.n - b.n);
+    if (laps.length < 2) return null;
+    const rows = laps.map(l => ({
+      n: l.n, km: l.distance_km, partial: l.distance_km < 0.95 || l.distance_km > 1.05,
+      pace: l.time_s / l.distance_km, hr: l.avg_hr,
+      elev: l.ascent_m != null || l.descent_m != null ? Math.round((l.ascent_m || 0) - (l.descent_m || 0)) : null
+    }));
+    const whole = rows.filter(r => !r.partial);
+    const fastest = whole.length ? whole.slice().sort((a, b) => a.pace - b.pace)[0].n : null;
+    const fast = Math.min.apply(null, rows.map(r => r.pace)), slow = Math.max.apply(null, rows.map(r => r.pace));
+    return { rows: rows, fastest: fastest, fast: fast, slow: slow, hasElev: rows.some(r => r.elev != null) };
+  }
+
   /* ---------- the Best-of page ----------
 
      Everything here is all-time, so nothing depends on which period the home
@@ -2437,7 +2585,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, autoSession, AUTO_TAG_BEFORE, suggestTags, splitsOf, terrainOf, routesModel, sameRoute, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

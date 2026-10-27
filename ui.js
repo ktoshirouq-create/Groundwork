@@ -601,6 +601,7 @@
     Store.checkGarmin().then(st => {
       syncing = false;
       render(el('view-resting').hidden ? 'home' : 'resting');
+      promptNewRuns();
       toast(st && st.state === 'ok' ? 'Up to date with Garmin' : 'Garmin sync failed \u2014 see Setup', st && st.state === 'ok' ? 'ok' : 'bad');
     }).catch(() => { syncing = false; render('home'); toast('Couldn\u2019t reach the sheet', 'bad'); });
   }
@@ -626,6 +627,141 @@
      ago, then the occasional notable fact. */
   /* Training progress, top of Progress: one sentence, three rows, and a line
      pointing to Recovery for the body's side (its numbers live there only). */
+  /* ------------------------------------------------------------- tagging --- */
+
+  /* Session and terrain chips, saved on tap. The app's guess is outlined and
+     never applied by itself. */
+  function tagChipsHTML(a, pfx) {
+    const S = Calc.suggestTags(a, Store.config());
+    const chip = (kind, key, label, on, sugg) => '<button class="chip' + (sugg && !on ? ' sugg' : '') + '" type="button" data-' + kind +
+      '="' + key + '" aria-pressed="' + on + '">' + label + '</button>';
+    return '<div class="tags" id="' + pfx + '-tags"><div class="bar wrap">' +
+      Calc.SESSIONS.map(x => chip('ts', x.key, x.label, a.session === x.key, S.session === x.key)).join('') +
+      '</div><div class="bar wrap">' +
+      [['road', 'Road'], ['trail', 'Trail'], ['mixed', 'Mixed']].map(t =>
+        chip('tt', t[0], t[1], Calc.terrainOf(a) === t[0], S.terrain === t[0])).join('') +
+      '</div>' + (S.session && !a.session ? '<div class="est">' + (Calc.autoSession(a, Store.config(), dismissedTags())
+        ? 'Auto-tagged as ' + Calc.sessionLabel(Calc.autoSession(a, Store.config(), dismissedTags())).toLowerCase() +
+          ' \u2014 the app\u2019s guess, outlined. Tap any tag to set your own.'
+        : 'Outlined: the app\u2019s guess. Tap to confirm.') + '</div>' : '') + '</div>';
+  }
+
+  function bindTagChips(a, pfx, after) {
+    const save = patch => {
+      const next = Object.assign({}, a, patch, { updated_at: new Date().toISOString() });
+      Store.put(next).then(() => after && after(next));
+    };
+    document.querySelectorAll('#' + pfx + '-tags [data-ts]').forEach(b => {
+      b.onclick = () => save({ session: a.session === b.dataset.ts ? null : b.dataset.ts });
+    });
+    document.querySelectorAll('#' + pfx + '-tags [data-tt]').forEach(b => {
+      b.onclick = () => save({ terrain: b.dataset.tt });
+    });
+  }
+
+  /* Runs you've told the app to leave untagged ("not this one"). A UI
+     choice, kept on this phone. */
+  const DISMISS_KEY = 'groundwork:tag-dismissed';
+  function dismissedTags() { try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}'); } catch (e) { return {}; } }
+  function dismissTag(id) { const d = dismissedTags(); d[id] = 1; localStorage.setItem(DISMISS_KEY, JSON.stringify(d)); }
+
+  /* New runs from Garmin, asked about when they arrive: on opening the app
+     and after a sync. "Later" puts the card away until the app is next
+     opened; "not this one" leaves the run untagged for good (it then gets
+     an auto guess like older runs). */
+  let laterThisVisit = {};
+  function newUntagged() {
+    const d = dismissedTags();
+    return Store.all().filter(a => a.type === 'run' && !a.session && a.date >= Calc.AUTO_TAG_BEFORE && !d[a.id] && !laterThisVisit[a.id])
+      .sort((x, y) => x.date.localeCompare(y.date));
+  }
+
+  function promptNewRuns() {
+    const box = el('tagprompt');
+    if (!box) return;
+    const left = newUntagged();
+    if (!left.length) { box.hidden = true; box.innerHTML = ''; return; }
+    const a = left[0];
+    box.innerHTML = '<div class="tpcard"><div class="tphead">New run' + (left.length > 1 ? ' \u00b7 1 of ' + left.length : '') + '</div>' +
+      '<div class="rvname">' + esc(a.name) + ' <span>\u00b7 ' + fmtDate(a.date) + ' \u00b7 ' + (a.distance_km || 0).toFixed(2) + ' km \u00b7 ' +
+      Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)) + '/km' + (a.avg_hr != null ? ' \u00b7 ' + a.avg_hr + ' bpm' : '') + '</span></div>' +
+      '<div class="est">What was it?</div>' + tagChipsHTML(a, 'n') +
+      '<div class="tpbtns"><button type="button" class="btn ghost" id="n-later">Later</button>' +
+      '<button type="button" class="btn ghost" id="n-never">Not this one</button></div></div>';
+    box.hidden = false;
+    /* a session tag closes it (or brings the next); terrain stays, so both can be set */
+    bindTagChips(a, 'n', next => { promptNewRuns(); if (!el('view-detail').hidden) renderDetail(next.id); else if (!el('view-home').hidden) render('home'); });
+    el('n-later').onclick = () => { laterThisVisit[a.id] = 1; promptNewRuns(); };
+    el('n-never').onclick = () => { dismissTag(a.id); promptNewRuns(); };
+  }
+
+  /* ------------------------------------------------------------- splits --- */
+
+  /* A run kilometre by kilometre: bar length is speed, bar colour is that
+     kilometre's heart-rate zone, so pace and effort read in one row. */
+  function kmSplitsHTML(a, bounds) {
+    const S = Calc.splitsOf(a);
+    if (!S) return '';
+    const span = Math.max(1, S.slow - S.fast);
+    const zone = hr => hr == null ? 'none' : hr >= bounds.z5 ? 'z5' : hr >= bounds.z4 ? 'z4' : hr >= bounds.z3 ? 'z3' : hr >= bounds.z2 ? 'z2' : 'z1';
+    let h = '<div class="sec"><span>Splits</span><span>bar: speed \u00b7 colour: zone</span></div><div class="splits">' +
+      '<div class="sp head"><span>km</span><span>pace</span><span></span>' + (S.hasElev ? '<span>elev</span>' : '') + '<span>hr</span></div>';
+    h += S.rows.map(r => {
+      const w = 35 + 65 * (S.slow - r.pace) / span;           // faster is longer
+      return '<div class="sp' + (r.n === S.fastest ? ' best' : '') + (r.partial ? ' part' : '') + '">' +
+        '<span>' + (r.partial ? r.km.toFixed(2) : r.n) + '</span><span>' + Calc.fmtPace(r.pace) + '</span>' +
+        '<span><i class="spb ' + zone(r.hr) + '" style="width:' + w.toFixed(1) + '%"></i></span>' +
+        (S.hasElev ? '<span>' + (r.elev == null ? '' : (r.elev > 0 ? '+' : '') + r.elev) + '</span>' : '') +
+        '<span>' + (r.hr == null ? '\u2013' : r.hr) + '</span></div>';
+    }).join('');
+    return h + '</div>' + (S.fastest ? '<div class="est">Fastest whole kilometre marked. A partial kilometre shows its distance.</div>' : '');
+  }
+
+  /* ------------------------------------------------------------- routes --- */
+
+  /* the same course run again: easy runs then against easy runs now */
+  function routeLine(R) {
+    if (!R.then || !R.now) return R.count + ' runs';
+    const d = Calc.changeOf(R.now.pace, R.then.pace, 'down', 'aerobic');
+    return Calc.fmtPace(R.then.pace) + ' \u2192 ' + Calc.fmtPace(R.now.pace) + '/km' +
+      (d && !d.same ? ' <span class="delta ' + d.tone + '">' + (d.diff < 0 ? '\u25bc ' : '\u25b2 ') + Math.round(Math.abs(d.diff)) + ' s</span>' : ' \u00b7 about the same') +
+      ' \u00b7 ' + R.then.hr + ' \u2192 ' + R.now.hr + ' bpm';
+  }
+
+  function routesHTML(RS) {
+    if (!RS || !RS.length) return '';
+    return '<div class="sec"><span>Your routes</span><span>run 3 times or more</span></div>' +
+      RS.slice(0, 6).map(R => '<div class="cmp" data-route="' + esc(R.key) + '"><span class="k">' + esc(R.name) +
+        '</span><span class="v">' + R.count + ' runs<s>' + routeLine(R) + '</s></span></div>').join('') +
+      '<div class="est">Runs on the same course, matched from the watch\u2019s track. The arrow compares your easy runs at the start and now: same course, so no terrain excuses.</div>';
+  }
+
+  function renderRoute(key) {
+    const R = Calc.routesModel(Store.all(), Store.config()).find(x => x.key === key);
+    let h = '<div class="back" data-back="1">\u2190 Progress</div>';
+    if (!R) { el('view-route').innerHTML = h + '<div class="est">That route isn\u2019t there any more.</div>';
+      $('#view-route [data-back]').onclick = () => go('resting'); return; }
+    h += '<div class="ttl">' + esc(R.name) + '</div><div class="sub">' + R.count + ' RUNS \u00b7 ' +
+      fmtDate(R.first).toUpperCase() + ' \u2013 ' + fmtDate(R.last).toUpperCase() + '</div>';
+    if (R.then && R.now) h += '<div class="psum">Easy runs here went from ' + Calc.fmtPace(R.then.pace) + '/km at ' + R.then.hr +
+      ' bpm (' + fmtDate(R.then.from) + ') to ' + Calc.fmtPace(R.now.pace) + '/km at ' + R.now.hr + ' bpm (' + fmtDate(R.now.to) + ').</div>';
+    const P = R.points;
+    const pace = lineChart([P.map(p => ({ date: p.date, value: p.pace }))], { invert: true, uniform: true, height: 120,
+      format: v => Calc.fmtPace(v), anchorLabels: ['fastest', 'slowest'], label: 'Pace on this route, each run.',
+      xax: [fmtDate(P[0].date).toUpperCase(), '', fmtDate(P[P.length - 1].date).toUpperCase()] });
+    const withHr = P.filter(p => p.hr != null);
+    const hr = withHr.length >= 2 ? lineChart([withHr.map(p => ({ date: p.date, value: p.hr }))], { uniform: true, height: 90,
+      format: v => Math.round(v) + '', anchorLabels: ['bpm', 'bpm'], label: 'Average heart rate on this route, each run.',
+      from: P[0].date, to: P[P.length - 1].date, xax: [fmtDate(P[0].date).toUpperCase(), '', fmtDate(P[P.length - 1].date).toUpperCase()] }) : '';
+    h += '<div class="pl2">Pace each run</div>' + (pace || '') + (hr ? '<div class="pl2">Heart rate each run</div>' + hr : '');
+    h += '<div class="est">Every run on this course. Tempo runs and tests sit faster and higher \u2014 the comparison above uses easy runs only.</div>';
+    const bounds = Calc.zoneBounds(Store.config());
+    h += '<div class="sec"><span>Runs</span><span>' + R.count + '</span></div>' + R.runs.map(a => runRow(a, bounds, true)).join('');
+    el('view-route').innerHTML = h;
+    $('#view-route [data-back]').onclick = () => go('resting');
+    document.querySelectorAll('#view-route [data-id]').forEach(r => { r.style.cursor = 'pointer'; r.onclick = () => go('detail', r.dataset.id); });
+  }
+
   /* threshold tests, newest first, each against the one before */
   function testsHTML(tests) {
     let h = '';
@@ -937,7 +1073,7 @@
       R.drift == null ? '' : Calc.driftIsFlat(R.drift) ? 'drift flat'
         : 'drift ' + (R.drift > 0 ? '+' : '') + R.drift);
     /* on a trail or obstacle course the split is the course, not your pacing */
-    if (R.halves && !Calc.isTrail(a)) {
+    if (R.halves && Calc.terrainOf(a) === 'road') {
       const H = R.halves;
       h += cmp('Halves', Calc.fmtPace(H.first) + ' \u2192 ' + Calc.fmtPace(H.second),
         H.shape === 'even' ? 'even' : H.shape === 'positive'
@@ -1074,6 +1210,8 @@
     const s = m.summary, P = m.previous;
     let h = '';
 
+    if (m.noHr) h += '<div class="est nohr">Recorded with a phone: no heart rate this year.</div>';
+
     /* races first: in a finished year they are the headline */
     if (m.races.length) {
       h += '<div class="sec"><span>' + (m.races.length === 1 ? 'Race' : 'Races') +
@@ -1114,7 +1252,18 @@
         (E.unknown ? '<span><b>' + E.unknown + '</b> no heart rate</span>' : '') + '</div>' +
         '<div class="est">By heart rate alone: easy is 70% or more of the time in Z1\u2013Z2, hard is 30% or more in Z4\u2013Z5. Your tags are untouched.</div>';
     }
-    h += zonesHTML(m.zones, bounds);
+    /* a year recorded without heart rate: no empty heart-rate cards */
+    if (!m.noHr) h += zonesHTML(m.zones, bounds);
+
+    if (m.paceMonths) {
+      const PMo = m.paceMonths;
+      h += '<div class="sec"><span>Pace through the year</span><span>month by month</span></div>' +
+        (lineChart([PMo.map(p => ({ date: p.date, value: p.value }))], { invert: true, uniform: true, height: 120,
+          from: m.period.key + '-01-01', to: m.period.key + '-12-31', format: v => Calc.fmtPace(v), anchorLabels: ['fastest', 'slowest'],
+          label: 'The middle pace of each month\u2019s runs.', xax: ['JAN', 'JUL', 'DEC'] }) || '') +
+        '<div class="est">The middle pace of each month\u2019s runs. Plain pace, not aerobic pace: without heart rate, ' +
+        'effort and terrain aren\u2019t accounted for.</div>';
+    }
 
     if (!m.trend.absent) {
       const T = m.trend;
@@ -1173,10 +1322,10 @@
     const P = Calc.lengthPeers(a, Store.all(), Store.config());
     if (!P) return '';
     const mine = P.mine, peers = P.peers, lo = P.lo, hi = P.hi;
-    if (!peers.length) return P.trail
-      ? '<div class="sec"><span>Against trail runs this length</span><span>' + lo.toFixed(1) +
-        '\u2013' + hi.toFixed(1) + ' km</span></div><div class="est">No other trail run this ' +
-        'length yet. A trail run is only ranked against trail runs.</div>'
+    if (!peers.length) return P.ground !== 'road'
+      ? '<div class="sec"><span>Against ' + P.ground + ' runs this length</span><span>' + lo.toFixed(1) +
+        '\u2013' + hi.toFixed(1) + ' km</span></div><div class="est">No other ' + P.ground + ' run this ' +
+        'length yet. A ' + P.ground + ' run is only ranked against ' + P.ground + ' runs.</div>'
       : '';
 
     const all = peers.concat([{ act: a, pace: mine }]).sort((p, q) => p.pace - q.pace);
@@ -1188,7 +1337,7 @@
       n + (n === 2 ? 'nd' : n === 3 ? 'rd' : n % 10 === 1 && n !== 11 ? 'st' :
            n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th') + ' fastest';
 
-    let h = '<div class="sec"><span>Against ' + (P.trail ? 'trail ' : '') + 'runs this length</span><span>' +
+    let h = '<div class="sec"><span>Against ' + (P.ground !== 'road' ? P.ground + ' ' : '') + 'runs this length</span><span>' +
       lo.toFixed(1) + '\u2013' + hi.toFixed(1) + ' km</span></div>';
     h += '<div class="cmp"><span class="k">' + ordinal(rank) + ' of ' + all.length +
       '</span><span class="v">' + Calc.fmtPace(mine) +
@@ -1293,9 +1442,12 @@
           '<div class="rl">' + esc(where) + ' ' + tr + '</div><div class="est">' + MT.meaning + '</div></div>';
       });
     }
-    h += progressHTML(PM) + testsHTML(Calc.testsModel(Store.all().filter(a => a.type === 'run'))) + latelyHTML(PM);
+    h += progressHTML(PM) + routesHTML(Calc.routesModel(Store.all(), Store.config())) +
+      testsHTML(Calc.testsModel(Store.all().filter(a => a.type === 'run'))) + latelyHTML(PM);
     el('view-resting').innerHTML = h;
     $('#view-resting [data-back]').onclick = () => go('home');
+    document.querySelectorAll('#view-resting [data-route]').forEach(r => { r.onclick = () => go('route', r.dataset.route); });
+
     document.querySelectorAll('#view-resting .wk').forEach(w => {
       w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
     });
@@ -1498,11 +1650,14 @@
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
     h += '<div class="ttl">' + esc(a.name) + '</div>';
     const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase()];
+    const auto = Calc.autoSession(a, Store.config(), dismissedTags());
     if (a.session) sub.push(Calc.sessionLabel(a.session).toUpperCase());
-    if (Calc.isTrail(a)) sub.push('TRAIL');
+    else if (auto) sub.push(Calc.sessionLabel(auto).toUpperCase() + ' (AUTO)');
+    if (Calc.terrainOf(a) !== 'road') sub.push(Calc.terrainOf(a).toUpperCase());
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
+    h += tagChipsHTML(a, 'd');
 
     h += noticedHTML(a);
 
@@ -1516,11 +1671,7 @@
         '<button class="btn ghost" id="d-trust">' + (out ? 'Trust this heart rate anyway' : 'Leave it out again') + '</button>';
     }
 
-    if (Calc.fullLaps(a.laps).length) {
-      h += '<div class="sec"><span>Per kilometre</span></div>';
-      h += stripHTML(a, bounds, true);
-      h += stripLabelsHTML(a);
-    }
+    h += kmSplitsHTML(a, bounds);
 
     if (d != null) {
       const flat = Calc.driftIsFlat(d);
@@ -1585,6 +1736,7 @@
 
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
+    bindTagChips(a, 'd', () => renderDetail(a.id));
     const trust = el('d-trust');
     if (trust) trust.onclick = () => {
       const next = Object.assign({}, a, { hr_trust: Calc.hrLocked(a) ? 'trust' : null, updated_at: new Date().toISOString() });
@@ -1643,9 +1795,9 @@
       '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
       (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
     h += '<label><span>Where</span></label>';
-    h += '<div class="bar wrap" id="p-terrain">' + [['road', 'Road'], ['trail', 'Trail']].map(t =>
+    h += '<div class="bar wrap" id="p-terrain">' + [['road', 'Road'], ['trail', 'Trail'], ['mixed', 'Mixed']].map(t =>
       '<button class="chip" type="button" data-terr="' + t[0] + '" aria-pressed="' +
-      ((a.terrain === 'trail') === (t[0] === 'trail')) + '">' + t[1] + '</button>').join('') + '</div>';
+      (Calc.terrainOf(a) === t[0]) + '">' + t[1] + '</button>').join('') + '</div>';
     h += '<label><span>Call it something else (optional)</span>' +
       '<input type="text" id="p-name" value="' + esc(a.name || '') +
       '" placeholder="Furuset loop"></label>';
@@ -1709,7 +1861,7 @@
       b.onclick = () => {
         document.querySelectorAll('#p-terrain [data-terr]').forEach(x =>
           x.setAttribute('aria-pressed', String(x === b)));
-        if (draft) draft.terrain = b.dataset.terr === 'trail' ? 'trail' : 'road';
+        if (draft) draft.terrain = b.dataset.terr;
       };
     });
     const save = el('save');
@@ -2001,9 +2153,9 @@
       '<button class="chip" type="button" data-sess="' + s.key + '" aria-pressed="' +
       (a.session === s.key) + '">' + s.label + '</button>').join('') + '</div>';
     h += '<label><span>Where</span></label>';
-    h += '<div class="bar wrap" id="e-terrain">' + [['road', 'Road'], ['trail', 'Trail']].map(t =>
+    h += '<div class="bar wrap" id="e-terrain">' + [['road', 'Road'], ['trail', 'Trail'], ['mixed', 'Mixed']].map(t =>
       '<button class="chip" type="button" data-terr="' + t[0] + '" aria-pressed="' +
-      ((a.terrain === 'trail') === (t[0] === 'trail')) + '">' + t[1] + '</button>').join('') + '</div>';
+      (Calc.terrainOf(a) === t[0]) + '">' + t[1] + '</button>').join('') + '</div>';
     h += '<label><span>Note</span><input type="text" data-f="note" data-kind="text" value="' +
       esc(a.note || '') + '"></label>';
 
@@ -2032,7 +2184,7 @@
       b.onclick = () => {
         document.querySelectorAll('#e-terrain [data-terr]').forEach(x =>
           x.setAttribute('aria-pressed', String(x === b)));
-        editTerrain = b.dataset.terr === 'trail' ? 'trail' : 'road';
+        editTerrain = b.dataset.terr;
       };
     });
 
@@ -2214,7 +2366,7 @@
 
   }
 
-  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting'];
+  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting', 'route'];
 
   /* Navigation writes to browser history, so Android's back button and its
      edge-swipe both go back a screen instead of leaving the app. */
@@ -2231,6 +2383,8 @@
       if (view === 'edit') renderEdit(param);
       if (view === 'replace') renderReplace(param);
       if (view === 'bests') renderBests();
+      if (view === 'route') renderRoute(param);
+
       if (view === 'resting') { if (param !== 'keep') recoveryDetail = false; renderResting(); }
     } catch (err) {
       /* Whatever went wrong, there must still be a way to Setup, an export,
@@ -2309,6 +2463,7 @@
       Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
       Store.flush().then(() => Store.pull()).then(() => {
         if (!el('view-home').hidden) render('home');
+        promptNewRuns();
         /* said once per open, never silently: something has stopped syncing */
         const G = Store.sync.garmin;
         if (G && G.state === 'key') toast('Garmin key not working \u2014 see Setup', 'bad');
