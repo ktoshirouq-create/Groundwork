@@ -853,7 +853,7 @@
     const m = Calc.homeModel(Store.all(), cfg, scope, key(), today());
 
     let h = '<div class="top"><div>' +
-      '<div class="ttl">' + esc(m.period.label) + '</div>' +
+      '<div class="ttl">' + esc(m.period.label) + (m.noHr ? ' <i class="nohrtag">NO HR</i>' : '') + '</div>' +
       '<div class="sub">' + esc(Calc.periodSpan(m.period.key, scope, today())) + '</div>' +
       '</div><div class="corners"><button class="corner" data-go="resting">PROGRESS</button>' +
       '<button class="corner" data-go="bests">BESTS</button>' +
@@ -1205,12 +1205,33 @@
       'Races, tests and trail runs left out.</div>';
   }
 
+  /* the year in figures: all from distance and time, so a year recorded
+     without heart rate reads as fully as any other */
+  function figuresHTML(F) {
+    if (!F) return '';
+    let h = '<div class="sec"><span>The year</span><span>in figures</span></div>';
+    if (F.typical) h += cmp('Typical run', F.typical.km.toFixed(1) + ' km', 'at ' + Calc.fmtPace(F.typical.pace) + '/km');
+    if (F.longest) h += '<div class="cmp" data-id="' + esc(F.longest.id) + '"><span class="k">Longest run</span><span class="v">' +
+      F.longest.km.toFixed(1) + ' km<s>' + fmtDate(F.longest.date) + ' \u00b7 ' + Calc.fmtPace(F.longest.pace) + '/km</s></span></div>';
+    if (F.fastest.length) {
+      h += '<div class="sec"><span>Fastest runs</span><span>5 km or more</span></div>';
+      h += F.fastest.map(r => '<div class="cmp" data-id="' + esc(r.id) + '"><span class="k">' + fmtDate(r.date) + '</span><span class="v">' +
+        Calc.fmtPace(r.pace) + '/km<s>' + r.km.toFixed(1) + ' km</s></span></div>').join('');
+    }
+    h += '<div class="sec"><span>Consistency</span><span></span></div>';
+    h += cmp('Weeks with a run', String(F.weeks), F.streak > 1 ? 'longest streak ' + F.streak + ' weeks' : '');
+    if (F.gap) h += cmp('Longest gap', F.gap.days + ' days', fmtDate(F.gap.from) + ' \u2013 ' + fmtDate(F.gap.to));
+    const most = Math.max.apply(null, F.lengths.map(l => l.count)) || 1;
+    h += '<div class="sec"><span>Run lengths</span><span></span></div><div class="lens">' + F.lengths.map(l =>
+      '<div class="len"><span>' + l.label + '</span><span><i style="width:' + (l.count / most * 100).toFixed(1) + '%"></i></span><span>' + l.count + '</span></div>').join('') + '</div>';
+    return h;
+  }
+
   function reviewHTML(m, bounds) {
     if (!m.count) return '';
     const s = m.summary, P = m.previous;
     let h = '';
 
-    if (m.noHr) h += '<div class="est nohr">Recorded with a phone: no heart rate this year.</div>';
 
     /* races first: in a finished year they are the headline */
     if (m.races.length) {
@@ -1231,10 +1252,9 @@
       had ? P.label + ' ' + Calc.fmtDuration(P.summary.elapsed_s) : '');
     if (s.ascent_m != null) h += cmp('Ascent', Math.round(s.ascent_m) + ' m',
       had && P.summary.ascent_m != null ? P.label + ' ' + Math.round(P.summary.ascent_m) : '');
-    h += '<div class="est">' + (had
-      ? 'Side by side rather than as a change \u2014 either total may still be missing runs.'
-      : P ? 'Nothing logged in ' + esc(P.label) + '.' : '') + '</div>';
+    if (had) h += '<div class="est">Side by side rather than as a change \u2014 either total may still be missing runs.</div>';
     h += '</div>';
+    h += figuresHTML(m.figures);
 
     h += monthsHTML(m.months);
     if (m.pictures) h += cumulativeHTML(m.pictures);

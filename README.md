@@ -1109,13 +1109,25 @@ tagged tempo or intervals: same course, so no terrain excuses. Stream v3
 added the fingerprint, so `garminEnrich` re-reads watch files once; the Strava
 import takes it from each track.
 
-## Years without heart rate
+## Years without heart rate, and every year in figures
 
-A year whose runs carry no heart rate at all (phone-recorded, 2014) says so
-once at the top ("Recorded with a phone: no heart rate this year"). Time in
-zone and the by-heart-rate line stay away rather than standing empty, and
-**Pace through the year** stands in: the middle pace of each month's runs,
-labelled as plain pace, not aerobic pace.
+A run without heart rate has no load, so the period ribbon draws it at a
+typical effort instead (its minutes times the middle load-per-minute of runs
+that have one), in plain grey: the height shows volume, the colours stay
+honest. A year with no heart rate at all carries a small **NO HR** tag by its
+title; its heart-rate sections stay away and **Pace through the year** (the
+middle pace of each month, plain pace) stands in.
+
+Every year review now has **The year in figures**, all from distance and time:
+typical run (middle distance and pace, moving time where known), longest run,
+the three fastest runs of 5 km or more (trail left out), weeks with a run and
+the longest streak of weeks, the longest gap (14 days or more), and run lengths
+(under 5, 5–10, 10–15, 15 km +). Comparison lines for a year with nothing in
+it are gone rather than saying "nothing logged".
+
+Strava's automatic names in Dutch and Norwegian (Ochtendhardloopsessie,
+Middag loop, Ettermiddagsløp) and bare dates become "Run · 15 Apr"; a rerun of
+`stravaImport` tidies ones an earlier import kept, unless you've renamed them.
 
 ## Tagging
 

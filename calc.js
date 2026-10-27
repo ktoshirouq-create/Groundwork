@@ -550,15 +550,26 @@
     const out = [];
     let key = last;
     for (let i = 0; i < span; i++) { out.unshift(key); key = shiftKey(key, scope, -1); }
+    /* A run with no heart rate has no load, and would draw as nothing: a
+       437 km year as an empty bar. It is drawn at a typical effort instead
+       (its minutes times the middle load-per-minute of runs that have one),
+       in grey, so the height shows volume and the colours stay honest. */
+    const perMin = (() => {
+      const r = acts.filter(a => a.type === 'run' && a.elapsed_s > 0).map(a => (load(a, cfgFor(metric)) || 0) / (a.elapsed_s / 60)).filter(x => x > 0);
+      return r.length ? median(r) : 1;
+    })();
+    const noZones = a => !zoneLaps(a).some(l => l.avg_hr != null);
     return out.map(k => {
       const inK = acts.filter(a => ACTIVITY_TYPES.indexOf(a.type) >= 0 && inPeriod(a, scope, k));
       const s = summarize(inK);
       const v = metric === 'load'
-        ? inK.reduce((t, a) => t + (load(a, cfgFor(metric)) || 0), 0)
+        ? inK.reduce((t, a) => t + (load(a, cfgFor(metric)) || (a.elapsed_s > 0 ? a.elapsed_s / 60 * perMin : 0)), 0)
         : s.distance_km;
+      const zones = timeInZone(lapsOf(inK), zoneBounds(cfgFor()));
+      const bare = inK.filter(a => a.type === 'run' && noZones(a) && !(a.laps || []).length).reduce((t, a) => t + (a.elapsed_s || 0), 0);
+      if (bare) zones.unknown = (zones.unknown || 0) + bare;
       return { key: k, value: v, count: s.count, distance_km: s.distance_km,
-               zones: timeInZone(lapsOf(inK), zoneBounds(cfgFor())),
-               selected: k === selectedKey };
+               zones: zones, selected: k === selectedKey };
     });
   }
 
@@ -1631,6 +1642,31 @@
         .sort((a, b) => b.count - a.count || order.indexOf(a.key) - order.indexOf(b.key));
     }
 
+    /* ---- the year in figures: typical run, longest, fastest, consistency,
+       lengths. All from distance and time, so they work with or without
+       heart rate. ---- */
+    let figures = null;
+    if (scope === 'year' && n >= 3) {
+      const ps = a => (a.moving_s > 0 ? a.moving_s : a.elapsed_s) / a.distance_km;
+      const ok = inP.filter(a => a.distance_km > 0 && (a.moving_s > 0 || a.elapsed_s > 0));
+      const longest = ok.slice().sort((a, b) => b.distance_km - a.distance_km)[0];
+      const fastest = ok.filter(a => a.distance_km >= 5 && !isTrail(a)).sort((a, b) => ps(a) - ps(b)).slice(0, 3)
+        .map(a => ({ id: a.id, date: a.date, km: a.distance_km, pace: ps(a) }));
+      const weeks = Array.from(new Set(inP.map(a => weekStart(a.date)))).sort();
+      let streak = weeks.length ? 1 : 0, cur = 1;
+      for (let i = 1; i < weeks.length; i++) { cur = daysBetween(weeks[i - 1], weeks[i]) === 7 ? cur + 1 : 1; streak = Math.max(streak, cur); }
+      const dates = inP.map(a => a.date).sort();
+      let gap = null;
+      for (let i = 1; i < dates.length; i++) { const g = daysBetween(dates[i - 1], dates[i]); if (!gap || g > gap.days) gap = { days: g, from: dates[i - 1], to: dates[i] }; }
+      const lens = [['under 5 km', 0, 5], ['5\u201310 km', 5, 10], ['10\u201315 km', 10, 15], ['15 km +', 15, 1e9]]
+        .map(b => ({ label: b[0], count: inP.filter(a => a.distance_km >= b[1] && a.distance_km < b[2]).length }));
+      figures = {
+        typical: ok.length ? { km: median(ok.map(a => a.distance_km)), pace: median(ok.map(ps)) } : null,
+        longest: longest ? { id: longest.id, date: longest.date, km: longest.distance_km, pace: ps(longest) } : null,
+        fastest: fastest, weeks: weeks.length, streak: streak, gap: gap && gap.days >= 14 ? gap : null, lengths: lens
+      };
+    }
+
     /* a year recorded without heart rate (a phone, 2014) says so once, and
        its heart-rate cards stay away rather than standing empty */
     const noHr = n > 0 && !inP.some(a => a.avg_hr != null || (a.hr_hist && a.hr_hist.length) || (a.laps || []).some(l => l.avg_hr != null));
@@ -1685,6 +1721,7 @@
       byHr: byHr,
       noHr: noHr,
       paceMonths: paceMonths,
+      figures: figures,
       zones: {
         tz: tz, zoned: zoned, unknown: tz.unknown,
         elapsed: summary.elapsed_s,
