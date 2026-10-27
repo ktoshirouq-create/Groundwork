@@ -1935,41 +1935,6 @@
     return out;
   }
 
-  /* ---------- threshold tests ----------
-
-     A run tagged Test, read the standard way for a 30-minute test: heart rate
-     and pace over the last 20 minutes, from the laps (a lap that straddles the
-     cut counts for the part inside it). Each test against the one before. */
-  const TEST_WINDOW_S = 1200;
-
-  function testReading(a) {
-    const laps = (a.laps || []).filter(l => l.time_s > 0 && l.distance_km > 0).slice().sort((x, y) => x.n - y.n);
-    if (!laps.length) return null;
-    let t = 0, d = 0, hrT = 0, hrS = 0;
-    for (let i = laps.length - 1; i >= 0 && t < TEST_WINDOW_S; i--) {
-      const l = laps[i], take = Math.min(1, (TEST_WINDOW_S - t) / l.time_s);
-      t += l.time_s * take; d += l.distance_km * take;
-      if (l.avg_hr != null) { hrT += l.time_s * take; hrS += l.avg_hr * l.time_s * take; }
-    }
-    return { seconds: Math.round(t), full: t >= TEST_WINDOW_S - 1,
-             hr: hrT ? Math.round(hrS / hrT) : null, pace: d ? t / d : null };
-  }
-
-  function testsModel(runs) {
-    const tests = (runs || []).filter(a => a.type === 'run' && isTest(a))
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map(a => Object.assign({ run: a }, testReading(a) || {}));
-    tests.forEach((t, i) => {
-      const prev = tests[i + 1];
-      t.vs = prev && prev.pace && t.pace ? {
-        date: prev.run.date,
-        pace: delta(t.pace, prev.pace, 'down'),
-        hr: t.hr != null && prev.hr != null ? t.hr - prev.hr : null
-      } : null;
-    });
-    return tests;
-  }
-
   /* ---------- worth knowing ----------
 
      Plain facts the data has to say, shown only when genuinely notable and
@@ -2271,64 +2236,6 @@
     return out;
   }
 
-  /* ---------- matched runs: the same route, run again ----------
-
-     Each run with a watch file or a GPS track carries a route fingerprint:
-     ten points at equal distances along it. Two runs are the same route when
-     their distances are within 6% and every point lies within 150 m of the
-     other run's, either way round (a loop run backwards is the same loop).
-     A route with three runs or more is worth comparing: same course, so no
-     terrain excuses. */
-  const ROUTE = { distTol: 0.06, pointM: 150, minRuns: 3 };
-
-  function routePoints(a) {
-    const r = a && a.route;
-    if (!r || typeof r !== 'string') return null;
-    const pts = r.split(';').map(p => p.split(',').map(Number)).filter(p => p.length === 2 && isFinite(p[0]) && isFinite(p[1]));
-    return pts.length >= 5 ? pts : null;
-  }
-  function metres(p, q) {
-    const R = 6371000, toR = Math.PI / 180;
-    const dLat = (q[0] - p[0]) * toR, dLon = (q[1] - p[1]) * toR;
-    const x = Math.sin(dLat / 2) ** 2 + Math.cos(p[0] * toR) * Math.cos(q[0] * toR) * Math.sin(dLon / 2) ** 2;
-    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
-  }
-  function sameRoute(a, b) {
-    const pa = routePoints(a), pb = routePoints(b);
-    if (!pa || !pb || pa.length !== pb.length) return false;
-    if (Math.abs(a.distance_km - b.distance_km) > ROUTE.distTol * Math.max(a.distance_km, b.distance_km)) return false;
-    const fwd = pa.every((p, i) => metres(p, pb[i]) <= ROUTE.pointM);
-    return fwd || pa.every((p, i) => metres(p, pb[pb.length - 1 - i]) <= ROUTE.pointM);
-  }
-
-  function routesModel(acts, cfg) {
-    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a) && routePoints(a))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const groups = [];
-    runs.forEach(a => {
-      const g = groups.find(g => sameRoute(g.runs[0], a));
-      if (g) g.runs.push(a); else groups.push({ runs: [a] });
-    });
-    const pace = a => a.gap_pace_s != null ? a.gap_pace_s : paceSecPerKm(a.distance_km, a.elapsed_s);
-    const named = {};
-    return groups.filter(g => g.runs.length >= ROUTE.minRuns).map(g => {
-      const km = median(g.runs.map(a => a.distance_km));
-      const base = km.toFixed(1) + ' km route';
-      named[base] = (named[base] || 0) + 1;
-      /* first against latest: easy runs only, as aerobic pace is everywhere */
-      const isEasy = a => isAerobicMeasure(a) && a.session !== 'tempo' && a.session !== 'intervals';
-      const easy = g.runs.filter(a => isEasy(a) && a.avg_hr != null);
-      const side = arr => arr.length ? { pace: median(arr.map(pace)), hr: Math.round(median(arr.map(a => a.avg_hr))), from: arr[0].date, to: arr[arr.length - 1].date } : null;
-      const n = Math.min(3, Math.floor(easy.length / 2));
-      return {
-        key: g.runs[0].id, name: base + (named[base] > 1 ? ' (' + named[base] + ')' : ''), km: km,
-        runs: g.runs.slice().reverse(), count: g.runs.length, first: g.runs[0].date, last: g.runs[g.runs.length - 1].date,
-        then: n ? side(easy.slice(0, n)) : null, now: n ? side(easy.slice(-n)) : null,
-        points: g.runs.map(a => ({ id: a.id, date: a.date, pace: pace(a), hr: a.avg_hr, easy: isEasy(a), session: a.session || null }))
-      };
-    }).sort((a, b) => b.count - a.count || b.last.localeCompare(a.last));
-  }
-
   /* ---------- a suggested tag ----------
 
      Never applied by itself: an outlined chip you confirm with a tap. From
@@ -2399,6 +2306,27 @@
      Everything here is all-time, so nothing depends on which period the home
      screen has selected. "This year" is the calendar year of today. */
 
+  /* a race's event name: years and empty brackets taken out */
+  function raceKey(name) {
+    return String(name || 'Race').replace(/\b(19|20)\d{2}\b/g, '').replace(/\(\s*\)/g, '')
+      .replace(/\s{2,}/g, ' ').replace(/[\s\-\u2013\u00b7,]+$/, '').trim() || 'Race';
+  }
+
+  /* one distance's whole story: the best, the top five runs, each year's best */
+  function distanceModel(acts, km, today) {
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    const all = runs.map(a => ({ run: a, e: bestEffortOf(a, km) })).filter(x => x.e)
+      .map(x => ({ run: x.run, seconds: x.e.seconds, pace: x.e.seconds / km }))
+      .sort((a, b) => a.seconds - b.seconds);
+    if (!all.length) return null;
+    const year = String(today).slice(0, 4);
+    const years = Array.from(new Set(all.map(x => x.run.date.slice(0, 4)))).sort();
+    const perYear = years.map(y => all.find(x => x.run.date.slice(0, 4) === y)).map(x => ({ year: x.run.date.slice(0, 4), seconds: x.seconds, run: x.run }));
+    const thisYear = all.find(x => x.run.date.slice(0, 4) === year) || null;
+    return { km: km, best: all[0], top: all.slice(0, 5), perYear: perYear, count: all.length,
+             thisYear: thisYear, off: thisYear ? thisYear.seconds - all[0].seconds : null };
+  }
+
   function bestOfModel(acts, cfg, today) {
     const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
     if (!runs.length) return { count: 0, board: [], progression: [], records: [], races: [] };
@@ -2446,9 +2374,28 @@
     const races = runs.filter(isRace).sort((a, b) => b.date.localeCompare(a.date)).map(r => ({
       run: r, seconds: r.elapsed_s, pace: paceSecPerKm(r.distance_km, r.elapsed_s) }));
 
+    /* milestones: achievements that live nowhere else. Aerobic pace belongs
+       to Progress and drift is a diagnostic, so neither is a trophy. */
+    const milestones = records.filter(r => !/aerobic|drift/i.test(r.label));
+
+    /* races by event: a year in the name doesn't make it another race */
+    const groups = {};
+    races.forEach(r => {
+      const key = raceKey(r.run.name);
+      (groups[key.toLowerCase()] = groups[key.toLowerCase()] || { name: key, editions: [] }).editions.push(r);
+    });
+    const raceGroups = Object.keys(groups).map(k => {
+      const g = groups[k];
+      g.editions.sort((a, b) => a.run.date.localeCompare(b.run.date));
+      g.best = g.editions.slice().sort((a, b) => a.seconds - b.seconds)[0];
+      g.years = g.editions.map(e => e.run.date.slice(0, 4));
+      g.last = g.editions[g.editions.length - 1].run.date;
+      return g;
+    }).sort((a, b) => b.last.localeCompare(a.last));
+
     return { count: runs.length, year: year, years: years, board: board,
              first: runs.map(a => a.date).sort()[0],
-             progression: progression, records: records, races: races, tests: testsModel(runs) };
+             progression: progression, records: records, milestones: milestones, races: races, raceGroups: raceGroups };
   }
 
   /* ---------- resting HR ----------
@@ -2622,7 +2569,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, autoSession, AUTO_TAG_BEFORE, suggestTags, splitsOf, terrainOf, routesModel, sameRoute, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, testsModel, testReading, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, distanceModel, raceKey, autoSession, AUTO_TAG_BEFORE, suggestTags, splitsOf, terrainOf, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows

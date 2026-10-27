@@ -668,14 +668,11 @@ adds to `41:41` — never `7′ · 23′ · 11′` making 42 minutes.
 
 ## Tests
 
-```
-node tests/harness.js       99 assertions — maths and parsing, on real data
-npm install jsdom
-node tests/integration.js   77 assertions — boots the UI and drives it
-node tests/charts.js        54 assertions — charts, Form, deltas
-node tests/load.js          39 assertions — load, the week strip, the importer
-node tests/body.js          49 assertions — day records, the weekly paste, the anchor
-```
+**Test** is a session tag kept for the two past field tests (Lactate 30, Max
+HR Field Test): a test counts like a race, out of aerobic pace, the "something
+changed" card and "against runs this length". Garmin no longer offers the
+lactate threshold test, so Test isn't offered for new runs, and there is no
+Tests section any more.
 
 ## Sheets
 
@@ -1010,12 +1007,13 @@ Then the reading (`recoveryModel`), every line naming both measures with their
 numbers: "Last 3 nights: HRV 58 ms, above your normal range; resting HR 53 bpm,
 inside your normal range — well rested." Normal range: the last 60 nights'
 average plus or minus one standard deviation (needs 30 nights). Then the
-four-week trend for both, and the training sentence. Then a card per measure:
+four-week trend for both, and the training sentence. Under **Biometrics**, a card per measure:
 the 7-night average, the last 3 nights against the normal range (the words
 always name the number they describe), the four-week change, what it means;
 each opens its detail (charts with the normal range shaded, comparisons, and
-patterns once there are 90 nights). Then **Training** (aerobic pace, time in Z2,
-weekly distance, now against three months ago), **Tests**, and **Lately**.
+patterns once there are 90 nights). Then **Performance**: the training sentence, aerobic pace, time in Z2 and
+weekly distance now against three months ago, and the occasional notable fact
+beneath them.
 
 **Bests** is the trophy room: a plaque per distance (time, run, date, this
 year's best quietly beneath), year by year, records, races.
@@ -1084,30 +1082,22 @@ are the least trustworthy numbers in the app.
 
 ## Bests, results and sync
 
-**Bests** opens with **New**: all-time bests set in the last 30 days, each with
-what it beat ("1 km 4:50: your fastest ever, 5 s quicker than 20 Nov 2017"),
-its plaque marked NEW PB. Plaques show time, pace and date (no run names) and
-this year's best with how far off it is. A run's own **best efforts** are
-ranked like results: PB, 2nd or 3rd best ever, or best of its year
-(`effortRanks`).
+**Bests** is the trophy room, three short lists and nothing shown twice:
+**Distances** (a row each: best time, month and year, a NEW tag for one set in
+the last 30 days), **Races** (a row per event: a year in the name doesn't make
+it another race, so "Toughest 2025" and "Toughest" are one row listing
+2024 · 2025 · 2026 with the best time), and **Milestones** (longest run,
+biggest week, month and year, most climbing; aerobic pace lives on Progress
+and drift is a diagnostic, so neither is a trophy). A distance opens its whole
+story (`distanceModel`): the best, the top five runs, this year against the
+best, and each year's best as a bar. A race opens every edition with its
+course length and pace beside the time, best by time, and a note when the
+courses weren't the same length. A run's own **best efforts** are ranked like
+results: PB, 2nd or 3rd best ever, or best of its year (`effortRanks`).
 
 **Sync with Garmin** lives on the home screen ("Garmin synced 09:00 · Sync
 now") and on pulling down at the top of home or Progress: it runs the Apps
 Script's check (new runs, resting HR, HRV, zones) and pulls.
-
-## Your routes (matched runs)
-
-Each run with a watch file or a GPS track keeps a route fingerprint (`route`):
-ten points at equal distances along it, rounded to about 10 m. Not the track:
-GPS is still never stored. Two runs are the same route when their distances
-are within 6% and every point lies within 150 m of the other's, either way
-round (`sameRoute`). A route with three runs or more appears under **Your
-routes** on Progress, and opens a screen with pace and heart rate for every run
-on it. Its comparison (easy runs at the start against easy runs now, the middle
-of up to three each) leaves out races, tests, trail, locked heart rate and runs
-tagged tempo or intervals: same course, so no terrain excuses. Stream v3
-added the fingerprint, so `garminEnrich` re-reads watch files once; the Strava
-import takes it from each track.
 
 ## Years without heart rate, and every year in figures
 
@@ -1127,7 +1117,9 @@ it are gone rather than saying "nothing logged".
 
 ## Tagging
 
-Tags are set on the run screen: session chips (Easy, Long, Recovery, Steady,
+A run's tags read as one line under its date ("TEMPO · ROAD · Edit"); with
+none yet, the guess with a one-tap confirm ("Tempo? ✓"). **Edit** opens the
+chips in a card from the bottom: session chips (Easy, Long, Recovery, Steady,
 Tempo, Intervals, Race, Test) and terrain (Road, Trail, Mixed), saved on tap,
 tapped again to clear. `suggestTags` outlines a guess, never applied by itself:
 from the name first (Lactate → Test, tempo → Tempo, z2 → Easy, marathon →
@@ -1151,10 +1143,11 @@ mixed runs of a similar length, and shows no race halves.
 
 ## Splits
 
-The run screen's per-kilometre strip became **Splits**: kilometre, pace, a bar
-whose length is speed and whose colour is that kilometre's heart-rate zone,
-elevation (climbed minus descended, from the watch file's laps), and heart rate.
-The fastest whole kilometre is marked; a partial one shows its distance. Laps
+The run screen's **Splits**: where each split ended (so a 0.38 km first lap
+reads 0.4, then 1.4, 2.4…), pace, a hairline bar whose length is speed,
+elevation (climbed minus descended, from the watch file's laps), and heart rate
+with a dot in its zone's colour. The fastest whole kilometre is bold; partial
+splits are dimmed. Laps
 now carry `ascent_m` and `descent_m`, written at import and by `garminEnrich`.
 
 ## Settings that matter

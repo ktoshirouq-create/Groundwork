@@ -49,31 +49,6 @@
     }).join('') + '</div>';
   }
 
-  /* The heart rates sit under the blocks they belong to. As a run-on list they
-     drifted out of register with the strip and stopped meaning anything. */
-  /* A number needs room. At 43 laps a marathon gave each cell 7.9px against a
-     9px type size, so the heart rates ran together into one illegible string.
-     Past the point where every lap fits, label a regular sample instead and
-     say which — the full set is still on each block as a tooltip. */
-  function stripLabelsHTML(a) {
-    const laps = Calc.fullLaps(a.laps);
-    if (!laps.length) return '';
-
-    const MIN_PX = 22;                 /* room for three digits plus a gap */
-    const width = 340;                 /* the narrowest phone this targets */
-    const every = Math.max(1, Math.ceil(laps.length / Math.floor(width / MIN_PX)));
-
-    const cells = laps.map((l, i) =>
-      '<span>' + (every === 1 || i % every === 0
-        ? (l.avg_hr == null ? '\u2014' : l.avg_hr) : '') + '</span>').join('');
-
-    const note = every > 1
-      ? '<div class="striplbl-note">every ' + every +
-        (every === 2 ? 'nd' : every === 3 ? 'rd' : 'th') +
-        ' kilometre \u00b7 hold a block for the rest</div>'
-      : '';
-    return '<div class="striplbl">' + cells + '</div>' + note;
-  }
 
   /* The bar decides for itself whether it has anything to show. Every caller
      used to make that judgement separately and they disagreed: the period view
@@ -351,17 +326,6 @@
     return '<span class="delta ' + cls + '">' + arrow + ' ' + Calc.deltaText(d, as) + '</span>';
   }
 
-  function recordsHTML(recs) {
-    if (!recs || !recs.length) return '';
-    return '<div class="sec"><span>Records</span><span>all time</span></div>' +
-      '<div class="recs">' + recs.map(r =>
-        '<div class="rec"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '>' +
-        '<div class="l">' + esc(r.label) + '</div>' +
-        '<div class="v">' + esc(r.value) + (r.unit ? '<s>' + esc(r.unit) + '</s>' : '') + '</div>' +
-        '<div class="w">' + esc(/^\d{4}-\d{2}-\d{2}$/.test(r.when) ? fmtDate(r.when) :
-          /^\d{4}-\d{2}$/.test(r.when) ? MON[+r.when.slice(5) - 1] + ' ' + r.when.slice(0, 4) : r.when) +
-        '</div></div>').join('') + '</div>';
-  }
 
 
 
@@ -621,12 +585,6 @@
     }, { passive: true });
   })();
 
-  /* ---------------------------------------------------- worth knowing --- */
-
-  /* Training progress, top of Bests: four measures now against three months
-     ago, then the occasional notable fact. */
-  /* Training progress, top of Progress: one sentence, three rows, and a line
-     pointing to Recovery for the body's side (its numbers live there only). */
   /* ------------------------------------------------------------- tagging --- */
 
   /* Session and terrain chips, saved on tap. The app's guess is outlined and
@@ -636,7 +594,8 @@
     const chip = (kind, key, label, on, sugg) => '<button class="chip' + (sugg && !on ? ' sugg' : '') + '" type="button" data-' + kind +
       '="' + key + '" aria-pressed="' + on + '">' + label + '</button>';
     return '<div class="tags" id="' + pfx + '-tags"><div class="bar wrap">' +
-      Calc.SESSIONS.map(x => chip('ts', x.key, x.label, a.session === x.key, S.session === x.key)).join('') +
+      Calc.SESSIONS.filter(x => x.key !== 'test' || a.session === 'test')
+        .map(x => chip('ts', x.key, x.label, a.session === x.key, S.session === x.key)).join('') +
       '</div><div class="bar wrap">' +
       [['road', 'Road'], ['trail', 'Trail'], ['mixed', 'Mixed']].map(t =>
         chip('tt', t[0], t[1], Calc.terrainOf(a) === t[0], S.terrain === t[0])).join('') +
@@ -644,6 +603,38 @@
         ? 'Auto-tagged as ' + Calc.sessionLabel(Calc.autoSession(a, Store.config(), dismissedTags())).toLowerCase() +
           ' \u2014 the app\u2019s guess, outlined. Tap any tag to set your own.'
         : 'Outlined: the app\u2019s guess. Tap to confirm.') + '</div>' : '') + '</div>';
+  }
+
+  /* The run's tags as one line under its date: "TEMPO · ROAD · Edit". With
+     no tag yet, the guess with a one-tap confirm. Edit opens the chips in a
+     card from the bottom, the same card new runs use. */
+  function tagLineHTML(a) {
+    const auto = Calc.autoSession(a, Store.config(), dismissedTags());
+    const guess = !a.session ? Calc.suggestTags(a, Store.config()).session : null;
+    let first;
+    if (a.session) first = '<b>' + esc(Calc.sessionLabel(a.session).toUpperCase()) + '</b>';
+    else if (auto) first = '<b>' + esc(Calc.sessionLabel(auto).toUpperCase()) + '</b> <em>auto</em>';
+    else if (guess && guess !== 'race' && guess !== 'test') first = '<button type="button" class="tconfirm" data-tc="' + guess + '">' +
+      esc(Calc.sessionLabel(guess)) + '? \u2713</button>';
+    else first = '<em>untagged</em>';
+    return '<div class="tagline" id="d-tagline">' + first + ' <span>\u00b7</span> <b>' +
+      esc(Calc.terrainOf(a).toUpperCase()) + '</b> <button type="button" class="tedit" id="d-tedit">Edit</button></div>';
+  }
+
+  function bindTagLine(a) {
+    const c = $('#d-tagline [data-tc]');
+    if (c) c.onclick = () => Store.put(Object.assign({}, a, { session: c.dataset.tc, updated_at: new Date().toISOString() })).then(() => renderDetail(a.id));
+    el('d-tedit').onclick = () => openTagCard(a);
+  }
+
+  function openTagCard(a) {
+    const box = el('tagprompt');
+    box.innerHTML = '<div class="tpcard"><div class="tphead">' + esc(a.name) + '</div>' + tagChipsHTML(a, 'x') +
+      '<div class="tpbtns"><button type="button" class="btn ghost" id="x-done">Done</button></div></div>';
+    box.hidden = false;
+    const close = () => { box.hidden = true; box.innerHTML = ''; };
+    bindTagChips(a, 'x', next => { renderDetail(next.id); if (next.session !== a.session) close(); else openTagCard(next); });
+    el('x-done').onclick = close;
   }
 
   function bindTagChips(a, pfx, after) {
@@ -704,93 +695,27 @@
     if (!S) return '';
     const span = Math.max(1, S.slow - S.fast);
     const zone = hr => hr == null ? 'none' : hr >= bounds.z5 ? 'z5' : hr >= bounds.z4 ? 'z4' : hr >= bounds.z3 ? 'z3' : hr >= bounds.z2 ? 'z2' : 'z1';
-    let h = '<div class="sec"><span>Splits</span><span>bar: speed \u00b7 colour: zone</span></div><div class="splits">' +
+    let at = 0;
+    let h = '<div class="sec"><span>Splits</span><span></span></div><div class="splits">' +
       '<div class="sp head"><span>km</span><span>pace</span><span></span>' + (S.hasElev ? '<span>elev</span>' : '') + '<span>hr</span></div>';
     h += S.rows.map(r => {
-      const w = 35 + 65 * (S.slow - r.pace) / span;           // faster is longer
+      at += r.km;
+      const w = 30 + 70 * (S.slow - r.pace) / span;           // faster is longer
       return '<div class="sp' + (r.n === S.fastest ? ' best' : '') + (r.partial ? ' part' : '') + '">' +
-        '<span>' + (r.partial ? r.km.toFixed(2) : r.n) + '</span><span>' + Calc.fmtPace(r.pace) + '</span>' +
-        '<span><i class="spb ' + zone(r.hr) + '" style="width:' + w.toFixed(1) + '%"></i></span>' +
+        '<span>' + (Math.abs(at - Math.round(at)) < 0.05 ? Math.round(at) : at.toFixed(1)) + '</span><span>' + Calc.fmtPace(r.pace) + '</span>' +
+        '<span><i class="spb" style="width:' + w.toFixed(1) + '%"></i></span>' +
         (S.hasElev ? '<span>' + (r.elev == null ? '' : (r.elev > 0 ? '+' : '') + r.elev) + '</span>' : '') +
-        '<span>' + (r.hr == null ? '\u2013' : r.hr) + '</span></div>';
+        '<span><i class="zd ' + zone(r.hr) + '"></i>' + (r.hr == null ? '\u2013' : r.hr) + '</span></div>';
     }).join('');
-    return h + '</div>' + (S.fastest ? '<div class="est">Fastest whole kilometre marked. A partial kilometre shows its distance.</div>' : '');
+    return h + '</div>';
   }
 
-  /* ------------------------------------------------------------- routes --- */
-
-  /* the same course run again: easy runs then against easy runs now */
-  function routeLine(R) {
-    if (!R.then || !R.now) return R.count + ' runs';
-    const d = Calc.changeOf(R.now.pace, R.then.pace, 'down', 'aerobic');
-    return Calc.fmtPace(R.then.pace) + ' \u2192 ' + Calc.fmtPace(R.now.pace) + '/km' +
-      (d && !d.same ? ' <span class="delta ' + d.tone + '">' + (d.diff < 0 ? '\u25bc ' : '\u25b2 ') + Math.round(Math.abs(d.diff)) + ' s</span>' : ' \u00b7 about the same') +
-      ' \u00b7 ' + R.then.hr + ' \u2192 ' + R.now.hr + ' bpm';
-  }
-
-  function routesHTML(RS) {
-    if (!RS || !RS.length) return '';
-    return '<div class="sec"><span>Your routes</span><span>run 3 times or more</span></div>' +
-      RS.slice(0, 6).map(R => '<div class="cmp" data-route="' + esc(R.key) + '"><span class="k">' + esc(R.name) +
-        '</span><span class="v">' + R.count + ' runs<s>' + routeLine(R) + '</s></span></div>').join('') +
-      '<div class="est">Runs on the same course, matched from the watch\u2019s track. The arrow compares your easy runs at the start and now: same course, so no terrain excuses.</div>';
-  }
-
-  function renderRoute(key) {
-    const R = Calc.routesModel(Store.all(), Store.config()).find(x => x.key === key);
-    let h = '<div class="back" data-back="1">\u2190 Progress</div>';
-    if (!R) { el('view-route').innerHTML = h + '<div class="est">That route isn\u2019t there any more.</div>';
-      $('#view-route [data-back]').onclick = () => go('resting'); return; }
-    h += '<div class="ttl">' + esc(R.name) + '</div><div class="sub">' + R.count + ' RUNS \u00b7 ' +
-      fmtDate(R.first).toUpperCase() + ' \u2013 ' + fmtDate(R.last).toUpperCase() + '</div>';
-    if (R.then && R.now) h += '<div class="psum">Easy runs here went from ' + Calc.fmtPace(R.then.pace) + '/km at ' + R.then.hr +
-      ' bpm (' + fmtDate(R.then.from) + ') to ' + Calc.fmtPace(R.now.pace) + '/km at ' + R.now.hr + ' bpm (' + fmtDate(R.now.to) + ').</div>';
-    const P = R.points;
-    const pace = lineChart([P.map(p => ({ date: p.date, value: p.pace }))], { invert: true, uniform: true, height: 120,
-      format: v => Calc.fmtPace(v), anchorLabels: ['fastest', 'slowest'], label: 'Pace on this route, each run.',
-      xax: [fmtDate(P[0].date).toUpperCase(), '', fmtDate(P[P.length - 1].date).toUpperCase()] });
-    const withHr = P.filter(p => p.hr != null);
-    const hr = withHr.length >= 2 ? lineChart([withHr.map(p => ({ date: p.date, value: p.hr }))], { uniform: true, height: 90,
-      format: v => Math.round(v) + '', anchorLabels: ['bpm', 'bpm'], label: 'Average heart rate on this route, each run.',
-      from: P[0].date, to: P[P.length - 1].date, xax: [fmtDate(P[0].date).toUpperCase(), '', fmtDate(P[P.length - 1].date).toUpperCase()] }) : '';
-    h += '<div class="pl2">Pace each run</div>' + (pace || '') + (hr ? '<div class="pl2">Heart rate each run</div>' + hr : '');
-    h += '<div class="est">Every run on this course. Tempo runs and tests sit faster and higher \u2014 the comparison above uses easy runs only.</div>';
-    const bounds = Calc.zoneBounds(Store.config());
-    h += '<div class="sec"><span>Runs</span><span>' + R.count + '</span></div>' + R.runs.map(a => runRow(a, bounds, true)).join('');
-    el('view-route').innerHTML = h;
-    $('#view-route [data-back]').onclick = () => go('resting');
-    document.querySelectorAll('#view-route [data-id]').forEach(r => { r.style.cursor = 'pointer'; r.onclick = () => go('detail', r.dataset.id); });
-  }
-
-  /* threshold tests, newest first, each against the one before */
-  function testsHTML(tests) {
-    let h = '';
-    if (tests.length) {
-      h += '<div class="sec"><span>Tests</span><span>last 20 minutes</span></div>';
-      h += tests.map(T => {
-        const V = T.vs;
-        let aside = fmtDate(T.run.date) + (T.full ? '' : ' \u00b7 under 20 min, whole test used');
-        let vs = '';
-        if (V) {
-          const p = V.pace;
-          vs = (p.dir === 'flat' ? 'same pace' : '<span class="delta ' + p.tone + '">' + (p.dir === 'up' ? '\u25b2 ' : '\u25bc ') +
-              Math.round(Math.abs(p.diff)) + ' s/km ' + (p.dir === 'up' ? 'slower' : 'faster') + '</span>') +
-            (V.hr != null ? ', ' + (V.hr === 0 ? 'same heart rate' : Math.abs(V.hr) + ' bpm ' + (V.hr > 0 ? 'higher' : 'lower')) : '') +
-            ' than ' + esc(fmtDate(V.date));
-        }
-        return '<div class="cmp" data-id="' + esc(T.run.id) + '"><span class="k">' + esc(T.run.name) + '</span>' +
-          '<span class="v">' + (T.hr != null ? T.hr + ' bpm' : '\u2014') + ' \u00b7 ' + (T.pace ? Calc.fmtPace(T.pace) + '/km' : '\u2014') +
-          '<s>' + esc(aside) + (vs ? '<br>' + vs : '') + '</s></span></div>';
-      }).join('');
-      h += '<div class="est">Threshold heart rate and pace: the last 20 minutes of each run tagged Test, ' +
-        'the standard reading of a 30-minute test.</div>';
-    }
-    return h;
-  }
-
+  /* Performance, on Progress: the training sentence, three measures now
+     against three months ago, and the occasional notable fact beneath. */
   function progressHTML(P) {
     if (!P || (!P.rows.length && !P.lately.length)) return '';
-    let h = '<div class="sec"><span>Training</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
+    let h = '<div class="sec"><span>Performance</span><span>now vs ' + esc(fmtDate(P.thenDate)) + '</span></div>';
+    if (P.summary) h += '<div class="psum">' + esc(P.summary) + '</div>';
     if (!P.rows.some(r => r.key === 'aerobic')) h += '<div class="est">Aerobic pace and time in Z2 appear once there are runs to compare on both sides of the three months.</div>';
     const fmtV = (r, v) => r.key === 'aerobic' ? Calc.fmtPace(v) + '/km' : r.key === 'z2' ? Math.round(v) + '%' : v.toFixed(1) + ' km';
     const diff = (r, d) => r.key === 'aerobic' ? Math.round(Math.abs(d)) + ' s/km' : r.key === 'z2' ? Math.round(Math.abs(d)) + ' points' : Math.abs(d).toFixed(1) + ' km';
@@ -804,18 +729,12 @@
         diff(r, c.diff) + ' ' + word(r, c.diff > 0) + '</span> than ' + esc(fmtV(r, r.then)) };
       h += cmp(r.label, fmtV(r, r.now), aside);
     });
-    h += '<div class="est">Each now against the same stretch three months earlier; a change too small to matter reads ' +
-      '\u201cabout the same\u201d. Distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
-    return h;
-  }
-
-  function latelyHTML(P) {
-    let h = '';
-    if (P && P.lately.length) {
-      h += '<div class="sec"><span>Lately</span><span></span></div>' + P.lately.map(w =>
+    /* the notable facts sit with the measures, no heading of their own */
+    if (P.lately.length) h += P.lately.map(w =>
         '<div class="wk ' + (w.tone || '') + '"' + (w.id ? ' data-wid="' + esc(w.id) + '"' : '') +
         (w.go ? ' data-wgo="' + esc(w.go) + '"' : '') + '>' + esc(w.text) + '</div>').join('');
-    }
+    h += '<div class="est">Each now against the same stretch three months earlier; a change too small to matter reads ' +
+      '\u201cabout the same\u201d. Distance is shown without a verdict \u2014 more isn\u2019t automatically better.</div>';
     return h;
   }
 
@@ -903,14 +822,6 @@
   }
 
 
-  /* The word for whatever period the screen is showing, so a figure can never
-     be mistaken for a different window's. */
-  function periodWord() {
-    const now = Calc.periodKey(today(), scope) === key();
-    if (scope === 'week') return now ? 'this week' : 'that week';
-    if (scope === 'month') return now ? 'this month' : 'that month';
-    return now ? 'this year' : 'that year';
-  }
 
   /* One hero renderer. A value and its unit are rendered together or not at
      all — "— %" and "—/km" were the same bug written twice, in two places, and
@@ -1439,12 +1350,13 @@
       (G && G.at ? ' \u00b7 Garmin checked ' + hhmm(G.at) : '') + '</div>';
 
     if (!R.rhr && !R.hrv) {
+      h += '<div class="sec"><span>Biometrics</span><span></span></div>';
       h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> and <b>garminHrvHistory</b> in Apps Script once (README \u2192 Resting HR, HRV).</div>';
     } else {
-      if (R.now || R.trend || PM.summary) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
-        (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') +
-        (PM.summary ? '<p>' + esc(PM.summary) + '</p>' : '') + '</div>';
+      if (R.now || R.trend) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
+        (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') + '</div>';
       else h += '<div class="est">A reading needs about 30 nights of both measures.</div>';
+      h += '<div class="sec"><span>Biometrics</span><span>last 7 nights</span></div>';
       [['hrv', R.hrv], ['rhr', R.rhr]].forEach(([k, M]) => {
         const MT = METRICS[k];
         if (!M) { h += '<div class="rcard" data-rd="' + k + '"><div class="rn">' + MT.name + '</div><div class="est">' + MT.none + '</div></div>'; return; }
@@ -1462,11 +1374,9 @@
           '<div class="rl">' + esc(where) + ' ' + tr + '</div><div class="est">' + MT.meaning + '</div></div>';
       });
     }
-    h += progressHTML(PM) + routesHTML(Calc.routesModel(Store.all(), Store.config())) +
-      testsHTML(Calc.testsModel(Store.all().filter(a => a.type === 'run'))) + latelyHTML(PM);
+    h += progressHTML(PM);
     el('view-resting').innerHTML = h;
     $('#view-resting [data-back]').onclick = () => go('home');
-    document.querySelectorAll('#view-resting [data-route]').forEach(r => { r.onclick = () => go('route', r.dataset.route); });
 
     document.querySelectorAll('#view-resting .wk').forEach(w => {
       w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
@@ -1563,99 +1473,90 @@
      All-time, from one model. Every best here comes through the same effort
      source as the year reviews and the PB tags, so the three never disagree. */
 
-  let bestsKm = null;
-  const gapTxt = s => s < 60 ? Math.round(s) + ' s' : Calc.fmtDuration(Math.round(s));
 
+  /* Bests: the trophy room. One row per distance, per race and per
+     milestone; each distance and each race opens its whole story. */
   function renderBests() {
     const m = Calc.bestOfModel(Store.all(), Store.config(), today());
     let h = '<div class="back" data-back="1">\u2190 Back</div><div class="ttl">Bests</div>' +
       '<div class="sub">' + (m.count ? m.count + ' RUNS \u00b7 ' + esc(m.years[0]) +
         (m.years.length > 1 ? '\u2013' + esc(m.years[m.years.length - 1]) : '') : 'NO RUNS YET') + '</div>';
-
-    /* new bests go first, and say what they beat */
-    const NB = Calc.newBests(Store.all(), today());
-    if (NB.length) {
-      h += '<div class="sec"><span>New</span><span>last 30 days</span></div>';
-      h += NB.map(n => '<div class="newpb" data-id="' + esc(n.best.run.id) + '"><i class="pbtag">NEW PB</i> <b>' +
-        esc(effortName(n.km)) + ' ' + Calc.fmtDuration(n.best.seconds) + '</b>: your fastest ever' +
-        (n.was ? ', ' + gapTxt(n.by) + ' quicker than ' + esc(fmtDate(n.was.run.date)) : '') + '.</div>').join('');
-    }
     const fresh = {};
-    NB.forEach(n => { fresh[n.km] = true; });
+    Calc.newBests(Store.all(), today()).forEach(n => { fresh[n.km] = true; });
+    const mon = d => MON[+d.slice(5, 7) - 1] + ' ' + d.slice(0, 4);
 
     if (m.board.length) {
-      h += '<div class="sec"><span>All time</span><span>since ' + esc(fmtDate(m.first || '').replace(/^\d+ /, '')) + '</span></div>';
-      /* a plaque per distance: the time, whose run it was, this year quietly beside it */
-      h += '<div class="plaques">' + m.board.map(b => {
-        const T = b.thisYear, same = T && T.run.id === b.best.run.id;
-        return '<div class="plaque' + (fresh[b.km] ? ' fresh' : '') + '" data-id="' + esc(b.best.run.id) + '">' +
-          '<div class="pd">' + esc(effortName(b.km)) + (fresh[b.km] ? ' <i class="pbtag">NEW PB</i>' : '') + '</div>' +
-          '<div class="pt">' + Calc.fmtDuration(b.best.seconds) + '</div>' +
-          '<div class="pw">' + Calc.fmtPace(b.best.pace) + '/km \u00b7 ' + fmtDate(b.best.run.date) + '</div>' +
-          '<div class="py">' + (same ? 'set this year' : T ? esc(m.year) + ': ' + Calc.fmtDuration(T.seconds) + ', ' + gapTxt(T.seconds - b.best.seconds) + ' off'
-            : esc(m.year) + ': none yet') + '</div></div>';
-      }).join('') + '</div>';
-      h += '<div class="est">The fastest stretch of each distance inside any run, races included. ' +
-        'Distance is GPS distance.</div>';
+      h += '<div class="sec"><span>Distances</span><span>all time</span></div>' + m.board.map(b =>
+        '<div class="brow" data-km="' + b.km + '"><span class="bk">' + esc(effortName(b.km)) +
+        (fresh[b.km] ? ' <i class="pbtag">NEW</i>' : '') + '</span><span class="bt">' + Calc.fmtDuration(b.best.seconds) +
+        '</span><span class="bw">' + mon(b.best.run.date) + '</span><span class="bg">\u203a</span></div>').join('');
     }
 
-    /* Year by year: one distance at a time, each year against the last year
-       you ran it. A list rather than a chart: the question is "did I get
-       faster or slower", and that answer is a word and a number. */
-    const progs = m.progression.filter(p => p.years.length > 1);
-    if (progs.length) {
-      if (!progs.some(p => p.km === bestsKm)) bestsKm = (progs.find(p => p.km === 5) || progs[0]).km;
-      const P = progs.find(p => p.km === bestsKm);
-      h += '<div class="sec"><span>Year by year</span><span>best each year</span></div>';
-      h += '<div class="bar wrap" id="b-dist">' + progs.map(p =>
-        '<button class="chip" type="button" data-km="' + p.km + '" aria-pressed="' + (p.km === bestsKm) + '">' +
-        esc(effortName(p.km)) + '</button>').join('') + '</div>';
-      const gap = s => s < 60 ? Math.round(s) + 's' : Calc.fmtDuration(Math.round(s));
-      h += P.years.map(y => {
-        const c = y.change;
-        const verdict = !c ? (y.vs ? 'same as ' + y.vs : 'first year')
-          : (c.dir === 'flat' ? 'same as ' + y.vs
-            : '<span class="delta ' + c.tone + '">' + (c.dir === 'up' ? '\u25b2' : '\u25bc') + ' ' +
-              gap(Math.abs(c.diff)) + (c.dir === 'up' ? ' slower' : ' faster') + '</span>' +
-              (+y.year - +y.vs > 1 ? ' than ' + esc(y.vs) : ''));
-        return '<div class="cmp yby' + (y.fastest ? ' pb' : '') + '" data-id="' + esc(y.run.id) + '">' +
-          '<span class="k">' + esc(y.year) + (y.fastest ? ' <i class="pbtag">PB</i>' : '') +
-          (y.thisYear ? ' <em>this year</em>' : '') + '</span>' +
-          '<span class="v">' + (y.fastest ? '<b>' : '') + Calc.fmtDuration(y.seconds) + (y.fastest ? '</b>' : '') +
-          '<s>' + verdict + '</s></span></div>';
-      }).join('');
-      h += '<div class="est">Each year\u2019s best ' + esc(effortName(P.km)) +
-        ', against the last year you ran one. PB marks your fastest year. Tap a year for the run.</div>';
+    if (m.raceGroups.length) {
+      h += '<div class="sec"><span>Races</span><span>' + m.races.length + '</span></div>' + m.raceGroups.map(g =>
+        '<div class="brow race" data-race="' + esc(g.name) + '"><span class="bk">' + esc(g.name) +
+        '<s>' + g.years.join(' \u00b7 ') + '</s></span><span class="bt">' + Calc.fmtDuration(g.best.seconds) + '</span>' +
+        '<span class="bw">' + (g.editions.length > 1 ? 'best ' + g.best.run.date.slice(0, 4) : g.best.run.date.slice(0, 4)) +
+        '</span><span class="bg">\u203a</span></div>').join('');
     }
 
-    h += recordsHTML(m.records);
-
-    if (m.races.length) {
-      h += '<div class="sec"><span>Races</span><span>' + m.races.length + '</span></div>';
-      h += m.races.map(R => '<div class="cmp" data-id="' + esc(R.run.id) + '"><span class="k">' +
-        esc(R.run.name) + '</span><span class="v">' + Calc.fmtDuration(R.seconds) + '<s>' +
-        fmtDate(R.run.date) + ' \u00b7 ' + R.run.distance_km.toFixed(2) + ' km \u00b7 ' +
-        Calc.fmtPace(R.pace) + '/km</s></span></div>').join('');
+    if (m.milestones.length) {
+      h += '<div class="sec"><span>Milestones</span><span></span></div><div class="miles">' + m.milestones.map(r =>
+        '<div class="mile"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '><span>' + esc(r.label) + '</span><b>' + esc(r.value) +
+        (r.unit ? '<s> ' + esc(r.unit) + '</s>' : '') + '</b><em>' + (r.when ? (r.when.length === 4 ? r.when : r.when.length === 7 ? mon(r.when + '-01') : fmtDate(r.when)) : '') + '</em></div>').join('') + '</div>';
     }
 
     el('view-bests').innerHTML = h;
     $('#view-bests [data-back]').onclick = () => go('home');
-    const rl = $('#view-bests .rlink');
-    if (rl) rl.onclick = () => go('resting');
-    document.querySelectorAll('#view-bests .newpb').forEach(n => { n.onclick = () => go('detail', n.dataset.id); });
-    document.querySelectorAll('#view-bests .wk').forEach(w => {
-      w.onclick = () => w.dataset.wgo ? go(w.dataset.wgo) : w.dataset.wid ? go('detail', w.dataset.wid) : null;
-    });
-    document.querySelectorAll('#b-dist [data-km]').forEach(b => {
-      b.onclick = () => { bestsKm = +b.dataset.km; const y = window.scrollY; renderBests(); window.scrollTo(0, y); };
-    });
-    document.querySelectorAll('#view-bests [data-id]').forEach(r => {
-      r.style.cursor = 'pointer';
-      r.onclick = () => go('detail', r.dataset.id);
-    });
+    document.querySelectorAll('#view-bests [data-km]').forEach(r => { r.onclick = () => go('bestdist', r.dataset.km); });
+    document.querySelectorAll('#view-bests [data-race]').forEach(r => { r.onclick = () => go('race', r.dataset.race); });
+    document.querySelectorAll('#view-bests [data-id]').forEach(r => { r.onclick = () => go('detail', r.dataset.id); });
   }
 
-  /* ---------------------------------------------------------------- detail */
+  /* one distance: the best, your top five, each year's best as a bar */
+  function renderBestDist(kmTxt) {
+    const km = +kmTxt, D = Calc.distanceModel(Store.all(), km, today());
+    let h = '<div class="back" data-back="1">\u2190 Bests</div>';
+    if (!D) { el('view-bestdist').innerHTML = h + '<div class="est">No efforts at this distance yet.</div>';
+      $('#view-bestdist [data-back]').onclick = () => go('bests'); return; }
+    h += '<div class="ttl">' + esc(effortName(km)) + '</div><div class="sub">FROM ' + D.count + ' RUNS</div>';
+    h += '<div class="hero1"><div class="big">' + Calc.fmtDuration(D.best.seconds) + '</div><div class="est">' +
+      Calc.fmtPace(D.best.pace) + '/km \u00b7 ' + fmtDate(D.best.run.date) + ' \u00b7 ' + esc(D.best.run.name) + '</div></div>';
+    if (D.thisYear) h += cmp(today().slice(0, 4), Calc.fmtDuration(D.thisYear.seconds),
+      D.off ? (D.off < 60 ? Math.round(D.off) + ' s' : Calc.fmtDuration(Math.round(D.off))) + ' off your best' : 'your best', D.thisYear.run.id);
+    h += '<div class="sec"><span>Top ' + D.top.length + '</span><span>ever</span></div>' + D.top.map((x, i) =>
+      '<div class="cmp" data-id="' + esc(x.run.id) + '"><span class="k">' + (i + 1) + '. ' + fmtDate(x.run.date) + '</span><span class="v">' +
+      Calc.fmtDuration(x.seconds) + '<s>' + Calc.fmtPace(x.pace) + '/km</s></span></div>').join('');
+    /* each year's best: the shorter the bar, the faster */
+    const P = D.perYear, lo = Math.min.apply(null, P.map(p => p.seconds)), hi = Math.max.apply(null, P.map(p => p.seconds));
+    h += '<div class="sec"><span>Each year</span><span>best of the year</span></div><div class="lens">' + P.map(p =>
+      '<div class="len yb" data-id="' + esc(p.run.id) + '"><span>' + p.year + '</span><span><i class="' + (p.seconds === lo ? 'top' : '') +
+      '" style="width:' + (40 + 60 * (hi === lo ? 1 : (p.seconds - lo) / (hi - lo))).toFixed(1) + '%"></i></span><span>' +
+      Calc.fmtDuration(p.seconds) + '</span></div>').join('') + '</div>';
+    h += '<div class="est">The fastest stretch of ' + esc(effortName(km)) + ' inside any run, races included. A shorter bar is a faster year.</div>';
+    el('view-bestdist').innerHTML = h;
+    $('#view-bestdist [data-back]').onclick = () => go('bests');
+    document.querySelectorAll('#view-bestdist [data-id]').forEach(r => { r.onclick = () => go('detail', r.dataset.id); });
+  }
+
+  /* one race, every edition side by side; best by time, with each course's length beside it */
+  function renderRace(name) {
+    const m = Calc.bestOfModel(Store.all(), Store.config(), today());
+    const g = m.raceGroups.find(x => x.name === name);
+    let h = '<div class="back" data-back="1">\u2190 Bests</div>';
+    if (!g) { el('view-race').innerHTML = h + '<div class="est">That race isn\u2019t there any more.</div>';
+      $('#view-race [data-back]').onclick = () => go('bests'); return; }
+    h += '<div class="ttl">' + esc(g.name) + '</div><div class="sub">' + g.years.join(' \u00b7 ') + '</div>';
+    h += '<div class="sec"><span>' + (g.editions.length > 1 ? 'Every edition' : 'Result') + '</span><span></span></div>' + g.editions.map(e =>
+      '<div class="cmp" data-id="' + esc(e.run.id) + '"><span class="k">' + e.run.date.slice(0, 4) + (e === g.best && g.editions.length > 1 ? ' <i class="pbtag">BEST</i>' : '') +
+      '</span><span class="v">' + Calc.fmtDuration(e.seconds) + '<s>' + (e.run.distance_km || 0).toFixed(2) + ' km \u00b7 ' + Calc.fmtPace(e.pace) + '/km</s></span></div>').join('');
+    const lens = g.editions.map(e => e.run.distance_km).filter(Boolean);
+    if (g.editions.length > 1 && lens.length && (Math.max.apply(null, lens) - Math.min.apply(null, lens)) / Math.min.apply(null, lens) > 0.03)
+      h += '<div class="est">The course wasn\u2019t the same length each year, so compare the pace beside each time too.</div>';
+    el('view-race').innerHTML = h;
+    $('#view-race [data-back]').onclick = () => go('bests');
+    document.querySelectorAll('#view-race [data-id]').forEach(r => { r.onclick = () => go('detail', r.dataset.id); });
+  }
 
   function renderDetail(id) {
     const a = Store.byId(id);
@@ -1670,14 +1571,12 @@
     let h = '<div class="back" data-back="1">\u2190 Back</div>';
     h += '<div class="ttl">' + esc(a.name) + '</div>';
     const sub = [DAYS[Calc.dayIndex(a.date)], fmtDate(a.date).toUpperCase()];
-    const auto = Calc.autoSession(a, Store.config(), dismissedTags());
-    if (a.session) sub.push(Calc.sessionLabel(a.session).toUpperCase());
-    else if (auto) sub.push(Calc.sessionLabel(auto).toUpperCase() + ' (AUTO)');
-    if (Calc.terrainOf(a) !== 'road') sub.push(Calc.terrainOf(a).toUpperCase());
+
+
     if (a.temp_c != null) sub.push(a.temp_c + '\u00b0');
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
-    h += tagChipsHTML(a, 'd');
+    h += tagLineHTML(a);
 
     h += noticedHTML(a);
 
@@ -1756,7 +1655,7 @@
 
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
-    bindTagChips(a, 'd', () => renderDetail(a.id));
+    bindTagLine(a);
     const trust = el('d-trust');
     if (trust) trust.onclick = () => {
       const next = Object.assign({}, a, { hr_trust: Calc.hrLocked(a) ? 'trust' : null, updated_at: new Date().toISOString() });
@@ -2386,7 +2285,7 @@
 
   }
 
-  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting', 'route'];
+  const VIEWS = ['home', 'detail', 'import', 'settings', 'edit', 'replace', 'bests', 'resting', 'bestdist', 'race'];
 
   /* Navigation writes to browser history, so Android's back button and its
      edge-swipe both go back a screen instead of leaving the app. */
@@ -2403,7 +2302,8 @@
       if (view === 'edit') renderEdit(param);
       if (view === 'replace') renderReplace(param);
       if (view === 'bests') renderBests();
-      if (view === 'route') renderRoute(param);
+      if (view === 'bestdist') renderBestDist(param);
+      if (view === 'race') renderRace(param);
 
       if (view === 'resting') { if (param !== 'keep') recoveryDetail = false; renderResting(); }
     } catch (err) {
