@@ -1003,8 +1003,11 @@ the Apps Script to run its hourly check immediately (`doPost` action
 pulls. Today's resting HR is only settled once the watch has synced after you
 end sleep on it; until the next check, the sheet can hold an earlier value.
 
-Then the reading (`recoveryModel`), every line naming both measures with their
-numbers: "Last 3 nights: HRV 58 ms, above your normal range; resting HR 53 bpm,
+Then the reading (`recoveryModel`), its state in words so colour is never the
+only signal: a tag for the last 3 nights (WELL RESTED, STEADY, UNDER-RECOVERED,
+MIXED) and one for the four-week trend (IMPROVING, SLIPPING, NO CHANGE, MIXED),
+green or red only for good or bad news; the border follows the first. Every
+line names both measures with their numbers: "Last 3 nights: HRV 58 ms, above your normal range; resting HR 53 bpm,
 inside your normal range — well rested." Normal range: the last 60 nights'
 average plus or minus one standard deviation (needs 30 nights). Then the
 four-week trend for both, and the training sentence. Under **Biometrics**, a card per measure:
@@ -1143,12 +1146,31 @@ mixed runs of a similar length, and shows no race halves.
 
 ## Splits
 
-The run screen's **Splits**: where each split ended (so a 0.38 km first lap
-reads 0.4, then 1.4, 2.4…), pace, a hairline bar whose length is speed,
-elevation (climbed minus descended, from the watch file's laps), and heart rate
-with a dot in its zone's colour. The fastest whole kilometre is bold; partial
-splits are dimmed. Laps
-now carry `ascent_m` and `descent_m`, written at import and by `garminEnrich`.
+The run screen's **Splits** are true kilometres from the watch file
+(`km_splits`, stream v4: "sec,hr,elev" per kilometre, then the final part as
+"m@sec,hr,elev" when 100 m or more): moving time, time-weighted heart rate, net
+elevation per kilometre. Strava tracks give them too. Runs without a file fall
+back to the watch's laps, labelled by where each ended (1.3, 2.3…), with a scrap
+under 100 m dropped. Each row: where it ended, pace, a hairline bar whose
+length is speed, elevation, and heart rate with a dot in its zone's colour. The
+fastest whole kilometre is bold; partial splits are dimmed. The route
+fingerprint (stream v3) is retired.
+
+## Results
+
+Under a run's tags, **Results**: every milestone it reached (`runResults`),
+each kind saying only its strongest line, strongest first, four shown and the
+rest behind "more". Distance (longest ever, of the year, or since a date 8+
+weeks back), time on your feet (only when it says something the distance
+didn't), best efforts grouped ("PB: 1 km 4:40, mile 7:50", "2nd best ever: 5 km",
+"Best of 2026: 10 km"), climbing (50 m or more), its week and month so far
+(biggest ever, of the year, since when), and the year passing an earlier year's
+total. The new-run card shows the top two. A best-effort line opens that
+distance in Bests. Aerobic pace is never a result: it lives on Progress.
+
+Tagging answers at once: the chip lights, a toast says "Saved · Long", and the
+sheet is told in the background (`Store.putQuick`; the outbox catches it if
+that fails). Both tag cards have an **Edit run** link.
 
 ## Settings that matter
 

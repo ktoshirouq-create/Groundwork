@@ -860,3 +860,21 @@ label > span {
 .zd.z1 { background: var(--z1); } .zd.z2 { background: var(--z2); } .zd.z3 { background: var(--z3); }
 .zd.z4 { background: var(--z4); } .zd.z5 { background: var(--z5); }
 .sp { grid-template-columns: 34px 46px 1fr 40px 48px; }
+
+.tplink { display: block; margin: 10px auto 0; background: none; border: 0; color: var(--z2); font-family: var(--f-data);
+          font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
+
+/* what a run achieved */
+.results { margin: 12px 0 4px; }
+.res { font-size: var(--t-body); color: var(--ink); padding: 3px 0 3px 12px; border-left: 2px solid var(--line); margin: 4px 0; }
+.res.lv3 { border-left-color: var(--good); font-weight: 600; }
+.res.lv2 { border-left-color: var(--good); }
+.resmore { margin: 6px 0 0; text-align: left; }
+
+/* the state in words */
+.stags { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 8px; }
+.stag { font-family: var(--f-data); font-size: var(--t-micro); letter-spacing: .14em; color: var(--mute);
+        border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; }
+.stag .k { color: var(--dim); }
+.stag.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, transparent); }
+.stag.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, transparent); }

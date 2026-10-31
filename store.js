@@ -282,6 +282,21 @@
       });
     },
 
+    /* Save on this phone and answer straight away; the sheet is told in the
+       background (and the outbox catches it if that fails). For taps that
+       should feel instant, like tagging. */
+    putQuick: function (act) {
+      const self = this;
+      return this.adapter.put(this.bundle, act).then(saved => {
+        if (Sheets.configured()) {
+          Sheets.post({ action: 'put', activity: saved })
+            .then(r => { if (r && r.error) throw new Error(r.error); self.sync.at = new Date().toISOString(); self.sync.error = null; })
+            .catch(err => { enqueue({ action: 'put', id: saved.id }); self.sync.pending = queued().length; self.sync.error = String(err.message || err); });
+        }
+        return saved;
+      });
+    },
+
     remove: function (id) {
       const self = this;
       return this.adapter.remove(this.bundle, id).then(() => {

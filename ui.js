@@ -621,32 +621,55 @@
       esc(Calc.terrainOf(a).toUpperCase()) + '</b> <button type="button" class="tedit" id="d-tedit">Edit</button></div>';
   }
 
+  /* What the run achieved, strongest first: four lines, the rest behind "more". */
+  function resultsHTML(a, max) {
+    const R = Calc.runResults(a, Store.all());
+    if (!R.length) return '';
+    const n = max || 4;
+    const line = r => '<div class="res lv' + Math.floor(r.level) + '"' + (r.km ? ' data-km="' + r.km + '"' : '') + '>' + esc(r.text) + '</div>';
+    return '<div class="results"' + (max ? '' : ' id="d-results"') + '>' + R.slice(0, n).map(line).join('') +
+      (R.length > n ? (max ? '' : '<button type="button" class="tplink resmore">+' + (R.length - n) + ' more</button><div class="resrest" hidden>' + R.slice(n).map(line).join('') + '</div>') : '') + '</div>';
+  }
+
+  function bindResults(scope) {
+    document.querySelectorAll(scope + ' .res[data-km]').forEach(r => { r.style.cursor = 'pointer'; r.onclick = () => go('bestdist', r.dataset.km); });
+    const more = $(scope + ' .resmore');
+    if (more) more.onclick = () => { $(scope + ' .resrest').hidden = false; more.remove(); };
+  }
+
   function bindTagLine(a) {
     const c = $('#d-tagline [data-tc]');
-    if (c) c.onclick = () => Store.put(Object.assign({}, a, { session: c.dataset.tc, updated_at: new Date().toISOString() })).then(() => renderDetail(a.id));
+    if (c) c.onclick = () => { toast('Saved \u00b7 ' + Calc.sessionLabel(c.dataset.tc), 'ok');
+      Store.putQuick(Object.assign({}, a, { session: c.dataset.tc, updated_at: new Date().toISOString() })).then(() => renderDetail(a.id)); };
     el('d-tedit').onclick = () => openTagCard(a);
   }
 
   function openTagCard(a) {
     const box = el('tagprompt');
     box.innerHTML = '<div class="tpcard"><div class="tphead">' + esc(a.name) + '</div>' + tagChipsHTML(a, 'x') +
-      '<div class="tpbtns"><button type="button" class="btn ghost" id="x-done">Done</button></div></div>';
+      '<div class="tpbtns"><button type="button" class="btn ghost" id="x-done">Done</button></div>' +
+      '<button type="button" class="tplink" id="x-edit">Edit run \u2192</button></div>';
     box.hidden = false;
     const close = () => { box.hidden = true; box.innerHTML = ''; };
     bindTagChips(a, 'x', next => { renderDetail(next.id); if (next.session !== a.session) close(); else openTagCard(next); });
     el('x-done').onclick = close;
+    el('x-edit').onclick = () => { close(); go('edit', a.id); };
   }
 
   function bindTagChips(a, pfx, after) {
-    const save = patch => {
+    /* instant: the chip lights at once, a toast confirms, the sheet is told in the background */
+    const save = (patch, btn) => {
       const next = Object.assign({}, a, patch, { updated_at: new Date().toISOString() });
-      Store.put(next).then(() => after && after(next));
+      if (btn) { btn.parentNode.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', 'false')); btn.setAttribute('aria-pressed', 'true'); }
+      const word = patch.session !== undefined ? (patch.session ? Calc.sessionLabel(patch.session) : 'untagged') : patch.terrain ? patch.terrain[0].toUpperCase() + patch.terrain.slice(1) : '';
+      toast('Saved \u00b7 ' + word, 'ok');
+      Store.putQuick(next).then(() => after && after(next));
     };
     document.querySelectorAll('#' + pfx + '-tags [data-ts]').forEach(b => {
-      b.onclick = () => save({ session: a.session === b.dataset.ts ? null : b.dataset.ts });
+      b.onclick = () => save({ session: a.session === b.dataset.ts ? null : b.dataset.ts }, b);
     });
     document.querySelectorAll('#' + pfx + '-tags [data-tt]').forEach(b => {
-      b.onclick = () => save({ terrain: b.dataset.tt });
+      b.onclick = () => save({ terrain: b.dataset.tt }, b);
     });
   }
 
@@ -676,13 +699,16 @@
     box.innerHTML = '<div class="tpcard"><div class="tphead">New run' + (left.length > 1 ? ' \u00b7 1 of ' + left.length : '') + '</div>' +
       '<div class="rvname">' + esc(a.name) + ' <span>\u00b7 ' + fmtDate(a.date) + ' \u00b7 ' + (a.distance_km || 0).toFixed(2) + ' km \u00b7 ' +
       Calc.fmtPace(Calc.paceSecPerKm(a.distance_km, a.elapsed_s)) + '/km' + (a.avg_hr != null ? ' \u00b7 ' + a.avg_hr + ' bpm' : '') + '</span></div>' +
+      resultsHTML(a, 2) +
       '<div class="est">What was it?</div>' + tagChipsHTML(a, 'n') +
       '<div class="tpbtns"><button type="button" class="btn ghost" id="n-later">Later</button>' +
-      '<button type="button" class="btn ghost" id="n-never">Not this one</button></div></div>';
+      '<button type="button" class="btn ghost" id="n-never">Not this one</button></div>' +
+      '<button type="button" class="tplink" id="n-edit">Edit run \u2192</button></div>';
     box.hidden = false;
     /* a session tag closes it (or brings the next); terrain stays, so both can be set */
     bindTagChips(a, 'n', next => { promptNewRuns(); if (!el('view-detail').hidden) renderDetail(next.id); else if (!el('view-home').hidden) render('home'); });
     el('n-later').onclick = () => { laterThisVisit[a.id] = 1; promptNewRuns(); };
+    el('n-edit').onclick = () => { laterThisVisit[a.id] = 1; box.hidden = true; box.innerHTML = ''; go('edit', a.id); };
     el('n-never').onclick = () => { dismissTag(a.id); promptNewRuns(); };
   }
 
@@ -695,11 +721,10 @@
     if (!S) return '';
     const span = Math.max(1, S.slow - S.fast);
     const zone = hr => hr == null ? 'none' : hr >= bounds.z5 ? 'z5' : hr >= bounds.z4 ? 'z4' : hr >= bounds.z3 ? 'z3' : hr >= bounds.z2 ? 'z2' : 'z1';
-    let at = 0;
-    let h = '<div class="sec"><span>Splits</span><span></span></div><div class="splits">' +
+    let h = '<div class="sec"><span>Splits</span><span>' + (S.exact ? 'per kilometre' : 'per lap') + '</span></div><div class="splits">' +
       '<div class="sp head"><span>km</span><span>pace</span><span></span>' + (S.hasElev ? '<span>elev</span>' : '') + '<span>hr</span></div>';
     h += S.rows.map(r => {
-      at += r.km;
+      const at = r.end;
       const w = 30 + 70 * (S.slow - r.pace) / span;           // faster is longer
       return '<div class="sp' + (r.n === S.fastest ? ' best' : '') + (r.partial ? ' part' : '') + '">' +
         '<span>' + (Math.abs(at - Math.round(at)) < 0.05 ? Math.round(at) : at.toFixed(1)) + '</span><span>' + Calc.fmtPace(r.pace) + '</span>' +
@@ -1353,7 +1378,8 @@
       h += '<div class="sec"><span>Biometrics</span><span></span></div>';
       h += '<div class="est">Nothing from Garmin yet. Run <b>garminRestingHistory</b> and <b>garminHrvHistory</b> in Apps Script once (README \u2192 Resting HR, HRV).</div>';
     } else {
-      if (R.now || R.trend) h += '<div class="rsum ' + (R.nowTone || '') + '">' +
+      const tag = (t, pre) => t ? '<span class="stag ' + (t.tone || '') + '">' + (pre ? '<span class="k">' + pre + ' \u00b7</span> ' : '') + esc(t.word) + '</span>' : '<span></span>';
+      if (R.now || R.trend) h += '<div class="rsum ' + (R.nowTone || '') + '"><div class="stags">' + tag(R.nowTag) + tag(R.trendTag, '4 WEEKS') + '</div>' +
         (R.now ? '<p>' + esc(R.now) + '</p>' : '') + (R.trend ? '<p>' + esc(R.trend) + '</p>' : '') + '</div>';
       else h += '<div class="est">A reading needs about 30 nights of both measures.</div>';
       h += '<div class="sec"><span>Biometrics</span><span>last 7 nights</span></div>';
@@ -1577,6 +1603,7 @@
     if (a.rpe != null) sub.push('RPE ' + a.rpe);
     h += '<div class="sub">' + esc(sub.join(' \u00b7 ')) + '</div>';
     h += tagLineHTML(a);
+    h += resultsHTML(a);
 
     h += noticedHTML(a);
 
@@ -1656,6 +1683,7 @@
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
     bindTagLine(a);
+    bindResults('#view-detail');
     const trust = el('d-trust');
     if (trust) trust.onclick = () => {
       const next = Object.assign({}, a, { hr_trust: Calc.hrLocked(a) ? 'trust' : null, updated_at: new Date().toISOString() });

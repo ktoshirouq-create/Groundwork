@@ -2173,37 +2173,42 @@
     const H = measureState(hrv, today, 'hrv', 'up', acts, cfg);
     const good = (M, p) => M && M.pos && (M.better === 'up' ? /above/.test(M.pos) : /below/.test(M.pos)) === p;
     const off = M => M && M.pos && M.pos !== 'inside';
-    let now = null, tone = 'neutral';
+    /* The state in words, as tags, so colour is never the only signal: the
+       last 3 nights (WELL RESTED, STEADY, UNDER-RECOVERED, MIXED) and the
+       four-week trend (IMPROVING, SLIPPING, NO CHANGE, MIXED). Green or red
+       only for good or bad news. The sentences keep the numbers; a reason is
+       added only where there's something to explain. */
+    let now = null, tone = 'neutral', nowTag = null;
     if (H && R && H.pos && R.pos) {
       const hB = /below/.test(H.pos), hA = /above/.test(H.pos), rB = /below/.test(R.pos), rA = /above/.test(R.pos);
       const well = /well/.test(H.pos) || /well/.test(R.pos);
       const where = M => M.pos === 'inside' ? 'inside your normal range' : M.pos + ' your normal range';
-      let meaning;
-      if (!off(H) && !off(R)) meaning = 'steady';
-      else if ((hA && !rA) && (rB || !off(R))) { meaning = 'well rested'; tone = 'good'; }
-      else if ((rB && !hB) && (hA || !off(H))) { meaning = 'well rested'; tone = 'good'; }
-      else if (hB && rA) { meaning = (well ? 'both clearly point to under-recovery' : 'both point to under-recovery') +
-        ' \u2014 often sleep, alcohol, illness or a hard block'; tone = 'bad'; }
-      else if (hB && !off(R)) { meaning = 'often one late night or drinks; worth watching tomorrow'; tone = 'bad'; }
-      else if (rA && !off(H)) { meaning = 'can be heat, a late meal or something coming on'; tone = 'bad'; }
-      else if (hB && rB) meaning = 'mixed \u2014 sometimes deep fatigue after a big training block';
-      else meaning = 'mixed \u2014 unusual, worth watching for a day or two';
+      let why = '';
+      if (!off(H) && !off(R)) nowTag = 'STEADY';
+      else if ((hA && !rA && (rB || !off(R))) || (rB && !hB && (hA || !off(H)))) { nowTag = 'WELL RESTED'; tone = 'good'; }
+      else if (hB && rA) { nowTag = 'UNDER-RECOVERED'; tone = 'bad';
+        why = (well ? ' Both clearly point that way \u2014' : '') + ' Often sleep, alcohol, illness or a hard block.'; }
+      else if (hB && !off(R)) { nowTag = 'MIXED'; why = ' HRV dipped while resting HR held: often one late night or drinks. Worth watching tomorrow.'; }
+      else if (rA && !off(H)) { nowTag = 'MIXED'; why = ' Resting HR rose while HRV held: can be heat, a late meal or something coming on.'; }
+      else if (hB && rB) { nowTag = 'MIXED'; why = ' Both lower than usual: sometimes deep fatigue after a big training block.'; }
+      else { nowTag = 'MIXED'; why = ' Both higher than usual: unusual, worth watching for a day or two.'; }
       now = 'Last 3 nights: HRV ' + Math.round(H.now3) + ' ms, ' + where(H) + '; resting HR ' + Math.round(R.now3) +
-        ' bpm, ' + where(R) + ' \u2014 ' + meaning + '.';
+        ' bpm, ' + where(R) + '.' + why;
     }
-    let trend = null, verdict = null;
+    let trend = null, verdict = null, trendTag = null;
     if (H && R && H.trend && R.trend) {
       const hs = H.trend.same, rs = R.trend.same;
       const hGood = !hs && H.trend.tone === 'good', rGood = !rs && R.trend.tone === 'good';
       const hBad = !hs && H.trend.tone === 'bad', rBad = !rs && R.trend.tone === 'bad';
       const nums = 'HRV ' + (hs ? 'about the same' : (H.trend.diff > 0 ? 'up ' : 'down ') + Math.round(Math.abs(H.trend.diff)) + ' ms') +
         ', resting HR ' + (rs ? 'about the same' : (R.trend.diff > 0 ? 'up ' : 'down ') + Math.round(Math.abs(R.trend.diff)) + ' bpm');
-      if (hGood && rGood) { verdict = { key: 'right', text: 'both moving the right way', tone: 'good' }; trend = 'Over four weeks both are moving the right way: ' + nums + '.'; }
-      else if (hBad && rBad) { verdict = { key: 'wrong', text: 'both moving the wrong way', tone: 'bad' }; trend = 'Over four weeks both are moving the wrong way: ' + nums + '. Worth easing off or checking sleep.'; }
-      else if (hs && rs) { verdict = { key: 'same', text: 'about the same', tone: 'neutral' }; trend = 'Over four weeks: about the same.'; }
-      else { verdict = { key: 'mixed', text: 'mixed', tone: 'neutral' }; trend = 'Over four weeks it\u2019s mixed: ' + nums + '. Give it time.'; }
+      if (hGood && rGood) { verdict = { key: 'right', text: 'both moving the right way', tone: 'good' }; trendTag = { word: 'IMPROVING', tone: 'good' }; trend = 'Over four weeks: ' + nums + '.'; }
+      else if (hBad && rBad) { verdict = { key: 'wrong', text: 'both moving the wrong way', tone: 'bad' }; trendTag = { word: 'SLIPPING', tone: 'bad' }; trend = 'Over four weeks: ' + nums + '. Worth easing off or checking sleep.'; }
+      else if (hs && rs) { verdict = { key: 'same', text: 'about the same', tone: 'neutral' }; trendTag = { word: 'NO CHANGE', tone: 'neutral' }; trend = 'Over four weeks: ' + nums + '.'; }
+      else { verdict = { key: 'mixed', text: 'mixed', tone: 'neutral' }; trendTag = { word: 'MIXED', tone: 'neutral' }; trend = 'Over four weeks: ' + nums + '. Give it time.'; }
     }
-    return { rhr: R, hrv: H, now: now, nowTone: tone, trend: trend, verdict: verdict };
+    return { rhr: R, hrv: H, now: now, nowTone: tone, nowTag: nowTag ? { word: nowTag, tone: tone } : null,
+             trend: trend, trendTag: trendTag, verdict: verdict };
   }
 
   /* ---------- where an effort ranks ----------
@@ -2285,21 +2290,115 @@
     return AUTO_SESSIONS.indexOf(g) >= 0 ? g : null;
   }
 
-  /* ---------- splits: a run kilometre by kilometre ---------- */
+  /* ---------- splits: a run kilometre by kilometre ----------
+
+     True kilometres from the watch file when the run has them (km_splits);
+     otherwise the watch's laps, with a scrap under 100 m dropped. Each row
+     knows where it ended, so a 1.3 km warm-up lap reads 1.3, not "2". */
   function splitsOf(act) {
-    const laps = (act && act.laps || []).filter(l => l.time_s > 0 && l.distance_km > 0)
-      .slice().sort((a, b) => a.n - b.n);
-    if (laps.length < 2) return null;
-    const rows = laps.map(l => ({
-      n: l.n, km: l.distance_km, partial: l.distance_km < 0.95 || l.distance_km > 1.05,
-      pace: l.time_s / l.distance_km, hr: l.avg_hr,
-      elev: l.ascent_m != null || l.descent_m != null ? Math.round((l.ascent_m || 0) - (l.descent_m || 0)) : null
-    }));
+    let rows = [];
+    const ks = act && act.km_splits ? String(act.km_splits).split(';').filter(Boolean) : [];
+    if (ks.length) {
+      let end = 0;
+      ks.forEach((p, i) => {
+        const part = p.indexOf('@') > 0;
+        const m = part ? Number(p.split('@')[0]) : 1000;
+        const f = (part ? p.split('@')[1] : p).split(',');
+        const sec = Number(f[0]), km = m / 1000;
+        end += km;
+        rows.push({ n: i + 1, km: km, end: end, partial: part, pace: sec / km,
+          hr: f[1] !== '' && f[1] != null ? Number(f[1]) : null, elev: f[2] !== '' && f[2] != null ? Number(f[2]) : null });
+      });
+    } else {
+      const laps = (act && act.laps || []).filter(l => l.time_s > 0 && l.distance_km >= 0.1)
+        .slice().sort((a, b) => a.n - b.n);
+      let end = 0;
+      rows = laps.map(l => {
+        end += l.distance_km;
+        return { n: l.n, km: l.distance_km, end: end, partial: l.distance_km < 0.95 || l.distance_km > 1.05,
+          pace: l.time_s / l.distance_km, hr: l.avg_hr,
+          elev: l.ascent_m != null || l.descent_m != null ? Math.round((l.ascent_m || 0) - (l.descent_m || 0)) : null };
+      });
+    }
+    if (rows.length < 2) return null;
     const whole = rows.filter(r => !r.partial);
     const fastest = whole.length ? whole.slice().sort((a, b) => a.pace - b.pace)[0].n : null;
-    const fast = Math.min.apply(null, rows.map(r => r.pace)), slow = Math.max.apply(null, rows.map(r => r.pace));
-    return { rows: rows, fastest: fastest, fast: fast, slow: slow, hasElev: rows.some(r => r.elev != null) };
+    return { rows: rows, fastest: fastest, fast: Math.min.apply(null, rows.map(r => r.pace)),
+             slow: Math.max.apply(null, rows.map(r => r.pace)), hasElev: rows.some(r => r.elev != null),
+             exact: ks.length > 0 };
   }
+
+  /* ---------- what a run achieved ----------
+
+     Every milestone a run reached, all time, this year, or the first in a
+     while: distance, time on your feet (only when it says something the
+     distance didn't), best efforts (grouped), climbing, its week, its month,
+     its year. Each kind says only its strongest line; strongest first. */
+  function runResults(act, acts) {
+    if (!act || act.type !== 'run') return [];
+    const runs = (acts || []).filter(a => a.type === 'run' && isUsable(a));
+    const others = runs.filter(a => a.id !== act.id);
+    const y = act.date.slice(0, 4);
+    const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const mon = d => M[+d.slice(5, 7) - 1] + ' ' + d.slice(0, 4);
+    const out = [];
+    /* a value against everyone else: ever, this year, or the first in 8+ weeks */
+    const rank = (val, of, minVal) => {
+      if (val == null || val < (minVal || 0)) return null;
+      const all = others.map(a => ({ a: a, v: of(a) })).filter(x => x.v != null);
+      if (!all.some(x => x.v >= val)) return { level: 3 };
+      if (!all.some(x => x.a.date.slice(0, 4) === y && x.v >= val)) {
+        const prev = all.filter(x => x.a.date < act.date && x.v >= val).sort((p, q) => q.a.date.localeCompare(p.a.date))[0];
+        return { level: 2, since: prev && daysBetween(prev.a.date, act.date) >= 56 ? prev.a.date : null };
+      }
+      const prev = all.filter(x => x.a.date < act.date && x.v >= val).sort((p, q) => q.a.date.localeCompare(p.a.date))[0];
+      return prev && daysBetween(prev.a.date, act.date) >= 56 ? { level: 1, since: prev.a.date } : null;
+    };
+    const say = (r, what) => r.level === 3 ? what + ' ever' : r.level === 2 ? what + ' of ' + y + (r.since ? ' \u00b7 longest since ' + mon(r.since) : '')
+      : what + ' since ' + mon(r.since);
+
+    const dR = rank(act.distance_km, a => a.distance_km, 3);
+    if (dR) out.push({ kind: 'distance', level: dR.level, text: say(dR, 'Longest run') });
+    const dur = a => a.moving_s > 0 ? a.moving_s : a.elapsed_s;
+    const tR = rank(dur(act), dur, 20 * 60);
+    if (tR && (!dR || tR.level > dR.level)) out.push({ kind: 'time', level: tR.level, text: say(tR, 'Longest time on your feet').replace('longest since', 'the longest since') });
+
+    /* best efforts, grouped by how good */
+    const E = effortRanks(act, acts);
+    const name = km => ({ 0.4: '400 m', 1: '1 km', 1.609: 'mile', 21.1: 'half', 42.2: 'marathon' })[km] || km + ' km';
+    const pb = E.filter(e => e.rank === 1), top = E.filter(e => e.rank === 2 || e.rank === 3), yb = E.filter(e => e.rank > 3 && e.yearBest);
+    if (pb.length) out.push({ kind: 'effort', level: 3, km: pb[0].km, text: 'PB: ' + pb.map(e => name(e.km) + ' ' + fmtDuration(e.seconds)).join(', ') });
+    top.forEach(e => out.push({ kind: 'effort', level: 2.5, km: e.km, text: (e.rank === 2 ? '2nd' : '3rd') + ' best ever: ' + name(e.km) + ' ' + fmtDuration(e.seconds) }));
+    if (yb.length) out.push({ kind: 'effort', level: 2, km: yb[0].km, text: 'Best of ' + y + ': ' + yb.map(e => name(e.km)).join(', ') });
+
+    const cR = rank(act.ascent_m, a => a.ascent_m, 50);
+    if (cR && cR.level >= 2) out.push({ kind: 'climb', level: cR.level, text: cR.level === 3 ? 'Most climbing ever: ' + Math.round(act.ascent_m) + ' m' : 'Most climbing of ' + y + ': ' + Math.round(act.ascent_m) + ' m' });
+
+    /* its week and month, up to and including this run */
+    const sumTo = (key, keyOf) => runs.filter(a => keyOf(a.date) === key && a.date <= act.date).reduce((t, a) => t + (a.distance_km || 0), 0);
+    const totals = keyOf => { const t = {}; runs.forEach(a => { const k = keyOf(a.date); t[k] = (t[k] || 0) + (a.distance_km || 0); }); return t; };
+    [['week', d => weekStart(d), 10, 'Biggest week'], ['month', d => d.slice(0, 7), 30, 'Biggest month']].forEach(([kind, keyOf, min, what]) => {
+      const k = keyOf(act.date), mine = sumTo(k, keyOf);
+      if (mine < min) return;
+      const T = totals(keyOf); delete T[k];
+      const keys = Object.keys(T);
+      if (!keys.some(o => T[o] >= mine)) { out.push({ kind: kind, level: 3, text: what + ' ever: ' + mine.toFixed(1) + ' km' }); return; }
+      if (!keys.some(o => o.slice(0, 4) === y && T[o] >= mine)) {
+        const prev = keys.filter(o => o < k && T[o] >= mine).sort().pop();
+        out.push({ kind: kind, level: 2, text: what + ' of ' + y + ': ' + mine.toFixed(1) + ' km' + (prev && daysBetween(prev.length === 7 ? prev + '-01' : prev, act.date) >= 56 ? ' \u00b7 biggest since ' + mon(prev.length === 7 ? prev + '-01' : prev) : '') });
+      }
+    });
+
+    /* the year passing a whole earlier year */
+    const after = runs.filter(a => a.date.slice(0, 4) === y && a.date <= act.date).reduce((t, a) => t + (a.distance_km || 0), 0);
+    const before = after - (act.distance_km || 0);
+    const yt = totals(d => d.slice(0, 4));
+    const passed = Object.keys(yt).filter(o => o < y && before < yt[o] && after >= yt[o]).sort((p, q) => yt[q] - yt[p])[0];
+    if (passed) out.push({ kind: 'year', level: 1.5, text: y + ' passes ' + passed + '\u2019s ' + Math.round(yt[passed]) + ' km' });
+
+    return out.sort((p, q) => q.level - p.level);
+  }
+
 
   /* ---------- the Best-of page ----------
 
@@ -2569,7 +2668,7 @@
     SESSIONS, sessionOf, sessionLabel, intentCheck, sessionNote, z2Of, lapsOf,
     isRace, aerobicSamples,
     EFFORT_DISTANCES, bestEffort, bestEffortOf, effortsOf, bestEffortBoard, recordsSetBy,
-    zoneLaps, driftOf, bestOfModel, distanceModel, raceKey, autoSession, AUTO_TAG_BEFORE, suggestTags, splitsOf, terrainOf, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
+    zoneLaps, driftOf, bestOfModel, runResults, distanceModel, raceKey, autoSession, AUTO_TAG_BEFORE, suggestTags, splitsOf, terrainOf, effortRanks, newBests, progressModel, recoveryModel, measureState, changeOf, SAME, isTest, effortMix, worthKnowing, WORTH, hrLocked, HR_LOCK_LIMIT, restingModel, RESTING_VIEWS, isTrail, isAerobicMeasure, leftOutOf, lengthPeers,
     ROLLING_DAYS, sinceDays, z2Rolling, loadSeries, rampFlag, weekDays, RAMP_LIMIT, spread, noticed, NOTICE,
     weekKeys, zoneShareSeries, weeklySeries,
     windowStats, rangeOf, lastYear, readRows
