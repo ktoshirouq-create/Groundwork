@@ -864,12 +864,6 @@ label > span {
 .tplink { display: block; margin: 10px auto 0; background: none; border: 0; color: var(--z2); font-family: var(--f-data);
           font-size: var(--t-micro); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
 
-/* what a run achieved */
-.results { margin: 12px 0 4px; }
-.res { font-size: var(--t-body); color: var(--ink); padding: 3px 0 3px 12px; border-left: 2px solid var(--line); margin: 4px 0; }
-.res.lv3 { border-left-color: var(--good); font-weight: 600; }
-.res.lv2 { border-left-color: var(--good); }
-.resmore { margin: 6px 0 0; text-align: left; }
 
 /* the state in words */
 .stags { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 8px; }
@@ -878,3 +872,16 @@ label > span {
 .stag .k { color: var(--dim); }
 .stag.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, transparent); }
 .stag.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, transparent); }
+
+/* what a run achieved: badges */
+.results { margin: 12px 0 6px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { font-family: var(--f-body); font-size: var(--t-body); color: var(--ink); background: none; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; line-height: 1.3; }
+.pill b { font-weight: 600; }
+.pill.top { border-color: color-mix(in srgb, var(--good) 60%, transparent); }
+.pill.top b { color: var(--good); }
+.pill.on { background: var(--panel); }
+.pill.more { color: var(--mute); }
+.resdetail { font-size: var(--t-body); color: var(--mute); margin: 10px 0 0; line-height: 1.5; }
+.resdetail .tplink { display: inline; margin: 0 0 0 6px; }

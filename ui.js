@@ -25,6 +25,12 @@
      the calendar moves past the fixture dates. */
   const today = () => window.__GW_TODAY || new Date().toISOString().slice(0, 10);
 
+  /* with its year always, for records that may be from any year */
+  function fullDate(d) {
+    const [y, m, day] = d.split('-');
+    return (+day) + ' ' + MON[+m - 1] + ' ' + y;
+  }
+
   function fmtDate(d) {
     const [y, m, day] = d.split('-');
     const base = (+day) + ' ' + MON[+m - 1];
@@ -621,20 +627,42 @@
       esc(Calc.terrainOf(a).toUpperCase()) + '</b> <button type="button" class="tedit" id="d-tedit">Edit</button></div>';
   }
 
-  /* What the run achieved, strongest first: four lines, the rest behind "more". */
+  /* What the run achieved, as badges, strongest first. Records of all time
+     and of the year get a green edge; tap a badge for its detail. */
   function resultsHTML(a, max) {
     const R = Calc.runResults(a, Store.all());
     if (!R.length) return '';
-    const n = max || 4;
-    const line = r => '<div class="res lv' + Math.floor(r.level) + '"' + (r.km ? ' data-km="' + r.km + '"' : '') + '>' + esc(r.text) + '</div>';
-    return '<div class="results"' + (max ? '' : ' id="d-results"') + '>' + R.slice(0, n).map(line).join('') +
-      (R.length > n ? (max ? '' : '<button type="button" class="tplink resmore">+' + (R.length - n) + ' more</button><div class="resrest" hidden>' + R.slice(n).map(line).join('') + '</div>') : '') + '</div>';
+    const n = max || 6;
+    const pill = (r, i) => '<button type="button" class="pill' + (r.level >= 2 ? ' top' : '') + '" data-ri="' + i + '">' +
+      '<b>' + esc(r.head) + '</b> ' + esc(r.tail) + '</button>';
+    return '<div class="results"' + (max ? '' : ' id="d-results"') + '><div class="pills">' + R.slice(0, n).map(pill).join('') +
+      (R.length > n && !max ? '<button type="button" class="pill more">+' + (R.length - n) + '</button>' : '') + '</div>' +
+      (max ? '' : '<div class="resdetail" hidden></div>') + '</div>';
   }
 
-  function bindResults(scope) {
-    document.querySelectorAll(scope + ' .res[data-km]').forEach(r => { r.style.cursor = 'pointer'; r.onclick = () => go('bestdist', r.dataset.km); });
-    const more = $(scope + ' .resmore');
-    if (more) more.onclick = () => { $(scope + ' .resrest').hidden = false; more.remove(); };
+  function bindResults(scope, a) {
+    const R = Calc.runResults(a, Store.all());
+    const box = $(scope + ' .resdetail');
+    if (!box) return;
+    let open = null;
+    document.querySelectorAll(scope + ' .pill[data-ri]').forEach(p => {
+      p.onclick = () => {
+        const r = R[+p.dataset.ri];
+        document.querySelectorAll(scope + ' .pill').forEach(x => x.classList.remove('on'));
+        if (open === p.dataset.ri) { box.hidden = true; open = null; return; }
+        open = p.dataset.ri; p.classList.add('on');
+        box.innerHTML = esc(r.detail) + (r.km ? ' <button type="button" class="tplink" data-km="' + r.km + '">All ' + esc(effortName(r.km)) + ' bests \u2192</button>' : '');
+        box.hidden = false;
+        const l = box.querySelector('[data-km]');
+        if (l) l.onclick = () => go('bestdist', l.dataset.km);
+      };
+    });
+    const more = $(scope + ' .pill.more');
+    if (more) more.onclick = () => {
+      more.parentNode.innerHTML = R.map((r, i) => '<button type="button" class="pill' + (r.level >= 2 ? ' top' : '') + '" data-ri="' + i + '"><b>' +
+        esc(r.head) + '</b> ' + esc(r.tail) + '</button>').join('');
+      bindResults(scope, a);
+    };
   }
 
   function bindTagLine(a) {
@@ -673,11 +701,27 @@
     });
   }
 
-  /* Runs you've told the app to leave untagged ("not this one"). A UI
-     choice, kept on this phone. */
+  /* Runs you've told the app to leave untagged ("not this one"): kept on the
+     run itself (tag_skip), so it survives a cleared phone and follows you to
+     the sheet. Older phone-only choices are carried over once. */
   const DISMISS_KEY = 'groundwork:tag-dismissed';
-  function dismissedTags() { try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}'); } catch (e) { return {}; } }
-  function dismissTag(id) { const d = dismissedTags(); d[id] = 1; localStorage.setItem(DISMISS_KEY, JSON.stringify(d)); }
+  function dismissedTags() {
+    const d = {};
+    Store.all().forEach(a => { if (a.tag_skip) d[a.id] = 1; });
+    return d;
+  }
+  function dismissTag(id) {
+    const a = Store.all().find(x => x.id === id);
+    if (a) Store.putQuick(Object.assign({}, a, { tag_skip: 1, updated_at: new Date().toISOString() }));
+  }
+  function carryOverDismissed() {
+    let old = {};
+    try { old = JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}'); } catch (e) { old = {}; }
+    const ids = Object.keys(old);
+    if (!ids.length) return;
+    ids.forEach(id => { const a = Store.all().find(x => x.id === id); if (a && !a.tag_skip) dismissTag(id); });
+    localStorage.removeItem(DISMISS_KEY);
+  }
 
   /* New runs from Garmin, asked about when they arrive: on opening the app
      and after a sync. "Later" puts the card away until the app is next
@@ -709,7 +753,7 @@
     bindTagChips(a, 'n', next => { promptNewRuns(); if (!el('view-detail').hidden) renderDetail(next.id); else if (!el('view-home').hidden) render('home'); });
     el('n-later').onclick = () => { laterThisVisit[a.id] = 1; promptNewRuns(); };
     el('n-edit').onclick = () => { laterThisVisit[a.id] = 1; box.hidden = true; box.innerHTML = ''; go('edit', a.id); };
-    el('n-never').onclick = () => { dismissTag(a.id); promptNewRuns(); };
+    el('n-never').onclick = () => { laterThisVisit[a.id] = 1; dismissTag(a.id); promptNewRuns(); };
   }
 
   /* ------------------------------------------------------------- splits --- */
@@ -943,6 +987,15 @@
     const s = m.summary, P = m.previous;
     const dd = (v, p) => deltaHTML(Calc.delta(v, p, null));
     h += '<div class="totals">';
+    /* an unfinished period with nothing in it yet: no "100% down", just what the last one had by now */
+    if (s.count === 0 && m.period.isCurrent) {
+      h += cmp('So far', 'nothing yet', P && P.summary.count
+        ? P.label + ': ' + P.summary.distance_km.toFixed(2) + ' km, ' + P.summary.count + (P.summary.count === 1 ? ' run' : ' runs')
+        : '');
+      h += '</div>';
+      h += readHTML(m);
+      return h;
+    }
     h += cmp('Distance', s.distance_km.toFixed(2) + ' km ' +
       (P ? dd(s.distance_km, P.summary.distance_km) : ''),
       P ? P.label + ' ' + P.summary.distance_km.toFixed(2) : '');
@@ -1061,11 +1114,14 @@
     return h;
   }
 
-  function bestsHTML(B, word) {
+  /* A year review already has its longest run under The year in figures, so
+     here it keeps only "longest outside a race" (when the longest was one).
+     Aerobic pace isn't a best: it lives on Progress. */
+  function bestsHTML(B, word, inFigures) {
     if (!B) return '';
     const when = a => fmtDate(a.date) + (Calc.isRace(a) ? ' \u00b7 race' : '');
     let h = '<div class="sec"><span>Bests</span><span>' + esc(word) + '</span></div>';
-    h += cmp('Longest run', B.longest.distance_km.toFixed(2) + ' km', when(B.longest), B.longest.id);
+    if (!inFigures) h += cmp('Longest run', B.longest.distance_km.toFixed(2) + ' km', when(B.longest), B.longest.id);
     if (B.longestTraining) h += cmp('Longest outside a race',
       B.longestTraining.distance_km.toFixed(2) + ' km', fmtDate(B.longestTraining.date),
       B.longestTraining.id);
@@ -1075,8 +1131,6 @@
         '<span class="v">' + Calc.fmtDuration(e.seconds) + '<s>' + Calc.fmtPace(e.pace) +
         '/km \u00b7 ' + esc(when(e.run)) + '</s></span></div>';
     });
-    if (B.aerobic) h += cmp('Best aerobic pace', Calc.fmtPace(B.aerobic.pace) + '/km',
-      fmtDate(B.aerobic.run.date), B.aerobic.run.id);
     if (B.efforts.length) h += '<div class="est">Efforts are the fastest stretch of each ' +
       'distance inside a run. PB marks one that still stands as your all-time best.</div>';
     return h;
@@ -1092,7 +1146,8 @@
     const order = P.cumulative.filter(y => y.year !== P.year).concat([mine]);
     const chart = lineChart(order.map(y => y.points), {
       height: 160, from: '2000-01-01', to: '2000-12-31', format: v => Math.round(v) + '', min: 0,
-      endLabels: order.map(y => "'" + y.year.slice(2)),
+      /* only this year is named on its line; the totals underneath name the rest */
+      endLabels: order.map(y => y.year === P.year ? "'" + y.year.slice(2) : null),
       anchorLabels: ['km', 'km'], label: 'Kilometres through the year, every year.',
       xax: ['JAN', 'JUL', 'DEC'] });
     return '<div class="sec"><span>Against your other years</span><span>km through the year</span></div>' + (chart || '') +
@@ -1194,7 +1249,7 @@
 
     h += monthsHTML(m.months);
     if (m.pictures) h += cumulativeHTML(m.pictures);
-    h += bestsHTML(m.bests, m.period.word);
+    h += bestsHTML(m.bests, m.period.word, !!m.figures);
 
     if (m.mix) {
       h += '<div class="sec"><span>What you mainly did</span><span>' +
@@ -1529,7 +1584,7 @@
     if (m.milestones.length) {
       h += '<div class="sec"><span>Milestones</span><span></span></div><div class="miles">' + m.milestones.map(r =>
         '<div class="mile"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '><span>' + esc(r.label) + '</span><b>' + esc(r.value) +
-        (r.unit ? '<s> ' + esc(r.unit) + '</s>' : '') + '</b><em>' + (r.when ? (r.when.length === 4 ? r.when : r.when.length === 7 ? mon(r.when + '-01') : fmtDate(r.when)) : '') + '</em></div>').join('') + '</div>';
+        (r.unit ? '<s> ' + esc(r.unit) + '</s>' : '') + '</b><em>' + (r.when ? (r.when.length === 4 ? r.when : r.when.length === 7 ? mon(r.when + '-01') : fullDate(r.when)) : '') + '</em></div>').join('') + '</div>';
     }
 
     el('view-bests').innerHTML = h;
@@ -1683,7 +1738,7 @@
     el('view-detail').innerHTML = h;
     $('#view-detail [data-back]').onclick = () => go('home');
     bindTagLine(a);
-    bindResults('#view-detail');
+    bindResults('#view-detail', a);
     const trust = el('d-trust');
     if (trust) trust.onclick = () => {
       const next = Object.assign({}, a, { hr_trust: Calc.hrLocked(a) ? 'trust' : null, updated_at: new Date().toISOString() });
@@ -2410,6 +2465,7 @@
     if (Store.sheetsConfigured()) {
       Store.onsync = () => { if (!el('view-settings').hidden) renderSettings(); };
       Store.flush().then(() => Store.pull()).then(() => {
+        carryOverDismissed();
         if (!el('view-home').hidden) render('home');
         promptNewRuns();
         /* said once per open, never silently: something has stopped syncing */

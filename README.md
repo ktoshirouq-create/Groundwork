@@ -1158,9 +1158,10 @@ fingerprint (stream v3) is retired.
 
 ## Results
 
-Under a run's tags, **Results**: every milestone it reached (`runResults`),
-each kind saying only its strongest line, strongest first, four shown and the
-rest behind "more". Distance (longest ever, of the year, or since a date 8+
+Under a run's tags, **Results** as badges ("Longest of 2026", "PB 1 km",
+"Biggest week of 2026"): every milestone it reached (`runResults`), strongest
+first, six shown and the rest behind "+n". Records of all time and of the year
+get a green edge; tapping a badge says it in full. Distance (longest ever, of the year, or since a date 8+
 weeks back), time on your feet (only when it says something the distance
 didn't), best efforts grouped ("PB: 1 km 4:40, mile 7:50", "2nd best ever: 5 km",
 "Best of 2026: 10 km"), climbing (50 m or more), its week and month so far
@@ -1171,6 +1172,32 @@ distance in Bests. Aerobic pace is never a result: it lives on Progress.
 Tagging answers at once: the chip lights, a toast says "Saved · Long", and the
 sheet is told in the background (`Store.putQuick`; the outbox catches it if
 that fails). Both tag cards have an **Edit run** link.
+
+## Sync: two clocks per run
+
+Every run carries two clocks. `updated_at` moves only when you change something
+in the app (a tag, the name, notes); `figures_at` moves only when the Apps
+Script writes what it works out (watch-file figures, kilometre splits, links,
+the HR-lock share). The script never touches `updated_at`, and an edit from the
+app never writes over the script's fields (`SERVER_COLS`), never empties a
+figure the script filled in, and never replaces the laps of a run that has a
+watch file or a Strava track. On the phone, `mergeRun` takes what you set from
+whichever copy you changed last and the figures from whichever the script
+updated last, so neither side can overwrite the other. Laps reach the app with
+their ascent and descent.
+
+"Not this one" in the new-run card is saved on the run (`tag_skip`), so it
+survives a cleared phone; older phone-only choices are carried over once. The
+unused route column is gone from the columns the script writes.
+
+## Smaller rules
+
+An unfinished period with nothing in it yet says "So far: nothing yet", with
+what the previous one had by the same point, instead of "▼ 100%". A year
+review names its longest run once (in The year in figures), and its Bests
+keep only "longest outside a race" when the longest was one; aerobic pace is
+never listed as a best. On "Against your other years" only the year you're
+looking at is named on its line. Milestones on Bests always carry their year.
 
 ## Settings that matter
 

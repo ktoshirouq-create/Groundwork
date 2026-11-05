@@ -2354,25 +2354,33 @@
       const prev = all.filter(x => x.a.date < act.date && x.v >= val).sort((p, q) => q.a.date.localeCompare(p.a.date))[0];
       return prev && daysBetween(prev.a.date, act.date) >= 56 ? { level: 1, since: prev.a.date } : null;
     };
-    const say = (r, what) => r.level === 3 ? what + ' ever' : r.level === 2 ? what + ' of ' + y + (r.since ? ' \u00b7 longest since ' + mon(r.since) : '')
-      : what + ' since ' + mon(r.since);
+    /* each result: a badge (head and tail) and its detail, said in full on tap */
+    const tailOf = r => r.level === 3 ? 'ever' : r.level === 2 ? 'of ' + y : 'since ' + mon(r.since);
+    const since = r => r.level === 2 && r.since ? ', the longest since ' + mon(r.since) : '';
 
     const dR = rank(act.distance_km, a => a.distance_km, 3);
-    if (dR) out.push({ kind: 'distance', level: dR.level, text: say(dR, 'Longest run') });
+    if (dR) out.push({ kind: 'distance', level: dR.level, head: 'Longest', tail: tailOf(dR),
+      detail: (act.distance_km || 0).toFixed(1) + ' km: your longest run ' + tailOf(dR) + since(dR) + '.' });
     const dur = a => a.moving_s > 0 ? a.moving_s : a.elapsed_s;
     const tR = rank(dur(act), dur, 20 * 60);
-    if (tR && (!dR || tR.level > dR.level)) out.push({ kind: 'time', level: tR.level, text: say(tR, 'Longest time on your feet').replace('longest since', 'the longest since') });
+    if (tR && (!dR || tR.level > dR.level)) out.push({ kind: 'time', level: tR.level, head: 'Time on feet', tail: tailOf(tR),
+      detail: fmtDuration(Math.round(dur(act))) + ': your longest time on your feet ' + tailOf(tR) + since(tR) + '.' });
 
-    /* best efforts, grouped by how good */
+    /* best efforts: a badge per distance, at its strongest */
     const E = effortRanks(act, acts);
-    const name = km => ({ 0.4: '400 m', 1: '1 km', 1.609: 'mile', 21.1: 'half', 42.2: 'marathon' })[km] || km + ' km';
-    const pb = E.filter(e => e.rank === 1), top = E.filter(e => e.rank === 2 || e.rank === 3), yb = E.filter(e => e.rank > 3 && e.yearBest);
-    if (pb.length) out.push({ kind: 'effort', level: 3, km: pb[0].km, text: 'PB: ' + pb.map(e => name(e.km) + ' ' + fmtDuration(e.seconds)).join(', ') });
-    top.forEach(e => out.push({ kind: 'effort', level: 2.5, km: e.km, text: (e.rank === 2 ? '2nd' : '3rd') + ' best ever: ' + name(e.km) + ' ' + fmtDuration(e.seconds) }));
-    if (yb.length) out.push({ kind: 'effort', level: 2, km: yb[0].km, text: 'Best of ' + y + ': ' + yb.map(e => name(e.km)).join(', ') });
+    const name = km => ({ 0.4: '400 m', 1: '1 km', 1.609: 'Mile', 21.1: 'Half', 42.2: 'Marathon' })[km] || km + ' km';
+    E.forEach(e => {
+      if (e.rank === 1) out.push({ kind: 'effort', level: 3, km: e.km, head: 'PB', tail: name(e.km),
+        detail: name(e.km) + ' in ' + fmtDuration(e.seconds) + ': your fastest ever.' });
+      else if (e.rank <= 3) out.push({ kind: 'effort', level: 2.5, km: e.km, head: name(e.km), tail: (e.rank === 2 ? '2nd' : '3rd') + ' best ever',
+        detail: name(e.km) + ' in ' + fmtDuration(e.seconds) + ': your ' + (e.rank === 2 ? '2nd' : '3rd') + ' fastest ever.' });
+      else if (e.yearBest) out.push({ kind: 'effort', level: 1.8, km: e.km, head: name(e.km), tail: 'best of ' + y,
+        detail: name(e.km) + ' in ' + fmtDuration(e.seconds) + ': your fastest of ' + y + '.' });
+    });
 
     const cR = rank(act.ascent_m, a => a.ascent_m, 50);
-    if (cR && cR.level >= 2) out.push({ kind: 'climb', level: cR.level, text: cR.level === 3 ? 'Most climbing ever: ' + Math.round(act.ascent_m) + ' m' : 'Most climbing of ' + y + ': ' + Math.round(act.ascent_m) + ' m' });
+    if (cR && cR.level >= 2) out.push({ kind: 'climb', level: cR.level, head: 'Most climbing', tail: tailOf(cR),
+      detail: Math.round(act.ascent_m) + ' m up: the most climbing ' + tailOf(cR) + '.' });
 
     /* its week and month, up to and including this run */
     const sumTo = (key, keyOf) => runs.filter(a => keyOf(a.date) === key && a.date <= act.date).reduce((t, a) => t + (a.distance_km || 0), 0);
@@ -2382,10 +2390,12 @@
       if (mine < min) return;
       const T = totals(keyOf); delete T[k];
       const keys = Object.keys(T);
-      if (!keys.some(o => T[o] >= mine)) { out.push({ kind: kind, level: 3, text: what + ' ever: ' + mine.toFixed(1) + ' km' }); return; }
+      const asDate = o => o.length === 7 ? o + '-01' : o;
+      if (!keys.some(o => T[o] >= mine)) { out.push({ kind: kind, level: 3, head: what, tail: 'ever', detail: mine.toFixed(1) + ' km so far: your ' + what.toLowerCase() + ' ever.' }); return; }
       if (!keys.some(o => o.slice(0, 4) === y && T[o] >= mine)) {
         const prev = keys.filter(o => o < k && T[o] >= mine).sort().pop();
-        out.push({ kind: kind, level: 2, text: what + ' of ' + y + ': ' + mine.toFixed(1) + ' km' + (prev && daysBetween(prev.length === 7 ? prev + '-01' : prev, act.date) >= 56 ? ' \u00b7 biggest since ' + mon(prev.length === 7 ? prev + '-01' : prev) : '') });
+        out.push({ kind: kind, level: 2, head: what, tail: 'of ' + y, detail: mine.toFixed(1) + ' km so far: your ' + what.toLowerCase() + ' of ' + y +
+          (prev && daysBetween(asDate(prev), act.date) >= 56 ? ', the biggest since ' + mon(asDate(prev)) : '') + '.' });
       }
     });
 
@@ -2394,8 +2404,10 @@
     const before = after - (act.distance_km || 0);
     const yt = totals(d => d.slice(0, 4));
     const passed = Object.keys(yt).filter(o => o < y && before < yt[o] && after >= yt[o]).sort((p, q) => yt[q] - yt[p])[0];
-    if (passed) out.push({ kind: 'year', level: 1.5, text: y + ' passes ' + passed + '\u2019s ' + Math.round(yt[passed]) + ' km' });
+    if (passed) out.push({ kind: 'year', level: 1.5, head: y, tail: 'passes ' + passed,
+      detail: y + ' is now past all of ' + passed + ': ' + Math.round(after) + ' km against ' + Math.round(yt[passed]) + ' km.' });
 
+    out.forEach(r => { r.text = r.head + ' ' + r.tail; });
     return out.sort((p, q) => q.level - p.level);
   }
 

@@ -61,12 +61,19 @@ var ACT_COLS = [
   'hr_lock', 'hr_trust',
   /* written by the Strava import only: which Strava activity this run is */
   'strava_id',
-  /* a run's route, coarsely: ten points along it, for matching runs on the same course */
-  'route'
+  /* true kilometre splits from the watch file: "sec,hr,elev;..." */
+  'km_splits',
+  /* Two clocks. updated_at moves only when you change a run in the app;
+     figures_at moves only when this script writes what it works out (watch
+     figures, links, splits). The app merges each side by its own clock, so
+     neither can overwrite the other. */
+  'figures_at',
+  /* you told the app to leave this run untagged ("not this one") */
+  'tag_skip'
 ];
 
 /* Columns the server owns. A run sent up from the app never blanks them. */
-var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'strava_id', 'route'];
+var SERVER_COLS = ['garmin_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'strava_id', 'km_splits', 'figures_at'];
 
 /* ascent and descent per lap (Oct 2026), from the watch file, for splits */
 var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role', 'ascent_m', 'descent_m'];
@@ -75,7 +82,7 @@ var LAP_COLS = ['activity_id', 'n', 'distance_km', 'time_s', 'avg_hr', 'role', '
    cell would come back as a Date object in the sheet's timezone and drift. */
 var TEXT_COLS = ['id', 'date', 'created_at', 'updated_at', 'name', 'type',
                  'source', 'feel', 'conditions', 'pack', 'note',
-                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust', 'strava_id', 'route'];
+                 'session', 'subtype', 'protocol_note', 'garmin_id', 'efforts', 'hr_hist', 'terrain', 'hr_trust', 'strava_id', 'km_splits', 'figures_at'];
 
 var NUM_KEYS = {
   distance_km: 1, elapsed_s: 1, moving_s: 1, ascent_m: 1, descent_m: 1,
@@ -255,7 +262,7 @@ function listAll() {
   laps.forEach(function (l) {
     (byAct[l.activity_id] = byAct[l.activity_id] || []).push({
       n: l.n, distance_km: l.distance_km, time_s: l.time_s,
-      avg_hr: l.avg_hr, role: l.role || 'main'
+      avg_hr: l.avg_hr, role: l.role || 'main', ascent_m: l.ascent_m, descent_m: l.descent_m
     });
   });
 
@@ -285,13 +292,18 @@ function putActivity(act) {
   addMissingHeaders(ash, ACT_COLS);
   var row = objToRow(ash, ACT_COLS, act);
   var at = findRowById(ash, 'id', act.id);
+  var keepLaps = false;
   if (at > 0) {
-    /* keep what only the server writes */
+    /* What the script works out is the script's: an edit from the app never
+       writes over it, whatever the app's copy holds. A filled-in figure is
+       never emptied. A run with a watch file or a track keeps its laps. */
     var hm0 = headerMap(ash);
     var old = ash.getRange(at, 1, 1, row.length).getValues()[0];
-    SERVER_COLS.forEach(function (c) {
+    SERVER_COLS.forEach(function (c) { if (hm0[c] != null) row[hm0[c]] = old[hm0[c]]; });
+    FILL_IF_EMPTY.forEach(function (c) {
       if (hm0[c] != null && (row[hm0[c]] === '' || row[hm0[c]] == null)) row[hm0[c]] = old[hm0[c]];
     });
+    keepLaps = String(old[hm0.garmin_id] || '') !== '' || String(old[hm0.strava_id] || '') !== '' || Number(old[hm0.stream_v]) > 0;
     ash.getRange(at, 1, 1, row.length).setValues([row]);
   }
   else { ash.appendRow(row); at = ash.getLastRow(); }
@@ -304,6 +316,7 @@ function putActivity(act) {
   });
 
   addMissingHeaders(lsh, LAP_COLS);
+  if (keepLaps) return { ok: true, id: act.id, laps: 'kept' };
   clearLaps(lsh, act.id);
   var laps = act.laps || [];
   if (laps.length) {
@@ -623,7 +636,8 @@ function fitDecode(input) {
         /* cadence: strides a minute in the file, steps a minute here */
         spm: rec[4] != null ? Math.round((rec[4] + (rec[53] || 0) / 128) * 2) : null,
         /* position, semicircles to degrees; only used for a route's fingerprint */
-        lat: rec[0] != null ? rec[0] * (180 / 2147483648) : null, lon: rec[1] != null ? rec[1] * (180 / 2147483648) : null });
+        lat: rec[0] != null ? rec[0] * (180 / 2147483648) : null, lon: rec[1] != null ? rec[1] * (180 / 2147483648) : null,
+        alt: rec[78] != null ? rec[78] / 5 - 500 : rec[2] != null ? rec[2] / 5 - 500 : null });
     return at;
   }
   return out;
@@ -649,8 +663,8 @@ function fitDecode(input) {
    moved during it; otherwise it is running time however long it is. And a
    step between two points faster than any runner (a GPS jump) adds no
    distance. */
-/* v3 (Oct 2026): a route fingerprint is kept, for matched runs */
-var STREAM_V = 3;
+/* v4 (Oct 2026): true kilometre splits; routes are no longer kept */
+var STREAM_V = 4;
 var EFFORT_M = [400, 1000, 1609, 5000, 10000, 21097, 42195];
 var FASTEST_S_PER_KM = 120;
 var PAUSE_S = 10;            // a gap longer than this might be a pause...
@@ -674,38 +688,46 @@ function streamClean(records) {
         var jump = step < 0 || (dt > 0 ? step / dt > JUMP_MPS : step > 0);
         if (!jump) dist += step;
       }
-      out.push({ t: time, d: dist, hr: r[i].hr, dt: run, hrPrev: r[i - 1].hr });
+      out.push({ t: time, d: dist, hr: r[i].hr, dt: run, hrPrev: r[i - 1].hr, alt: r[i].alt });
     } else {
       dist = hasD ? 0 : null;
-      out.push({ t: 0, d: dist, hr: r[i].hr, dt: 0, hrPrev: null });
+      out.push({ t: 0, d: dist, hr: r[i].hr, dt: 0, hrPrev: null, alt: r[i].alt });
     }
     if (hasD) { prevD = r[i].d; if (dist == null) dist = 0; }
   }
   return out;
 }
 
-/* Pure: a route's fingerprint. Ten points at equal distances along the run,
-   rounded to about 10 m, as "lat,lon;lat,lon;...". Not the track: enough to
-   tell one loop from another, nothing more. */
-var ROUTE_POINTS = 10;
-function routeOf(records) {
-  var r = (records || []).filter(function (x) { return x.lat != null && x.lon != null && isFinite(x.lat) && isFinite(x.lon); });
-  if (r.length < 20) return '';
-  var cum = [0];
-  for (var i = 1; i < r.length; i++) {
-    var step = haversine(r[i - 1], r[i]);
-    cum.push(cum[i - 1] + (step < 200 ? step : 0));          // a jump isn't the route
+/* Pure: true kilometre splits from the cleaned stream, whatever the laps were.
+   "sec,hr,elev" per whole kilometre, then the final part as "m@sec,hr,elev"
+   when it's 100 m or more. Moving time, the same as best efforts; heart rate
+   time-weighted; elevation the net change across the kilometre. */
+function kmSplitsOf(c) {
+  var pts = (c || []).filter(function (x) { return x.d != null; });
+  if (pts.length < 10) return '';
+  var total = pts[pts.length - 1].d;
+  if (total < 1000) return '';
+  var out = [], km = 1, t0 = 0, alt0 = pts[0].alt, hrS = 0, hrT = 0;
+  var interp = function (a, b, D) { var f = b.d > a.d ? (D - a.d) / (b.d - a.d) : 0; return { t: a.t + f * (b.t - a.t), alt: a.alt != null && b.alt != null ? a.alt + f * (b.alt - a.alt) : (b.alt != null ? b.alt : a.alt) }; };
+  var row = function (sec, endAlt) {
+    var hr = hrT ? Math.round(hrS / hrT) : '';
+    var el = alt0 != null && endAlt != null ? Math.round(endAlt - alt0) : '';
+    return Math.round(sec) + ',' + hr + ',' + el;
+  };
+  for (var i = 1; i < pts.length; i++) {
+    var a = pts[i - 1], b = pts[i];
+    if (b.dt > 0 && b.hrPrev != null) { hrS += b.hrPrev * b.dt; hrT += b.dt; }
+    while (b.d >= km * 1000) {
+      var at = interp(a, b, km * 1000);
+      out.push(row(at.t - t0, at.alt));
+      t0 = at.t; alt0 = at.alt; hrS = 0; hrT = 0; km++;
+    }
   }
-  var total = cum[cum.length - 1];
-  if (total < 500) return '';
-  var out = [], j = 0;
-  for (var k = 0; k < ROUTE_POINTS; k++) {
-    var want = total * k / (ROUTE_POINTS - 1);
-    while (j < cum.length - 1 && cum[j] < want) j++;
-    out.push(r[j].lat.toFixed(4) + ',' + r[j].lon.toFixed(4));
-  }
+  var rest = total - (km - 1) * 1000, last = pts[pts.length - 1];
+  if (rest >= 100) out.push(Math.round(rest) + '@' + row(last.t - t0, last.alt));
   return out.join(';');
 }
+
 
 function streamFigures(records) {
   var c = streamClean(records);
@@ -750,7 +772,7 @@ function streamFigures(records) {
     if (secs[0] && secs[1]) driftBpm = Math.round(sums[1] / secs[1] - sums[0] / secs[0]);
   }
   return { efforts: Object.keys(efforts).length ? JSON.stringify(efforts) : '',
-           hr_hist: histStr, drift_bpm: driftBpm, route: routeOf(records) };
+           hr_hist: histStr, drift_bpm: driftBpm, km_splits: kmSplitsOf(c) };
 }
 
 /* Trail by Garmin's own activity type; anything else is left for you. */
@@ -814,14 +836,14 @@ function garminActivity(j, fit) {
     garmin_id: gid,
     max_hr: s[17] != null ? s[17] : null,
     efforts: st ? st.efforts : '',
-    route: st ? st.route : '',
+    km_splits: st ? st.km_splits : '',
     hr_hist: st ? st.hr_hist : '',
     drift_bpm: st ? st.drift_bpm : null,
     stream_v: STREAM_V,
     terrain: garminTerrain(j),
     hr_lock: (function (L) { return L ? Math.round(L.share * 100) : null; })(lockOf(fit && fit.records)),
     laps: laps,
-    created_at: now, updated_at: now
+    created_at: now, updated_at: now, figures_at: now
   };
 }
 
@@ -878,7 +900,10 @@ function garminHandle(j, cx) {
   if (mine) {
     /* link only: your figures and timestamps stay as they are */
     var at = findRowById(cx.ash, 'id', mine.id);
-    if (at > 0) cx.ash.getRange(at, cx.hm.garmin_id + 1).setNumberFormat('@').setValue(gid);
+    if (at > 0) {
+      cx.ash.getRange(at, cx.hm.garmin_id + 1).setNumberFormat('@').setValue(gid);
+      if (cx.hm.figures_at != null) cx.ash.getRange(at, cx.hm.figures_at + 1).setNumberFormat('@').setValue(new Date().toISOString());
+    }
     mine.garmin_id = gid;
     cx.linked++;
   } else {
@@ -1447,7 +1472,8 @@ function garminCompare() {
 
    It stops itself before Google's six-minute limit; press Run again until it
    says it's done. A run already enriched is skipped. Each enriched run gets a
-   new updated_at, which is how the app knows to take the new version. */
+   new figures_at, which is how the app knows to take the new figures, while
+   anything you set on the run stays yours. */
 
 var ENRICH_BUDGET_MS = 4.5 * 60 * 1000;
 var FILL_IF_EMPTY = ['moving_s', 'ascent_m', 'descent_m', 'cadence_spm', 'gap_pace_s', 'avg_hr', 'max_hr'];
@@ -1488,7 +1514,7 @@ function garminEnrich() {
         FILL_IF_EMPTY.forEach(function (c) { if (empty(c) && g[c] != null) put(c, g[c]); });
         /* Garmin's trail type only where you haven't said road or trail yourself */
         if (empty('terrain') && g.terrain) put('terrain', g.terrain);
-        put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm); put('route', g.route);
+        put('efforts', g.efforts); put('hr_hist', g.hr_hist); put('drift_bpm', g.drift_bpm); put('km_splits', g.km_splits);
         if (String(a.id).indexOf('-g' + a.garmin_id) >= 0) put('temp_c', null);   // imported: wrist sensor out
         if (g.laps.length) {
           clearLaps(lsh, a.id);
@@ -1500,7 +1526,7 @@ function garminEnrich() {
         }
       }
       put('stream_v', STREAM_V);
-      put('updated_at', new Date().toISOString());
+      put('figures_at', new Date().toISOString());
       ash.getRange(at, 1, 1, row.length).setValues([row]);
       done++;
     }
@@ -1626,7 +1652,7 @@ function garminHrLockApply() {
     var at = findRowById(ash, 'id', hits[0].id);
     if (at < 0) { unmatched++; continue; }
     ash.getRange(at, hm.hr_lock + 1).setValue(share);
-    ash.getRange(at, hm.updated_at + 1).setNumberFormat('@').setValue(now);   // so the app takes it
+    ash.getRange(at, hm.figures_at + 1).setNumberFormat('@').setValue(now);
     set++;
   }
   var msg = 'Locked shares written to ' + set + ' runs' + (unmatched ? '; ' + unmatched + ' could not be matched' : '') + '.';
@@ -1804,8 +1830,9 @@ function trackRecords(text) {
       var hr = /<HeartRateBpm>[\s\S]*?<Value>([^<]+)<\/Value>/.exec(b);
       if (!t) continue;
       var la = /<LatitudeDegrees>([^<]+)</.exec(b), lo = /<LongitudeDegrees>([^<]+)</.exec(b);
+      var al = /<AltitudeMeters>([^<]+)</.exec(b);
       out.push({ t: Date.parse(t[1]) / 1000, d: d ? Number(d[1]) : null, hr: hr ? Math.round(Number(hr[1])) : null,
-                 lat: la ? Number(la[1]) : null, lon: lo ? Number(lo[1]) : null });
+                 lat: la ? Number(la[1]) : null, lon: lo ? Number(lo[1]) : null, alt: al ? Number(al[1]) : null });
     }
   } else {
     var rp = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g, p, prev = null, dist = 0;
@@ -1816,12 +1843,13 @@ function trackRecords(text) {
       var pt = { lat: Number(lat[1]), lon: Number(lon[1]) };
       if (prev) dist += haversine(prev, pt);
       prev = pt;
-      out.push({ t: Date.parse(tm[1]) / 1000, d: dist, hr: h2 ? Number(h2[1]) : null, lat: pt.lat, lon: pt.lon });
+      var el = /<ele>([^<]+)<\/ele>/.exec(p[2]);
+      out.push({ t: Date.parse(tm[1]) / 1000, d: dist, hr: h2 ? Number(h2[1]) : null, lat: pt.lat, lon: pt.lon, alt: el ? Number(el[1]) : null });
     }
   }
   if (!out.length) return out;
   var t0 = out[0].t;
-  return out.map(function (r) { return { t: r.t - t0, d: r.d, hr: r.hr, lat: r.lat, lon: r.lon }; });
+  return out.map(function (r) { return { t: r.t - t0, d: r.d, hr: r.hr, lat: r.lat, lon: r.lon, alt: r.alt }; });
 }
 
 /* a file named in the export, found in Drive by its name */
@@ -1859,10 +1887,9 @@ function stravaImport() {
       if (Date.now() - started > HISTORY_BUDGET_MS) { cut = true; break; }
       var s = found[i];
       if (known[s.sid]) {
-        /* a run this import added earlier without its track (the activities
-           folder wasn't in Drive yet): try the track again */
         var k = known[s.sid];
-        if (String(k.id) === 'run-' + s.date + '-s' + s.sid && !(Number(k.stream_v) > 0) && s.file) {
+        /* a run this import added without its track, or with an older reading of it */
+        if (String(k.id) === 'run-' + s.date + '-s' + s.sid && !(Number(k.stream_v) >= STREAM_V) && s.file) {
           var again = null;
           try { again = stravaTrack(s.file); } catch (e) { again = null; }
           var sf = again && again.length > 10 ? streamFigures(again) : null;
@@ -1870,11 +1897,11 @@ function stravaImport() {
             var row = findRowById(ash, 'id', k.id);
             if (row > 0) {
               var putK = function (col, v) { if (hm[col] != null) ash.getRange(row, hm[col] + 1).setNumberFormat('@').setValue(v == null ? '' : v); };
-              putK('efforts', sf.efforts); putK('hr_hist', sf.hr_hist); putK('route', sf.route);
+              putK('efforts', sf.efforts); putK('hr_hist', sf.hr_hist); putK('km_splits', sf.km_splits);
               if (hm.drift_bpm != null) ash.getRange(row, hm.drift_bpm + 1).setValue(sf.drift_bpm == null ? '' : sf.drift_bpm);
               ash.getRange(row, hm.stream_v + 1).setValue(STREAM_V);
-              ash.getRange(row, hm.updated_at + 1).setNumberFormat('@').setValue(new Date().toISOString());   // so the app takes it
-              k.stream_v = STREAM_V; k.touched = true; tracks++;
+              ash.getRange(row, hm.figures_at + 1).setNumberFormat('@').setValue(new Date().toISOString());
+              k.stream_v = STREAM_V; tracks++;
             }
           } else if (!again) noTrack++;
         }
@@ -1893,29 +1920,15 @@ function stravaImport() {
       var now = new Date().toISOString();
       var act = { id: 'run-' + s.date + '-s' + s.sid, type: 'run', date: s.date, name: s.name, source: 'tracked',
         distance_km: s.distance_km, elapsed_s: s.elapsed_s, moving_s: s.moving_s, ascent_m: s.ascent_m,
-        avg_hr: s.avg_hr, strava_id: s.sid, laps: [], created_at: now, updated_at: now };
+        avg_hr: s.avg_hr, strava_id: s.sid, laps: [], created_at: now, updated_at: now, figures_at: now };
       var rec = null;
       try { rec = stravaTrack(s.file); } catch (e) { rec = null; }
       if (rec && rec.length > 10) {
         var st = streamFigures(rec);
-        if (st) { act.efforts = st.efforts; act.hr_hist = st.hr_hist; act.drift_bpm = st.drift_bpm; act.route = st.route; act.stream_v = STREAM_V; tracks++; }
+        if (st) { act.efforts = st.efforts; act.hr_hist = st.hr_hist; act.drift_bpm = st.drift_bpm; act.km_splits = st.km_splits; act.stream_v = STREAM_V; tracks++; }
       } else noTrack++;
       putActivity(act);
       rows.push(act); known[s.sid] = act; added++;
-    }
-    /* Tracks read by the first version of the rerun didn't move updated_at,
-       so the app kept its older copy of those runs, without best efforts.
-       Once: touch every Strava run that has a track, so the app takes them. */
-    var props = PropertiesService.getScriptProperties();
-    if (!cut && props.getProperty('STRAVA_TOUCHED') !== '1') {
-      var stamp = new Date().toISOString(), touched = 0;
-      rows.forEach(function (a) {
-        if (!a.strava_id || !(Number(a.stream_v) > 0) || a.touched) return;
-        var at = findRowById(ash, 'id', a.id);
-        if (at > 0) { ash.getRange(at, hm.updated_at + 1).setNumberFormat('@').setValue(stamp); touched++; }
-      });
-      props.setProperty('STRAVA_TOUCHED', '1');
-      if (touched) Logger.log('Strava: ' + touched + ' runs with tracks marked as updated, so the app picks up their best efforts.');
     }
     var inAll = rows.filter(function (a) { return a.strava_id; }).length;
     var msg = (cut ? 'Strava: stopped to stay inside Google\u2019s time limit. Press Run again. ' : 'Strava import complete. ') +

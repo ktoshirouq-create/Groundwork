@@ -178,6 +178,23 @@
 
   /* ------------------------------------------------------------- queue ---- */
 
+  /* Two clocks per run. What the script works out (watch figures, links,
+     splits, laps of a linked run) is merged by figures_at; everything you set
+     is merged by updated_at. A figure the script filled in is never lost to a
+     copy that doesn't have it. */
+  const SCRIPT_FIELDS = ['garmin_id', 'strava_id', 'efforts', 'hr_hist', 'drift_bpm', 'stream_v', 'hr_lock', 'km_splits', 'laps', 'figures_at'];
+  const FILLED = ['moving_s', 'ascent_m', 'descent_m', 'cadence_spm', 'gap_pace_s', 'avg_hr', 'max_hr'];
+  function mergeRun(mine, r) {
+    const user = (r.updated_at || '') > (mine.updated_at || '') ? r : mine;
+    /* runs the script hasn't stamped yet (before the two clocks) follow the one clock they had */
+    const script = !r.figures_at && !mine.figures_at ? user : (r.figures_at || '') > (mine.figures_at || '') ? r : mine;
+    const other = user === r ? mine : r;
+    const out = Object.assign({}, user);
+    SCRIPT_FIELDS.forEach(k => { if (k in script) out[k] = script[k]; });
+    FILLED.forEach(k => { if ((out[k] == null || out[k] === '') && other[k] != null && other[k] !== '') out[k] = other[k]; });
+    return out;
+  }
+
   function queued() { return readJSON(KEY.queue, []); }
   function setQueue(q) { localStorage.setItem(KEY.queue, JSON.stringify(q)); }
 
@@ -297,6 +314,8 @@
       });
     },
 
+    mergeRun: mergeRun,
+
     remove: function (id) {
       const self = this;
       return this.adapter.remove(this.bundle, id).then(() => {
@@ -316,7 +335,8 @@
     sheetsConfigured: function () { return Sheets.configured(); },
 
     /* Pull, but never destructively. An empty or unreachable sheet leaves the
-       local copy alone; a sheet with data is merged by id, newest wins. */
+       local copy alone; a sheet with data is merged by id, each side of a run
+     by its own clock (mergeRun). */
     pull: function () {
       const self = this;
       if (!Sheets.configured()) return Promise.resolve({ skipped: true });
@@ -353,9 +373,7 @@
         local.forEach(a => { byId[a.id] = a; });
         remote.forEach(r => {
           const mine = byId[r.id];
-          if (!mine) { byId[r.id] = r; return; }
-          const rt = r.updated_at || '', mt = mine.updated_at || '';
-          byId[r.id] = rt > mt ? r : mine;
+          byId[r.id] = mine ? mergeRun(mine, r) : r;
         });
         self.bundle.activities = Object.keys(byId).map(k => byId[k]);
         if (data.config && Object.keys(data.config).length) {
